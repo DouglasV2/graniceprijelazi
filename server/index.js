@@ -490,12 +490,13 @@ function adminRequired(req, res, next) {
 }
 
 const rateBuckets = new Map();
-setInterval(() => {
+const rateBucketsCleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [key, bucket] of rateBuckets) {
     if (now > bucket.resetAt) rateBuckets.delete(key);
   }
 }, 15 * 60 * 1000);
+if (typeof rateBucketsCleanupTimer?.unref === 'function') rateBucketsCleanupTimer.unref();
 
 function rateLimit({ windowMs = 60000, max = 60, keyPrefix = 'api' } = {}) {
   return (req, res, next) => {
@@ -4710,15 +4711,19 @@ app.use((req, res, next) => {
   });
 });
 
-initializeDatastore()
-  .then(() => {
-    app.listen(port, () => {
-      console.log(`PrijelazRadar backend running on http://localhost:${port}`);
-      console.log(`Datastore: ${datastoreMode}`);
-      console.log(serverKey ? 'Routes API server key: configured' : 'Routes API server key: missing');
+export { app, initializeDatastore };
+
+if (process.env.NODE_ENV !== 'test') {
+  initializeDatastore()
+    .then(() => {
+      app.listen(port, () => {
+        console.log(`PrijelazRadar backend running on http://localhost:${port}`);
+        console.log(`Datastore: ${datastoreMode}`);
+        console.log(serverKey ? 'Routes API server key: configured' : 'Routes API server key: missing');
+      });
+    })
+    .catch((error) => {
+      console.error('[startup] Datastore initialization failed:', error);
+      process.exit(1);
     });
-  })
-  .catch((error) => {
-    console.error('[startup] Datastore initialization failed:', error);
-    process.exit(1);
-  });
+}

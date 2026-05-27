@@ -20,6 +20,7 @@ import {
   Truck,
   User,
 } from 'lucide-react';
+import { formatMinutes, hasKnownWait, isUsableMinuteValue, normalizeMinutes, formatWaitDisplay } from './utils/wait-format.js';
 
 
 function makeCrossingHistory(baseCars, baseTrucks, baseBuses, baseWait) {
@@ -1086,51 +1087,8 @@ function normalizeSearchText(value) {
     .replace(/[̀-ͯ]/g, '');
 }
 
-function formatMinutes(minutes) {
-  if (minutes === null || minutes === undefined || minutes === '') return '—';
-  const n = Number(minutes);
-  if (!Number.isFinite(n)) return '—';
-  if (n < 0) return `-${formatMinutes(Math.abs(n))}`;
-  if (n < 60) return `${Math.round(n)} min`;
-  const h = Math.floor(n / 60);
-  const m = Math.round(n % 60);
-  return m ? `${h} h ${m} min` : `${h} h`;
-}
-
-function hasKnownWait(value) {
-  return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
-}
-
-// Returns true only for finite, non-negative minute values (safe to display as a wait time).
-function isUsableMinuteValue(value) {
-  if (value === null || value === undefined || value === '') return false;
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0;
-}
-
-// Returns a clamped non-negative integer, or null if the value is unusable.
-function normalizeMinutes(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Math.round(n);
-}
-
-// Format wait with a confidence qualifier ("~" or range) when source is soft upper bound or low confidence.
-function formatWaitDisplay(wait, sourceMeta = {}) {
-  if (!hasKnownWait(wait)) return 'čeka izvor';
-  const n = Number(wait);
-  const hint = sourceMeta.confidenceHint || '';
-  const isSoftBound = sourceMeta.hasSoftUpperBoundPublic === true;
-  const isLowConf = hint === 'low' || hint === 'low-medium';
-  if ((isSoftBound || isLowConf) && hasKnownWait(sourceMeta.rangeMin) && hasKnownWait(sourceMeta.rangeMax)) {
-    const rMin = Math.max(0, Number(sourceMeta.rangeMin));
-    const rMax = Number(sourceMeta.rangeMax);
-    if (rMax - rMin >= 5) return rMin === 0 ? `do ${formatMinutes(rMax)}` : `${formatMinutes(rMin)}–${formatMinutes(rMax)}`;
-  }
-  if (isSoftBound || isLowConf) return `~${formatMinutes(n)}`;
-  return formatMinutes(n);
-}
+// formatMinutes / hasKnownWait / isUsableMinuteValue / normalizeMinutes / formatWaitDisplay
+// are imported from ./utils/wait-format so they can be unit-tested in isolation.
 
 function getStatusOverride(crossingId, directionKey) {
   const key = `${crossingId}:${directionKey}`;
