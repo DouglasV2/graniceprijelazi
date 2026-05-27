@@ -772,3 +772,15 @@
 .alternative-delta.critical{background:#ffe9e7;color:#b42318}
 .alternative-delta.unknown{background:#f3f6fb;color:#667085}
 .trip-direction-hint{grid-column:1/-1;margin:0;border:1px solid rgba(23,103,232,.16);border-radius:16px;padding:10px 12px;background:#f3f8ff;color:#31506f;font-size:13px;font-weight:820;line-height:1.35}
+
+/* Signal badges & wait qualifiers in route-focus-card */
+.route-signal-badges{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px}
+.signal-badge{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:4px 9px;font-size:11px;font-weight:900}
+.signal-google-clear{background:#e8fff3;color:#087443}
+.signal-soft-bound{background:#fff4ce;color:#a15c00}
+.signal-camera-ok{background:#e8fff3;color:#087443}
+.signal-camera-queue{background:#ffe9e7;color:#b42318}
+.wait-qualifier{display:inline-block;margin-left:5px;color:var(--muted);font-size:11px;font-weight:800;font-style:italic}
+.route-summary div{display:flex;align-items:center;flex-wrap:wrap;gap:4px}
+.route-summary div span{flex:none}
+.route-summary div b{flex:none}

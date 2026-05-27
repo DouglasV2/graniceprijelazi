@@ -1101,6 +1101,22 @@ function hasKnownWait(value) {
   return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 }
 
+// Format wait with a confidence qualifier ("~" or range) when source is soft upper bound or low confidence.
+function formatWaitDisplay(wait, sourceMeta = {}) {
+  if (!hasKnownWait(wait)) return 'čeka izvor';
+  const n = Number(wait);
+  const hint = sourceMeta.confidenceHint || '';
+  const isSoftBound = sourceMeta.hasSoftUpperBoundPublic === true;
+  const isLowConf = hint === 'low' || hint === 'low-medium';
+  if ((isSoftBound || isLowConf) && hasKnownWait(sourceMeta.rangeMin) && hasKnownWait(sourceMeta.rangeMax)) {
+    const rMin = Math.max(0, Number(sourceMeta.rangeMin));
+    const rMax = Number(sourceMeta.rangeMax);
+    if (rMax - rMin >= 5) return `${formatMinutes(Math.max(0, rMin))}–${formatMinutes(rMax)}`;
+  }
+  if (isSoftBound || isLowConf) return `~${formatMinutes(n)}`;
+  return formatMinutes(n);
+}
+
 function getStatusOverride(crossingId, directionKey) {
   const key = `${crossingId}:${directionKey}`;
   const overrides = globalThis.__BF_STATUS_OVERRIDES || {};
@@ -2437,10 +2453,11 @@ function makeMarkerElement(crossing, isActive, selectedDirection = 'toBih', over
   const marker = document.createElement('button');
   marker.type = 'button';
   marker.className = `gm-border-marker gm-border-marker-${tone}${isActive ? ' active' : ''}`;
+  const waitLabel = formatWaitDisplay(wait, sourceMeta);
   marker.innerHTML = `
     <span class="gm-marker-dot"></span>
     <strong>${crossing.shortName}</strong>
-    <small>Live · ${hasKnownWait(wait) ? formatMinutes(wait) : 'čeka izvor'}</small>
+    <small>Live · ${waitLabel}</small>
     <em class="gm-marker-source ${sourceMeta.className || 'pending'}">${sourceMeta.label}</em>
   `;
   return marker;
@@ -2889,15 +2906,31 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
           ) : primaryRoute ? (
             <>
               <div className="route-summary">
-                <div><span>Čekanje na granici</span><b>{hasKnownWait(borderWait) ? formatMinutes(borderWait) : 'čeka izvor'}</b></div>
+                <div>
+                  <span>Čekanje na granici</span>
+                  <b>{formatWaitDisplay(borderWait, borderSourceMeta)}</b>
+                  {borderSourceMeta.hasSoftUpperBoundPublic && <small className="wait-qualifier">procjena</small>}
+                </div>
                 <div><span>{isControlZoneDisplay ? 'Vožnja kroz zonu' : 'Trajanje rute'}</span><b>{formatMinutes(primaryRoute.durationMinutes)}</b></div>
                 <div><span>{isControlZoneDisplay ? 'Dionica zone' : 'Udaljenost'}</span><b>{formatDistanceKm(primaryRoute.distanceKm)}</b></div>
                 <div><span>Cestovni zastoj</span><b>{formatMinutes(primaryRoute.delayMinutes || 0)}</b></div>
               </div>
-              {(borderSourceMeta.note || borderRange) && (
-                <p className="route-note">
-                  {borderRange ? `Raspon procjene: ${borderRange}. ` : ''}{borderSourceMeta.note || ''}
-                </p>
+              <div className="route-signal-badges">
+                {borderSourceMeta.hasGoogleSignal && !borderSourceMeta.hasStrongCameraQueue && routeLooksClear(primaryRoute) && (
+                  <span className="signal-badge signal-google-clear">Google promet normalan</span>
+                )}
+                {borderSourceMeta.hasSoftUpperBoundPublic && !borderSourceMeta.hasStrongCameraQueue && (
+                  <span className="signal-badge signal-soft-bound">javni izvor: gornja granica</span>
+                )}
+                {borderSourceMeta.hasCameraSignal && !borderSourceMeta.hasStrongCameraQueue && (
+                  <span className="signal-badge signal-camera-ok">kamera ne potvrđuje kolonu</span>
+                )}
+                {borderSourceMeta.hasStrongCameraQueue && (
+                  <span className="signal-badge signal-camera-queue">kamera pokazuje kolonu</span>
+                )}
+              </div>
+              {borderSourceMeta.note && (
+                <p className="route-note">{borderSourceMeta.note}</p>
               )}
               {(routePayload.note || primaryRoute.displayNote) && <p className="route-note">{routePayload.note || primaryRoute.displayNote}</p>}
             </>

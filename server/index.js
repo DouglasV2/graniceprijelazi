@@ -1243,7 +1243,28 @@ function parseDirectionalWaitsFromText(rawText = '', options = {}) {
   };
 
   const explicitMentions = extractExplicitWaitMentions(normalized);
+
+  // Collect positions of soft-upper-bound phrases ("nije/nisu duže od X min", "čekanje do X min")
+  // so their embedded numbers are NOT re-treated as hard explicit waits.
+  const softUbRanges = [];
+  const softUbPhraseRe = /ni(?:je|su)\s+duz\w*\s+od\s+\d{1,3}\s*(?:minuta|min|m)/g;
+  let subM;
+  while ((subM = softUbPhraseRe.exec(normalized))) {
+    softUbRanges.push({ start: subM.index, end: subM.index + subM[0].length });
+  }
+  const doXPhraseRe = /(?:zadrzavanj\w+|cekanj\w+)\s+(?:\w+\s+)?do\s+(\d{1,3})\s*(?:minuta|min)\b/g;
+  const doXMatches = [];
+  let doXM;
+  while ((doXM = doXPhraseRe.exec(normalized))) {
+    softUbRanges.push({ start: doXM.index, end: doXM.index + doXM[0].length });
+    const doXMax = Number(doXM[1]);
+    if (doXMax && doXMax <= 60) doXMatches.push({ max: doXMax, pos: doXM.index, len: doXM[0].length });
+  }
+  const isInSoftUbRange = (start, end) => softUbRanges.some((r) => start >= r.start && end <= r.end);
+
   for (const mention of explicitMentions) {
+    // Skip numbers that are part of "nije/nisu duže od X min" or "čekanje do X min" — those are soft upper bounds, not hard waits.
+    if (isInSoftUbRange(mention.start, mention.end)) continue;
     const context = normalized.slice(Math.max(0, mention.start - 130), Math.min(normalized.length, mention.end + 130));
     if (!waitTextHasStatusSignal(context)) continue;
     const direction = directionFromContext(context, sourceSide, mention.start - Math.max(0, mention.start - 130));
@@ -1271,7 +1292,8 @@ function parseDirectionalWaitsFromText(rawText = '', options = {}) {
   if (/pojacan\w*\s+(?:je\s+)?izlaz/.test(normalized)) push(exitDirection, 45, sourceSide === 'hr' ? 'Pojačan izlaz iz HR' : 'Pojačan izlaz iz BiH/RS', 76, 1.05);
   if (/pojacan\w*\s+(?:je\s+)?ulaz/.test(normalized)) push(entryDirection, 45, sourceSide === 'hr' ? 'Pojačan ulaz u HR' : 'Pojačan ulaz u BiH/RS', 76, 1.05);
 
-  const under30 = minMention && minMention <= 35 && /nisu\s+duz\w*\s+od\s+\d{1,3}\s*(?:minuta|min|m)/.test(normalized);
+  // "nije/nisu duže od X min" — soft upper bound: treat as low/medium estimate, NOT literal X min.
+  const under30 = minMention && minMention <= 35 && /ni(?:je|su)\s+duz\w*\s+od\s+\d{1,3}\s*(?:minuta|min|m)/.test(normalized);
   const softUpperBoundWait = under30 ? Math.max(6, Math.round(minMention * 0.35)) : null;
   const softUpperBoundMeta = under30 ? { softUpperBound: true, softMaxMinutes: minMention, parser: 'under-not-longer-than' } : {};
   if (under30 && /na\s+ulaz\w*/.test(normalized)) push(entryDirection, softUpperBoundWait, `Zadržavanja na ulazu nisu duža od ${minMention} min`, 62, 0.42, softUpperBoundMeta);
@@ -1280,6 +1302,20 @@ function parseDirectionalWaitsFromText(rawText = '', options = {}) {
     push('toBih', softUpperBoundWait, `Zadržavanja nisu duža od ${minMention} min`, 58, 0.35, softUpperBoundMeta);
     push('toHr', softUpperBoundWait, `Zadržavanja nisu duža od ${minMention} min`, 58, 0.35, softUpperBoundMeta);
   }
+
+  // "čekanje/zadržavanja do X min" — another form of soft upper bound.
+  for (const { max, pos, len } of doXMatches) {
+    const doXWait = Math.max(6, Math.round(max * 0.35));
+    const doXMeta = { softUpperBound: true, softMaxMinutes: max, parser: 'do-x-min' };
+    const doXCtx = normalized.slice(Math.max(0, pos - 60), Math.min(normalized.length, pos + len + 60));
+    if (/na\s+ulaz\w*/.test(doXCtx)) push(entryDirection, doXWait, `Zadržavanja na ulazu do ${max} min`, 62, 0.42, doXMeta);
+    else if (/na\s+izlaz\w*/.test(doXCtx)) push(exitDirection, doXWait, `Zadržavanja na izlazu do ${max} min`, 62, 0.42, doXMeta);
+    else {
+      push('toBih', doXWait, `Zadržavanja do ${max} min`, 58, 0.35, doXMeta);
+      push('toHr', doXWait, `Zadržavanja do ${max} min`, 58, 0.35, doXMeta);
+    }
+  }
+
   if (/nema\s+duz\w*\s+zadrzavanja|bez\s+duz\w*\s+zadrzavanja/.test(normalized)) {
     push('toBih', 12, 'Nema dužih zadržavanja', 76, 0.9);
     push('toHr', 12, 'Nema dužih zadržavanja', 76, 0.9);
@@ -1611,7 +1647,8 @@ function estimateWaitFromGoogleRoute(route = {}) {
 function isSoftUpperBoundSource(item = {}) {
   if (item.metadata?.softUpperBound === true) return true;
   const text = normalizeAscii(`${item.rawStatus || ''} ${item.rawText || ''}`);
-  return /nisu\s+duz\w*\s+od\s+\d{1,3}\s*(?:minuta|min|m)/.test(text);
+  return /ni(?:je|su)\s+duz\w*\s+od\s+\d{1,3}\s*(?:minuta|min|m)/.test(text)
+    || /(?:zadrzavanj\w+|cekanj\w+)\s+(?:\w+\s+)?do\s+\d{1,3}\s*(?:minuta|min)\b/.test(text);
 }
 
 function googleLooksClear(signal = null) {
@@ -1708,6 +1745,17 @@ function applyTrafficSanityCaps(wait, { googleSignal = null, cameraSignal = null
   if (clearGoogle && cameraSignal && !strongCameraQueue && !hasHardPublic) {
     const capped = Math.min(finalWait, 20);
     return { wait: capped, adjusted: capped !== finalWait, reason: 'Google ne vidi cestovni zastoj; bez jake kamere ili tvrdog javnog izvora čekanje se ne diže visoko.' };
+  }
+
+  // Camera overrides clear Google only when it shows strong queue (possible local congestion Google missed).
+  if (clearGoogle && strongCameraQueue) {
+    const capped = Math.min(finalWait, 25);
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Kamera pokazuje kolonu iako je Google promet normalan — mogući lokalni zastoj koji Google nije zabilježio. Čekanje ograničeno na 25 min.' };
+  }
+
+  // Last-resort: if Google is clear, never allow > 25 min regardless of other soft signals.
+  if (clearGoogle && finalWait > 25) {
+    return { wait: 25, adjusted: true, reason: 'Google plava ruta je sanity check — bez crvenog/narančastog prometa, dojava ili jakih signala, procjena se ograničava na 25 min.' };
   }
 
   return { wait: finalWait, adjusted: false, reason: '' };
@@ -2068,6 +2116,243 @@ app.get('/api/sources/latest', async (req, res) => {
     console.error('[sources-latest]', error);
     res.status(500).json({ ok: false, error: 'Javni izvori trenutno nisu dostupni.', detail: safeError(error) });
   }
+});
+
+// Debug endpoint: full pipeline breakdown for a crossing+direction.
+// Shows exactly why finalWait is what it is.
+app.get('/api/debug/wait', async (req, res) => {
+  const crossingId = String(req.query.crossingId || '').trim();
+  const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
+  if (!crossingId || !BORDER_CROSSINGS[crossingId]) {
+    return res.status(400).json({ ok: false, error: 'Nevažeći crossingId. Dostupni: ' + Object.keys(BORDER_CROSSINGS).join(', ') });
+  }
+  try {
+    await refreshProductionSources({ force: false });
+    const crossing = BORDER_CROSSINGS[crossingId];
+    const store = await readAppStore();
+    const multiplier = vehicleMultiplier(crossing, direction, 'car');
+    const staticWait = borderDelay(crossing, direction, 'car');
+
+    const latestSources = await readLatestSourceSnapshots(crossing.id, direction, 8);
+    const publicSignals = latestSources.filter((item) => !['camera-snapshot-model', 'google-traffic-estimate'].includes(item.sourceType) && item.normalizedWaitMin !== null && item.normalizedWaitMin !== undefined);
+    const cameraSignal = choosePublicSourceSignal(latestSources.filter((item) => item.sourceType === 'camera-snapshot-model'));
+    const googleSignal = choosePublicSourceSignal(latestSources.filter((item) => item.sourceType === 'google-traffic-estimate'));
+    const reports = reportSignals(store, crossing.id, direction, 2);
+    const reportAvg = reports.length ? Math.round(reports.reduce((sum, r) => sum + Number(r.wait || 0), 0) / reports.length) : null;
+
+    const candidates = [];
+    publicSignals.forEach((item) => {
+      const softUpperBound = isSoftUpperBoundSource(item);
+      const effectiveWeight = Math.max(0.1, Number(item.weight || 1)) * Math.max(35, Number(item.confidence || 70)) * (softUpperBound ? 0.82 : 1.15);
+      candidates.push({
+        label: sourceDisplayName(item.sourceName),
+        sourceType: item.sourceType,
+        rawWait: item.normalizedWaitMin,
+        wait: waitForVehicle(item.normalizedWaitMin, multiplier, 'car'),
+        rawWeight: item.weight,
+        confidence: item.confidence,
+        isSoftUpperBound: softUpperBound,
+        effectiveWeight,
+        rawStatus: item.rawStatus,
+        fetchedAt: item.fetchedAt,
+      });
+    });
+    if (cameraSignal) {
+      const effectiveWeight = Math.max(0.1, Number(cameraSignal.weight || 0.72)) * Math.max(35, Number(cameraSignal.confidence || 58)) * (publicSignals.length ? 0.9 : 1.08) * (googleLooksClear(googleSignal) && cameraLooksClear(cameraSignal) ? 1.18 : 1);
+      candidates.push({
+        label: 'Kamera',
+        sourceType: cameraSignal.sourceType,
+        rawWait: cameraSignal.normalizedWaitMin,
+        wait: waitForVehicle(cameraSignal.normalizedWaitMin ?? staticWait, multiplier, 'car'),
+        rawWeight: cameraSignal.weight,
+        confidence: cameraSignal.confidence,
+        isSoftUpperBound: false,
+        effectiveWeight,
+        cameraLooksClear: cameraLooksClear(cameraSignal),
+        cameraShowsQueue: cameraShowsQueue(cameraSignal),
+        queueVehicles: cameraSignal.metadata?.queueVehicles,
+        flowVehicles15: cameraSignal.metadata?.flowVehicles15 ?? cameraSignal.metadata?.passed15,
+        fetchedAt: cameraSignal.fetchedAt,
+      });
+    }
+    if (googleSignal) {
+      const effectiveWeight = Math.max(0.1, Number(googleSignal.weight || 0.84)) * Math.max(35, Number(googleSignal.confidence || 62)) * (publicSignals.length ? 0.86 : 1.02);
+      candidates.push({
+        label: 'Google',
+        sourceType: googleSignal.sourceType,
+        rawWait: googleSignal.normalizedWaitMin,
+        wait: waitForVehicle(googleSignal.normalizedWaitMin ?? staticWait, multiplier, 'car'),
+        rawWeight: googleSignal.weight,
+        confidence: googleSignal.confidence,
+        isSoftUpperBound: false,
+        effectiveWeight,
+        googleLooksClear: googleLooksClear(googleSignal),
+        googleLooksSlow: googleLooksSlow(googleSignal),
+        googleLooksHeavy: googleLooksHeavy(googleSignal),
+        delayMinutes: googleSignal.metadata?.delayMinutes,
+        ratio: googleSignal.metadata?.ratio,
+        level: googleSignal.metadata?.level,
+        durationMinutes: googleSignal.metadata?.durationMinutes,
+        staticMinutes: googleSignal.metadata?.staticMinutes,
+        routeGuard: googleSignal.metadata?.routeGuard,
+        fetchedAt: googleSignal.fetchedAt,
+      });
+    }
+    if (reportAvg !== null && reports.length >= 2) {
+      candidates.push({
+        label: 'Dojave',
+        sourceType: 'driver-reports',
+        rawWait: reportAvg,
+        wait: waitForVehicle(reportAvg, multiplier, 'car'),
+        isSoftUpperBound: false,
+        effectiveWeight: Math.min(90, 32 + reports.length * 9),
+        reportsCount: reports.length,
+      });
+    }
+
+    const blendedWait = weightedWait(candidates.map((c) => ({ wait: c.wait, weight: c.effectiveWeight })));
+    const sanity = blendedWait !== null ? applyTrafficSanityCaps(blendedWait, { googleSignal, cameraSignal, publicSignals, reportAvg }) : null;
+    const finalWait = sanity?.wait ?? staticWait;
+    const range = estimateRangeFromSignals(finalWait, { googleSignal, cameraSignal, publicSignals, reports });
+
+    const flags = {
+      hasDriverReports: reportAvg !== null,
+      softPublicOnly: publicSignals.length > 0 && publicSignals.every(isSoftUpperBoundSource),
+      hasHardPublic: publicSignals.some((item) => !isSoftUpperBoundSource(item) && Number(item.normalizedWaitMin || 0) >= 20),
+      noPublicSignals: publicSignals.length === 0,
+      clearGoogle: googleLooksClear(googleSignal),
+      heavyGoogle: googleLooksHeavy(googleSignal),
+      clearCamera: cameraLooksClear(cameraSignal),
+      strongCameraQueue: cameraShowsQueue(cameraSignal),
+    };
+
+    res.json({
+      ok: true,
+      crossingId,
+      direction,
+      summary: {
+        finalWait,
+        blendedWait,
+        sanityCapped: sanity?.adjusted ?? false,
+        sanityReason: sanity?.reason ?? '',
+        confidenceHint: range.confidenceHint,
+        rangeMin: range.rangeMin,
+        rangeMax: range.rangeMax,
+        staticFallback: staticWait,
+        usedStaticFallback: blendedWait === null,
+      },
+      candidates,
+      flags,
+      rawSignals: {
+        google: googleSignal ? {
+          normalizedWaitMin: googleSignal.normalizedWaitMin,
+          level: googleSignal.metadata?.level,
+          delayMinutes: googleSignal.metadata?.delayMinutes,
+          ratio: googleSignal.metadata?.ratio,
+          durationMinutes: googleSignal.metadata?.durationMinutes,
+          staticMinutes: googleSignal.metadata?.staticMinutes,
+          reason: googleSignal.metadata?.reason,
+          routeGuard: googleSignal.metadata?.routeGuard,
+          fetchedAt: googleSignal.fetchedAt,
+        } : null,
+        camera: cameraSignal ? {
+          normalizedWaitMin: cameraSignal.normalizedWaitMin,
+          confidence: cameraSignal.confidence,
+          queueVehicles: cameraSignal.metadata?.queueVehicles,
+          flowVehicles15: cameraSignal.metadata?.flowVehicles15 ?? cameraSignal.metadata?.passed15,
+          throughputPerHour: cameraSignal.metadata?.throughputPerHour,
+          fetchedAt: cameraSignal.fetchedAt,
+        } : null,
+        public: publicSignals.map((item) => ({
+          sourceName: item.sourceName,
+          normalizedWaitMin: item.normalizedWaitMin,
+          confidence: item.confidence,
+          weight: item.weight,
+          isSoftUpperBound: isSoftUpperBoundSource(item),
+          softMaxMinutes: item.metadata?.softMaxMinutes,
+          parser: item.metadata?.parser,
+          rawStatus: item.rawStatus,
+          fetchedAt: item.fetchedAt,
+        })),
+        reports: reports.slice(0, 5).map((r) => ({ wait: r.wait, createdAt: r.createdAt })),
+      },
+    });
+  } catch (error) {
+    console.error('[debug-wait]', error);
+    res.status(500).json({ ok: false, error: 'Debug endpoint greška.', detail: safeError(error) });
+  }
+});
+
+// Validates the wait calculation pipeline against 5 known edge-case scenarios.
+// Used for regression testing after changes to the calculation logic.
+app.get('/api/debug/wait-scenarios', async (req, res) => {
+  function mockGoogleSignal({ delay = 1, ratio = 1.03, level = 'normal' } = {}) {
+    const estimate = estimateWaitFromGoogleRoute({ delayMinutes: delay, ratio, level });
+    return { normalizedWaitMin: estimate.wait, weight: estimate.weight, confidence: estimate.confidence, metadata: { delayMinutes: delay, ratio, level, reason: estimate.reason } };
+  }
+  function mockPublicSoft(maxMin = 30) {
+    const wait = Math.max(6, Math.round(maxMin * 0.35));
+    return { normalizedWaitMin: wait, weight: 0.35, confidence: 58, metadata: { softUpperBound: true, softMaxMinutes: maxMin, parser: 'under-not-longer-than' }, sourceType: 'public-text-status', rawStatus: `Zadržavanja nisu duža od ${maxMin} min`, rawText: `zadrzavanja nisu duga od ${maxMin} minuta` };
+  }
+  function mockCamera({ wait = 10, queue = 4, flow15 = 14 } = {}) {
+    return { normalizedWaitMin: wait, weight: 0.72, confidence: 65, metadata: { queueVehicles: queue, flowVehicles15: flow15 }, sourceType: 'camera-snapshot-model' };
+  }
+  function runScenario({ publicSig, google, camera, reports = null }) {
+    const publicSignals = publicSig ? [publicSig] : [];
+    const googleSignal = google || null;
+    const cameraSignal = camera || null;
+    const reportAvg = reports;
+    const candidates = [];
+    publicSignals.forEach((item) => {
+      const softUpperBound = isSoftUpperBoundSource(item);
+      candidates.push({ wait: item.normalizedWaitMin, weight: Math.max(0.1, Number(item.weight || 1)) * Math.max(35, Number(item.confidence || 70)) * (softUpperBound ? 0.82 : 1.15) });
+    });
+    if (cameraSignal) candidates.push({ wait: cameraSignal.normalizedWaitMin, weight: Math.max(0.1, Number(cameraSignal.weight || 0.72)) * Math.max(35, Number(cameraSignal.confidence || 58)) * (publicSignals.length ? 0.9 : 1.08) });
+    if (googleSignal) candidates.push({ wait: googleSignal.normalizedWaitMin, weight: Math.max(0.1, Number(googleSignal.weight || 0.84)) * Math.max(35, Number(googleSignal.confidence || 62)) * (publicSignals.length ? 0.86 : 1.02) });
+    const blended = weightedWait(candidates);
+    const sanity = blended !== null ? applyTrafficSanityCaps(blended, { googleSignal, cameraSignal, publicSignals, reportAvg }) : { wait: blended, adjusted: false, reason: 'no candidates' };
+    return { blended, final: sanity.wait, adjusted: sanity.adjusted, reason: sanity.reason };
+  }
+
+  const scenarios = [
+    {
+      id: 'A',
+      description: 'Soft public "do 30" + Google clear + no camera → expect 5–12',
+      expectedMin: 5, expectedMax: 12,
+      result: runScenario({ publicSig: mockPublicSoft(30), google: mockGoogleSignal({ delay: 1, ratio: 1.03 }), camera: null }),
+    },
+    {
+      id: 'B',
+      description: 'Soft public "do 30" + Google clear + camera medium queue → expect 8–18',
+      expectedMin: 8, expectedMax: 18,
+      result: runScenario({ publicSig: mockPublicSoft(30), google: mockGoogleSignal({ delay: 1, ratio: 1.03 }), camera: mockCamera({ wait: 15, queue: 12, flow15: 9 }) }),
+    },
+    {
+      id: 'C',
+      description: 'Soft public "do 30" + Google slow (delay 5, ratio 1.2) + camera medium → expect 15–30',
+      expectedMin: 15, expectedMax: 30,
+      result: runScenario({ publicSig: mockPublicSoft(30), google: mockGoogleSignal({ delay: 5, ratio: 1.2, level: 'slow' }), camera: mockCamera({ wait: 14, queue: 10, flow15: 8 }) }),
+    },
+    {
+      id: 'D',
+      description: 'Google heavy (delay 10, ratio 1.4) + camera heavy queue → expect 30+',
+      expectedMin: 30, expectedMax: 360,
+      result: runScenario({ publicSig: null, google: mockGoogleSignal({ delay: 10, ratio: 1.4, level: 'heavy' }), camera: mockCamera({ wait: 35, queue: 22, flow15: 5 }) }),
+    },
+    {
+      id: 'E',
+      description: 'No Google, only soft public "do 30" → expect low/medium confidence around 10–15',
+      expectedMin: 6, expectedMax: 15,
+      result: runScenario({ publicSig: mockPublicSoft(30), google: null, camera: null }),
+    },
+  ];
+
+  const results = scenarios.map((sc) => ({
+    ...sc,
+    pass: sc.result.final >= sc.expectedMin && sc.result.final <= sc.expectedMax,
+  }));
+  const allPassed = results.every((r) => r.pass);
+  res.json({ ok: allPassed, allPassed, scenarios: results });
 });
 
 app.post('/api/admin/sources/refresh', authRequired, adminRequired, writeLimiter, async (req, res) => {
