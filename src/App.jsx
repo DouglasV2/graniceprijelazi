@@ -1338,7 +1338,7 @@ function trafficClassFromWait(wait) {
   return 'normal';
 }
 
-function getDisplayedWait(crossing, directionKey, overrides = {}) {
+function getBaseDisplayedWait(crossing, directionKey, overrides = {}) {
   const key = `${crossing.id}:${directionKey}`;
   const statusOverride = getStatusOverride(crossing.id, directionKey);
   if (isClosedOperationalStatus(statusOverride?.status)) return null;
@@ -1351,12 +1351,33 @@ function getDisplayedWait(crossing, directionKey, overrides = {}) {
   return null;
 }
 
+function getRouteSanityEntry(key) {
+  const entries = globalThis.__BF_ROUTE_SANITY_WAITS || {};
+  const entry = entries[key];
+  if (!entry) return null;
+  if (entry.expiresAt && Date.now() > Number(entry.expiresAt)) {
+    delete entries[key];
+    return null;
+  }
+  return entry;
+}
+
+function getDisplayedWait(crossing, directionKey, overrides = {}) {
+  const key = `${crossing.id}:${directionKey}`;
+  const baseWait = getBaseDisplayedWait(crossing, directionKey, overrides);
+  if (!hasKnownWait(baseWait)) return baseWait;
+  if (Object.prototype.hasOwnProperty.call(overrides || {}, key)) return Number(overrides[key]);
+  const routeSanity = getRouteSanityEntry(key);
+  if (routeSanity && hasKnownWait(routeSanity.wait)) return Number(routeSanity.wait);
+  return Number(baseWait);
+}
+
 function getWaitForMath(crossing, directionKey, overrides = {}, unknownValue = 999) {
   const wait = getDisplayedWait(crossing, directionKey, overrides);
   return hasKnownWait(wait) ? Number(wait) : unknownValue;
 }
 
-function getWaitSourceMeta(crossing, directionKey, overrides = {}) {
+function getBaseWaitSourceMeta(crossing, directionKey, overrides = {}) {
   const key = `${crossing.id}:${directionKey}`;
   const statusOverride = getStatusOverride(crossing.id, directionKey);
   if (isClosedOperationalStatus(statusOverride?.status)) {
@@ -1382,6 +1403,11 @@ function getWaitSourceMeta(crossing, directionKey, overrides = {}) {
     return {
       label: source.label || 'Javni izvor',
       className: source.className || 'official',
+      sourceType: source.sourceType,
+      hasGoogleSignal: source.hasGoogleSignal,
+      hasCameraSignal: source.hasCameraSignal,
+      hasStrongCameraQueue: source.hasStrongCameraQueue,
+      hasSoftUpperBoundPublic: source.hasSoftUpperBoundPublic,
       note: source.note || 'Vrijednost je izračunata iz javnih izvora, kamera i dojava.',
       confidence: source.confidence,
       confidenceHint: source.confidenceHint,
@@ -1392,6 +1418,94 @@ function getWaitSourceMeta(crossing, directionKey, overrides = {}) {
     };
   }
   return { label: 'Čeka live izvor', className: 'pending', note: 'Stanje još nije stiglo iz javnog izvora, kamera, dojava ili potvrde tima.', displayReady: false };
+}
+
+function getWaitSourceMeta(crossing, directionKey, overrides = {}) {
+  const key = `${crossing.id}:${directionKey}`;
+  const baseMeta = getBaseWaitSourceMeta(crossing, directionKey, overrides);
+  const routeSanity = getRouteSanityEntry(key);
+  if (!routeSanity || baseMeta.displayReady === false || Object.prototype.hasOwnProperty.call(overrides || {}, key)) return baseMeta;
+  return {
+    ...baseMeta,
+    label: baseMeta.label || 'Kombinirana procjena',
+    className: routeSanity.className || baseMeta.className || 'combined',
+    note: routeSanity.note || baseMeta.note,
+    rangeMin: routeSanity.rangeMin ?? baseMeta.rangeMin,
+    rangeMax: routeSanity.rangeMax ?? baseMeta.rangeMax,
+    routeSanity: true,
+  };
+}
+
+function routeTrafficMeta(route = {}) {
+  const delayMinutes = Math.max(0, Number(route.delayMinutes ?? route.googleDelayMinutes ?? 0) || 0);
+  const ratio = Math.max(0.1, Number(route.ratio ?? (route.staticMinutes ? Number(route.durationMinutes || 0) / Math.max(1, Number(route.staticMinutes)) : 1)) || 1);
+  const level = String(route.level || (delayMinutes >= 8 || ratio >= 1.35 ? 'heavy' : delayMinutes >= 3 || ratio >= 1.12 ? 'slow' : 'normal'));
+  return { delayMinutes, ratio, level };
+}
+
+function routeLooksClear(route = null) {
+  if (!route) return false;
+  const { delayMinutes, ratio, level } = routeTrafficMeta(route);
+  return level === 'normal' && delayMinutes <= 2 && ratio < 1.12;
+}
+
+function routeLooksHeavy(route = null) {
+  if (!route) return false;
+  const { delayMinutes, ratio, level } = routeTrafficMeta(route);
+  return level === 'heavy' || delayMinutes >= 8 || ratio >= 1.35;
+}
+
+function sourceLooksProtected(meta = {}) {
+  return ['admin-override', 'driver-reports'].includes(meta.sourceType) || meta.className === 'manual' || /dojav/i.test(meta.label || '');
+}
+
+function sourceLooksSoftUpperBound(meta = {}) {
+  const text = `${meta.label || ''} ${meta.note || ''}`.toLowerCase();
+  return text.includes('gornja granica') || text.includes('do x min') || text.includes('do 30') || text.includes('nije du') || text.includes('soft') || text.includes('bihamk');
+}
+
+function computeRouteSanityWait(baseWait, sourceMeta = {}, route = null) {
+  if (!hasKnownWait(baseWait) || !route || sourceLooksProtected(sourceMeta) || routeLooksHeavy(route)) return null;
+  const currentWait = Number(baseWait);
+  if (!Number.isFinite(currentWait) || currentWait <= 15) return null;
+  const { delayMinutes, ratio } = routeTrafficMeta(route);
+  const isClear = routeLooksClear(route);
+  if (!isClear) return null;
+
+  const softUpperBound = sourceMeta.hasSoftUpperBoundPublic === true || sourceLooksSoftUpperBound(sourceMeta) || sourceMeta.className === 'combined' || sourceMeta.sourceType === 'combined-estimate';
+  const cap = sourceMeta.hasStrongCameraQueue ? 20 : softUpperBound ? 12 : 18;
+  const wait = Math.min(currentWait, cap);
+  if (wait >= currentWait) return null;
+  const reasonTail = sourceMeta.hasStrongCameraQueue
+    ? 'Kamera ipak pokazuje kolonu, pa se ne spušta na minimum nego se ograničava na umjereno čekanje.'
+    : 'Plavo ne znači 0 min, ali bez crvenog/narančastog zastoja, jake kamere ili dojava ne prikazujemo visoku procjenu.';
+  return {
+    wait,
+    baseWait: currentWait,
+    rangeMin: sourceMeta.hasStrongCameraQueue ? 12 : softUpperBound ? 4 : 6,
+    rangeMax: sourceMeta.hasStrongCameraQueue ? 22 : softUpperBound ? 14 : 20,
+    className: 'combined route-sanity',
+    expiresAt: Date.now() + 3 * 60 * 1000,
+    note: `Google ruta kroz provjerenu zonu je plava/protočna (${formatMinutes(delayMinutes)} cestovnog zastoja, ratio ${ratio.toFixed(2)}), pa ${formatMinutes(currentWait)} iz javnih/kamera signala ne prikazujemo kao stvarno čekanje. ${reasonTail} Trenutna procjena je oko ${formatMinutes(wait)}.`,
+  };
+}
+
+function updateRouteSanityWait(crossing, directionKey, route = null, overrides = {}) {
+  const key = `${crossing.id}:${directionKey}`;
+  globalThis.__BF_ROUTE_SANITY_WAITS = globalThis.__BF_ROUTE_SANITY_WAITS || {};
+  const before = globalThis.__BF_ROUTE_SANITY_WAITS[key]?.wait ?? null;
+  const baseWait = getBaseDisplayedWait(crossing, directionKey, overrides);
+  const sourceMeta = getBaseWaitSourceMeta(crossing, directionKey, overrides);
+  const sanity = computeRouteSanityWait(baseWait, sourceMeta, route);
+  if (sanity) {
+    globalThis.__BF_ROUTE_SANITY_WAITS[key] = sanity;
+  } else {
+    delete globalThis.__BF_ROUTE_SANITY_WAITS[key];
+  }
+  const after = globalThis.__BF_ROUTE_SANITY_WAITS[key]?.wait ?? null;
+  if (before !== after && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('bf-route-sanity-updated', { detail: { key, before, after } }));
+  }
 }
 
 function alternativesFor(selectedId, selectedDirection, overrides) {
@@ -2563,6 +2677,7 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
     let cancelled = false;
     async function loadCrossingRoutes() {
       if (!focusTraffic) {
+        updateRouteSanityWait(selectedCrossing, selectedDirection, null, overrides);
         setRoutePayload({ live: false, routes: [], note: 'Ruta je isključena.' });
         setSelectedRoute(null);
         setRouteInspectorOpen(false);
@@ -2571,12 +2686,15 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
       try {
         const payload = await fetchJson(`/api/routes/${selectedCrossing.id}?direction=${selectedDirection}`);
         if (!cancelled) {
+          const primary = payload?.routes?.find((route) => route.primary) || payload?.routes?.[0] || null;
+          updateRouteSanityWait(selectedCrossing, selectedDirection, primary, overrides);
           setRoutePayload(payload);
           setSelectedRoute(null);
           setRouteInspectorOpen(Boolean(payload?.routes?.length));
         }
       } catch {
         if (!cancelled) {
+          updateRouteSanityWait(selectedCrossing, selectedDirection, null, overrides);
           setRoutePayload({ live: false, routes: [], note: 'Ruta trenutno nije dostupna.' });
           setRouteInspectorOpen(false);
         }
@@ -2589,7 +2707,7 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [focusTraffic, selectedDirection, selectedCrossing.id]);
+  }, [focusTraffic, selectedDirection, selectedCrossing.id, overrides]);
 
   useEffect(() => {
     if (!mapRef.current || !window.google?.maps) return;
@@ -4201,6 +4319,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    function handleRouteSanityUpdated() {
+      setServerStateVersion((value) => value + 1);
+    }
+    window.addEventListener('bf-route-sanity-updated', handleRouteSanityUpdated);
+    return () => window.removeEventListener('bf-route-sanity-updated', handleRouteSanityUpdated);
   }, []);
 
   useEffect(() => {

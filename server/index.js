@@ -1909,6 +1909,10 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       className: combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
       sourceType: combined ? 'combined-estimate' : bestCandidate.sourceType,
       confidence: Math.min(96, Math.round(Math.max(...candidates.map((item) => Number(item.weight || 0))) / 1.2 + (combined ? 5 : 0))),
+      hasGoogleSignal: Boolean(googleSignal),
+      hasCameraSignal: Boolean(cameraSignal),
+      hasStrongCameraQueue: cameraShowsQueue(cameraSignal),
+      hasSoftUpperBoundPublic: publicSignals.length > 0 && publicSignals.every(isSoftUpperBoundSource),
       note: sanity.adjusted
         ? `${sanity.reason}${googleClearNote}`
         : combined
@@ -1969,7 +1973,14 @@ async function buildEffectiveWaitMaps(store) {
         className: signal.className,
         note: signal.note,
         confidence: signal.confidence,
+        confidenceHint: signal.confidenceHint,
+        rangeMin: signal.rangeMin,
+        rangeMax: signal.rangeMax,
         sourceType: signal.sourceType,
+        hasGoogleSignal: signal.hasGoogleSignal,
+        hasCameraSignal: signal.hasCameraSignal,
+        hasStrongCameraQueue: signal.hasStrongCameraQueue,
+        hasSoftUpperBoundPublic: signal.hasSoftUpperBoundPublic,
         displayReady: signal.displayReady !== false,
         updatedAt: signal.updatedAt,
       };
