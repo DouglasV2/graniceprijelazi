@@ -1101,6 +1101,21 @@ function hasKnownWait(value) {
   return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 }
 
+// Returns true only for finite, non-negative minute values (safe to display as a wait time).
+function isUsableMinuteValue(value) {
+  if (value === null || value === undefined || value === '') return false;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0;
+}
+
+// Returns a clamped non-negative integer, or null if the value is unusable.
+function normalizeMinutes(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n);
+}
+
 // Format wait with a confidence qualifier ("~" or range) when source is soft upper bound or low confidence.
 function formatWaitDisplay(wait, sourceMeta = {}) {
   if (!hasKnownWait(wait)) return 'čeka izvor';
@@ -1551,37 +1566,43 @@ function getAlternativeDeltaMeta(netBenefit) {
   const value = Number(netBenefit);
   if (!Number.isFinite(value) || value <= -900) {
     return {
-      label: 'čeka podatke',
+      label: 'Nema dovoljno podataka',
       className: 'unknown',
-      note: 'Za ovu alternativu još čekamo dovoljno svježih podataka.',
+      note: 'Nemamo dovoljno svježih podataka za pouzdanu usporedbu. Provjeri oba prijelaza prije polaska.',
+    };
+  }
+  if (value >= 15) {
+    return {
+      label: 'Alternativa se isplati',
+      className: 'better',
+      note: `Može biti oko ${formatMinutes(value)} brža od planiranog prijelaza.`,
     };
   }
   if (value > 0) {
     return {
-      label: `${formatMinutes(value)} brže`,
+      label: 'Alternativa može biti brža',
       className: 'better',
-      note: 'Alternativa se trenutno isplati.',
+      note: `Mala prednost — razlika je oko ${formatMinutes(value)}.`,
     };
   }
-  const penalty = Math.abs(value);
-  if (penalty >= 60) {
+  if (value >= -10) {
     return {
-      label: formatMinutes(penalty),
-      className: 'critical',
-      note: 'Planirani prijelaz je puno bolji izbor.',
+      label: 'Razlika je mala',
+      className: 'neutral',
+      note: 'Oba prijelaza imaju slično očekivano čekanje.',
     };
   }
-  if (penalty >= 25) {
+  if (value >= -30) {
     return {
-      label: formatMinutes(penalty),
+      label: 'Planirani prijelaz je bolji izbor',
       className: 'warning',
-      note: 'Planirani prijelaz je zasad bolji izbor.',
+      note: 'Alternativa trenutno ne donosi uštedu.',
     };
   }
   return {
-    label: formatMinutes(penalty),
-    className: 'neutral',
-    note: 'Planirani prijelaz je trenutno bolji izbor.',
+    label: 'Planirani prijelaz je puno bolji',
+    className: 'critical',
+    note: 'Alternativa bi zahtijevala znatno dulje putovanje.',
   };
 }
 
@@ -1911,14 +1932,10 @@ function DetailModal({ crossing, selectedDirection, overrides, onClose, onTrack,
           <div className="alternative-card">
             <div>
               <span>{bestAlt.name}</span>
-              <strong>{formatMinutes(bestAlt.wait)}</strong>
-              <small>čekanje na granici</small>
+              <strong>{isUsableMinuteValue(bestAlt.wait) ? formatMinutes(bestAlt.wait) : '—'}</strong>
+              <small>{isUsableMinuteValue(bestAlt.wait) ? 'Očekivano čekanje' : 'Čeka podatke'}</small>
             </div>
-            <div className="formula-mini">
-              <span>{formatMinutes(bestAlt.borderSaving)}</span>
-              <b>−</b>
-              <span>{formatMinutes(bestAlt.extraDrive)}</span>
-              <b>=</b>
+            <div className="alt-verdict-center">
               <strong className={`alternative-delta ${altDeltaMeta.className}`}>{altDeltaMeta.label}</strong>
             </div>
             <p>{altDeltaMeta.note}</p>

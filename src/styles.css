@@ -771,6 +771,7 @@
 .alternative-delta.warning{background:#fff4ce;color:#a15c00}
 .alternative-delta.critical{background:#ffe9e7;color:#b42318}
 .alternative-delta.unknown{background:#f3f6fb;color:#667085}
+.alt-verdict-center{display:flex;align-items:center;justify-content:center}
 .trip-direction-hint{grid-column:1/-1;margin:0;border:1px solid rgba(23,103,232,.16);border-radius:16px;padding:10px 12px;background:#f3f8ff;color:#31506f;font-size:13px;font-weight:820;line-height:1.35}
 
 /* Signal badges & wait qualifiers in route-focus-card */
