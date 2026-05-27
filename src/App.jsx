@@ -641,11 +641,11 @@ const TABS_USER = ['Pregled', 'Moj put', 'Mapa', 'Povijest', 'Dojave'];
 const TABS_ADMIN = ['Pregled', 'Moj put', 'Mapa', 'Povijest', 'Dojave', 'Admin'];
 
 const NAV_META = {
-  Pregled: { label: 'Sada', hint: 'čekanja uživo' },
+  Pregled: { label: 'Pregled', hint: 'čekanja uživo' },
   'Moj put': { label: 'Moj put', hint: 'najbolji izbor' },
   Mapa: { label: 'Karta', hint: 'rute i kamere' },
-  Dojave: { label: 'Dojavi', hint: 'stanje s puta' },
-  Povijest: { label: 'Trendovi', hint: 'kada krenuti' },
+  Dojave: { label: 'Dojave', hint: 'stanje s puta' },
+  Povijest: { label: 'Prošlost', hint: 'kada krenuti' },
   Admin: { label: 'Uredi stanje', hint: 'za tim' },
 };
 
