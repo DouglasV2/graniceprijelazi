@@ -1758,33 +1758,33 @@ function applyTrafficSanityCaps(wait, { googleSignal = null, cameraSignal = null
 
   if (clearGoogle && softPublicOnly && (!cameraSignal || clearCamera)) {
     const capped = Math.min(finalWait, cameraSignal ? 12 : 14);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google promet je normalan, a javni izvor daje samo gornju granicu; procjena je spuštena na nisko/umjereno čekanje.' };
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google promet je normalan; okvirna procjena je prilagođena prema dostupnim podacima.' };
   }
 
   if (clearGoogle && clearCamera && !hasHardPublic) {
     const capped = Math.min(finalWait, 15);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google i kamera zajedno pokazuju protočnost; veća procjena je ograničena.' };
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google i kamera zajedno pokazuju da je prijelaz prohodan.' };
   }
 
   if (clearGoogle && !strongCameraQueue && softPublicOnly) {
     const capped = Math.min(finalWait, 16);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google je plav/normalan pa se BIHAMK/HAK/AMS tekst “do 30 min” tretira kao gornja granica, ne kao stvarnih 25–30 min.' };
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google promet je normalan; prikazano čekanje je okvirna procjena, ne potvrđena vrijednost.' };
   }
 
   if (clearGoogle && cameraSignal && !strongCameraQueue && !hasHardPublic) {
     const capped = Math.min(finalWait, 20);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google ne vidi cestovni zastoj; bez jake kamere ili tvrdog javnog izvora čekanje se ne diže visoko.' };
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google ne bilježi cestovni zastoj; procjena čekanja je umjerena.' };
   }
 
   // Camera overrides clear Google only when it shows strong queue (possible local congestion Google missed).
   if (clearGoogle && strongCameraQueue) {
     const capped = Math.min(finalWait, 25);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Kamera pokazuje kolonu iako je Google promet normalan — mogući lokalni zastoj koji Google nije zabilježio. Čekanje ograničeno na 25 min.' };
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Kamera pokazuje kolonu na prijelazu. Moguće je da lokalni zastoj nije vidljiv u prometnim podacima.' };
   }
 
   // Last-resort: if Google is clear, never allow > 25 min regardless of other soft signals.
   if (clearGoogle && finalWait > 25) {
-    return { wait: 25, adjusted: true, reason: 'Google plava ruta je sanity check — bez crvenog/narančastog prometa, dojava ili jakih signala, procjena se ograničava na 25 min.' };
+    return { wait: 25, adjusted: true, reason: 'Google promet je normalan; bez snažnijih signala procjena čekanja se zadržava na umjerenoj razini.' };
   }
 
   return { wait: finalWait, adjusted: false, reason: '' };
@@ -1976,13 +1976,13 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     const hasMultipleOfficialSources = uniqueSignalNames(candidates.filter((item) => item.sourceType === 'public-text-status')).length > 1;
     const combined = signalNames.length > 1 || hasMultipleOfficialSources;
     const bestCandidate = [...candidates].sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0))[0];
-    const googleClearNote = googleLooksClear(googleSignal) ? ' Google plavo/normalno ne znači 0 min, ali sprječava visoku procjenu bez kamere, dojava ili tvrdog javnog signala.' : '';
+    const googleClearNote = googleLooksClear(googleSignal) ? ' Google promet je normalan, ali to ne znači nulto čekanje.' : '';
     return {
       wait: finalWait,
       rangeMin: range.rangeMin,
       rangeMax: range.rangeMax,
       confidenceHint: range.confidenceHint,
-      label: combined ? 'Kombinirana procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
+      label: combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
       className: combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
       sourceType: combined ? 'combined-estimate' : bestCandidate.sourceType,
       confidence: Math.min(96, Math.round(Math.max(...candidates.map((item) => Number(item.weight || 0))) / 1.2 + (combined ? 5 : 0))),
@@ -1993,7 +1993,7 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       note: sanity.adjusted
         ? `${sanity.reason}${googleClearNote}`
         : combined
-          ? `Procjena spaja ${signalNames.join(' + ')}; Google je protočni sanity-check, kamera je queue/flow signal, a javni “do X min” tretira se kao gornja granica.${googleClearNote}`
+          ? `Procjena se temelji na kombinaciji dostupnih izvora: ${signalNames.join(', ')}.${googleClearNote}`
           : `${bestCandidate.label} je trenutno najjači izvor za ovaj smjer.${googleClearNote}`,
       signals: latestSources,
       updatedAt: candidates.map((item) => item.updatedAt).filter(Boolean).sort().at(-1) || new Date().toISOString(),
@@ -4315,7 +4315,8 @@ async function buildFallbackJourneyOptions(direction, vehicle, origin = '', dest
       const delayKnown = borderSignal.displayReady !== false && Number.isFinite(Number(borderSignal.wait));
       const delay = delayKnown ? Number(borderSignal.wait) : 0;
       const seed = deterministicSeed(`${crossing.id}-${direction}-${vehicle}`);
-      const routeDurationMinutes = baseTripMinutes + crossing.extraDriveFromMainRoute + Math.round(index * 2.5) + (seed % 9);
+      const extraDrive = Number(crossing.extraDriveFromMainRoute ?? 0);
+      const routeDurationMinutes = baseTripMinutes + extraDrive + Math.round(index * 2.5) + (seed % 9);
       const distanceKm = Number((70 + index * 8.4 + (seed % 23) / 10).toFixed(1));
       return {
         id: crossing.id,
@@ -4593,7 +4594,11 @@ app.get('/api/routes/:crossingId', async (req, res) => {
   const crossingId = req.params.crossingId || 'maljevac';
   const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
 
-  const crossing = BORDER_CROSSINGS[crossingId] || BORDER_CROSSINGS.maljevac;
+  if (!BORDER_CROSSINGS[crossingId]) {
+    res.status(404).json({ ok: false, error: 'Prijelaz nije pronađen.' });
+    return;
+  }
+  const crossing = BORDER_CROSSINGS[crossingId];
   const store = await readAppStore();
   const statusOverride = getStoredStatusOverride(store, crossing.id, direction);
   const statusPayload = statusOverrideRoutePayload(crossing, direction, statusOverride);

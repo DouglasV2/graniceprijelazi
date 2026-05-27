@@ -959,7 +959,7 @@ const UI_TEXT_EN = {
   'Link kopiran': 'Link copied',
   'Javi kad padne ispod 15 min': 'Notify below 15 min',
   'Obavijesti pokrivaju oba smjera': 'Alerts cover both directions',
-  'Kombinirana procjena': 'Combined estimate',
+  'Okvirna procjena': 'Estimate',
   'App ne bira jedan izvor naslijepo.': 'The app does not rely on one source blindly.',
   'Pretraži prijelaz, grad ili rutu... npr. Maljevac, Gradiška, Bihać': 'Search a crossing, city or route... e.g. Maljevac, Gradiška, Bihać',
   'Svi prijelazi': 'All crossings',
@@ -1126,7 +1126,7 @@ function formatWaitDisplay(wait, sourceMeta = {}) {
   if ((isSoftBound || isLowConf) && hasKnownWait(sourceMeta.rangeMin) && hasKnownWait(sourceMeta.rangeMax)) {
     const rMin = Math.max(0, Number(sourceMeta.rangeMin));
     const rMax = Number(sourceMeta.rangeMax);
-    if (rMax - rMin >= 5) return `${formatMinutes(Math.max(0, rMin))}–${formatMinutes(rMax)}`;
+    if (rMax - rMin >= 5) return rMin === 0 ? `do ${formatMinutes(rMax)}` : `${formatMinutes(rMin)}–${formatMinutes(rMax)}`;
   }
   if (isSoftBound || isLowConf) return `~${formatMinutes(n)}`;
   return formatMinutes(n);
@@ -1465,7 +1465,7 @@ function getWaitSourceMeta(crossing, directionKey, overrides = {}) {
   if (!routeSanity || baseMeta.displayReady === false || Object.prototype.hasOwnProperty.call(overrides || {}, key)) return baseMeta;
   return {
     ...baseMeta,
-    label: baseMeta.label || 'Kombinirana procjena',
+    label: baseMeta.label || 'Okvirna procjena',
     className: routeSanity.className || baseMeta.className || 'combined',
     note: routeSanity.note || baseMeta.note,
     rangeMin: routeSanity.rangeMin ?? baseMeta.rangeMin,
@@ -1524,7 +1524,7 @@ function computeRouteSanityWait(baseWait, sourceMeta = {}, route = null) {
     rangeMax: sourceMeta.hasStrongCameraQueue ? 22 : softUpperBound ? 14 : 20,
     className: 'combined route-sanity',
     expiresAt: Date.now() + 3 * 60 * 1000,
-    note: `Google ruta kroz provjerenu zonu je plava/protočna (${formatMinutes(delayMinutes)} cestovnog zastoja, ratio ${ratio.toFixed(2)}), pa ${formatMinutes(currentWait)} iz javnih/kamera signala ne prikazujemo kao stvarno čekanje. ${reasonTail} Trenutna procjena je oko ${formatMinutes(wait)}.`,
+    note: `Google promet je normalan${delayMinutes > 0 ? ` (${formatMinutes(delayMinutes)} cestovnog zastoja)` : ''}, pa visoka procjena iz javnih izvora ne odražava stvarno stanje. ${reasonTail} Trenutna procjena je oko ${formatMinutes(wait)}.`,
   };
 }
 
@@ -2015,7 +2015,7 @@ function SourceExplanationCard() {
   return (
     <article className="source-explanation-card">
       <div>
-        <span className="kicker">Kombinirana procjena</span>
+        <span className="kicker">Procjena čekanja</span>
         <strong>App ne bira jedan izvor naslijepo.</strong>
       </div>
       <p>Procjena se slaže iz više tragova: HAK, BIHAMK/AMS, Google promet, kamere, dojave vozača i provjera tima. Najviše vjerujemo svježim i potvrđenim informacijama, a ako tim označi zatvaranje ili preusmjeravanje, to odmah ima prednost.</p>
@@ -2941,16 +2941,16 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
               </div>
               <div className="route-signal-badges">
                 {borderSourceMeta.hasGoogleSignal && !borderSourceMeta.hasStrongCameraQueue && routeLooksClear(primaryRoute) && (
-                  <span className="signal-badge signal-google-clear">Google promet normalan</span>
+                  <span className="signal-badge signal-google-clear">Prometnica prohodna</span>
                 )}
                 {borderSourceMeta.hasSoftUpperBoundPublic && !borderSourceMeta.hasStrongCameraQueue && (
-                  <span className="signal-badge signal-soft-bound">javni izvor: gornja granica</span>
+                  <span className="signal-badge signal-soft-bound">Okvirna procjena</span>
                 )}
                 {borderSourceMeta.hasCameraSignal && !borderSourceMeta.hasStrongCameraQueue && (
-                  <span className="signal-badge signal-camera-ok">kamera ne potvrđuje kolonu</span>
+                  <span className="signal-badge signal-camera-ok">Kamera: bez kolone</span>
                 )}
                 {borderSourceMeta.hasStrongCameraQueue && (
-                  <span className="signal-badge signal-camera-queue">kamera pokazuje kolonu</span>
+                  <span className="signal-badge signal-camera-queue">Kamera: kolona vidljiva</span>
                 )}
               </div>
               {borderSourceMeta.note && (
