@@ -1236,10 +1236,10 @@ function parseDirectionalWaitsFromText(rawText = '', options = {}) {
   const entryDirection = sourceSide === 'hr' ? 'toHr' : 'toBih';
   const exitDirection = sourceSide === 'hr' ? 'toBih' : 'toHr';
   const signals = [];
-  const push = (direction, wait, rawStatus, confidence = 70, weight = 1) => {
+  const push = (direction, wait, rawStatus, confidence = 70, weight = 1, metadata = {}) => {
     const normalizedWait = clampWait(wait);
     if (!direction || normalizedWait === null) return;
-    signals.push({ direction, wait: normalizedWait, rawStatus, confidence, weight });
+    signals.push({ direction, wait: normalizedWait, rawStatus, confidence, weight, metadata });
   };
 
   const explicitMentions = extractExplicitWaitMentions(normalized);
@@ -1272,11 +1272,13 @@ function parseDirectionalWaitsFromText(rawText = '', options = {}) {
   if (/pojacan\w*\s+(?:je\s+)?ulaz/.test(normalized)) push(entryDirection, 45, sourceSide === 'hr' ? 'Pojačan ulaz u HR' : 'Pojačan ulaz u BiH/RS', 76, 1.05);
 
   const under30 = minMention && minMention <= 35 && /nisu\s+duz\w*\s+od\s+\d{1,3}\s*(?:minuta|min|m)/.test(normalized);
-  if (under30 && /na\s+ulaz\w*/.test(normalized)) push(entryDirection, Math.max(12, minMention - 5), `Zadržavanja na ulazu nisu duža od ${minMention} min`, 82, 1.15);
-  if (under30 && /na\s+izlaz\w*/.test(normalized)) push(exitDirection, Math.max(12, minMention - 5), `Zadržavanja na izlazu nisu duža od ${minMention} min`, 82, 1.15);
+  const softUpperBoundWait = under30 ? Math.max(6, Math.round(minMention * 0.35)) : null;
+  const softUpperBoundMeta = under30 ? { softUpperBound: true, softMaxMinutes: minMention, parser: 'under-not-longer-than' } : {};
+  if (under30 && /na\s+ulaz\w*/.test(normalized)) push(entryDirection, softUpperBoundWait, `Zadržavanja na ulazu nisu duža od ${minMention} min`, 62, 0.42, softUpperBoundMeta);
+  if (under30 && /na\s+izlaz\w*/.test(normalized)) push(exitDirection, softUpperBoundWait, `Zadržavanja na izlazu nisu duža od ${minMention} min`, 62, 0.42, softUpperBoundMeta);
   if (under30 && !/na\s+ulaz\w*|na\s+izlaz\w*/.test(normalized)) {
-    push('toBih', Math.max(10, minMention - 7), `Zadržavanja nisu duža od ${minMention} min`, 74, 0.85);
-    push('toHr', Math.max(10, minMention - 7), `Zadržavanja nisu duža od ${minMention} min`, 74, 0.85);
+    push('toBih', softUpperBoundWait, `Zadržavanja nisu duža od ${minMention} min`, 58, 0.35, softUpperBoundMeta);
+    push('toHr', softUpperBoundWait, `Zadržavanja nisu duža od ${minMention} min`, 58, 0.35, softUpperBoundMeta);
   }
   if (/nema\s+duz\w*\s+zadrzavanja|bez\s+duz\w*\s+zadrzavanja/.test(normalized)) {
     push('toBih', 12, 'Nema dužih zadržavanja', 76, 0.9);
@@ -1405,7 +1407,7 @@ async function fetchBihamkSnapshots() {
         normalizedWaitMin: signal.wait,
         confidence: signal.confidence,
         weight: signal.weight,
-        metadata: { adapter: 'bihamk-border-status', crossingNames: config.bihamkNames || [] },
+        metadata: { adapter: 'bihamk-border-status', crossingNames: config.bihamkNames || [], ...(signal.metadata || {}) },
         fetchedAt: new Date().toISOString(),
       });
     });
@@ -1437,7 +1439,7 @@ async function fetchHakSnapshots() {
         normalizedWaitMin: signal.wait,
         confidence: signal.confidence,
         weight: Math.max(1, signal.weight || 1),
-        metadata: { adapter: 'hak-border-status', crossingNames: names, sourceSide: 'hr' },
+        metadata: { adapter: 'hak-border-status', crossingNames: names, sourceSide: 'hr', ...(signal.metadata || {}) },
         fetchedAt: new Date().toISOString(),
       });
     });
@@ -1463,7 +1465,7 @@ async function fetchAmsRsSnapshots() {
       normalizedWaitMin: signal.wait,
       confidence: Math.max(70, signal.confidence),
       weight: Math.max(1.05, signal.weight),
-      metadata: { adapter: 'ams-rs-border-status', crossingNames: config.bihamkNames || [], sourceSide: 'bih-rs', scopeNote: 'AMS RS signal is treated as RS-side only, not a full BiH-wide official status.' },
+      metadata: { adapter: 'ams-rs-border-status', crossingNames: config.bihamkNames || [], sourceSide: 'bih-rs', scopeNote: 'AMS RS signal is treated as RS-side only, not a full BiH-wide official status.', ...(signal.metadata || {}) },
       fetchedAt: new Date().toISOString(),
     })) : [];
 
@@ -1510,7 +1512,7 @@ async function buildCameraSourceSnapshots() {
       sourceName: 'Kamera snapshot model',
       sourceType: 'camera-snapshot-model',
       sourceUrl: (CAMERA_FEEDS[crossingId] || [])[0]?.url || '',
-      rawStatus: `${analytics.queueVehicles || 0} vidljivih/izvedenih vozila u zoni; ${analytics.throughputPerHour || 0} voz/h`,
+      rawStatus: `${analytics.queueVehicles || 0} vidljivih/izvedenih vozila u zoni; protok ${analytics.flowVehicles15 ?? analytics.passed15 ?? 0} voz/15min (${analytics.throughputPerHour || 0} voz/h)`,
       rawText: analytics.message || '',
       rawWaitMin: analytics.wait,
       normalizedWaitMin: analytics.wait,
@@ -1521,6 +1523,10 @@ async function buildCameraSourceSnapshots() {
         throughputPerHour: analytics.throughputPerHour,
         queueVehicles: analytics.queueVehicles,
         passed15: analytics.passed15,
+        flowVehicles15: analytics.flowVehicles15 ?? analytics.passed15,
+        queueTrend: analytics.queueTrend,
+        waitRangeMin: analytics.waitRangeMin,
+        waitRangeMax: analytics.waitRangeMax,
         vehicleMix15: analytics.vehicleMix15,
         source: analytics.source,
         snapshots: actualSnapshots.map((item) => ({ cameraId: item.cameraId, method: item.method, confidence: item.confidence, fetchedAt: item.fetchedAt })),
@@ -1550,6 +1556,163 @@ async function mapWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
+
+function trafficMeta(signalOrRoute = {}) {
+  const meta = signalOrRoute.metadata || signalOrRoute || {};
+  const delayMinutes = Math.max(0, Number(meta.delayMinutes ?? signalOrRoute.delayMinutes ?? 0) || 0);
+  const ratio = Math.max(0.1, Number(meta.ratio ?? signalOrRoute.ratio ?? 1) || 1);
+  const level = String(meta.level || signalOrRoute.level || delayLevel(delayMinutes, ratio) || 'normal');
+  return { delayMinutes, ratio, level };
+}
+
+function estimateWaitFromGoogleRoute(route = {}) {
+  const { delayMinutes, ratio, level } = trafficMeta(route);
+  const clear = level === 'normal' && delayMinutes <= 2 && ratio < 1.12;
+  const slow = level === 'slow' || delayMinutes > 2 || ratio >= 1.12;
+  const heavy = level === 'heavy' || delayMinutes >= 8 || ratio >= 1.35;
+
+  if (clear) {
+    return {
+      wait: 6,
+      rangeMin: 0,
+      rangeMax: 12,
+      confidence: 62,
+      weight: 0.84,
+      level: 'normal',
+      reason: 'Google promet u kontrolnoj zoni je normalan; to nije dokaz 0 min, nego cap protiv velikih procjena bez potvrde.',
+    };
+  }
+
+  if (!heavy && slow) {
+    const wait = clampWait(Math.round(9 + delayMinutes * 2.1 + Math.max(0, ratio - 1.08) * 28));
+    return {
+      wait,
+      rangeMin: Math.max(5, wait - 6),
+      rangeMax: wait + 10,
+      confidence: 68,
+      weight: 0.92,
+      level: 'slow',
+      reason: 'Google pokazuje usporenje kroz kontrolnu zonu.',
+    };
+  }
+
+  const wait = clampWait(Math.round(18 + delayMinutes * 2.8 + Math.max(0, ratio - 1.25) * 48));
+  return {
+    wait,
+    rangeMin: Math.max(12, wait - 8),
+    rangeMax: wait + 16,
+    confidence: 74,
+    weight: 1.06,
+    level: 'heavy',
+    reason: 'Google pokazuje ozbiljno zagušenje kroz kontrolnu zonu.',
+  };
+}
+
+function isSoftUpperBoundSource(item = {}) {
+  if (item.metadata?.softUpperBound === true) return true;
+  const text = normalizeAscii(`${item.rawStatus || ''} ${item.rawText || ''}`);
+  return /nisu\s+duz\w*\s+od\s+\d{1,3}\s*(?:minuta|min|m)/.test(text);
+}
+
+function googleLooksClear(signal = null) {
+  if (!signal) return false;
+  const { delayMinutes, ratio, level } = trafficMeta(signal);
+  return level === 'normal' && delayMinutes <= 2 && ratio < 1.12;
+}
+
+function googleLooksSlow(signal = null) {
+  if (!signal) return false;
+  const { delayMinutes, ratio, level } = trafficMeta(signal);
+  return level === 'slow' || delayMinutes > 2 || ratio >= 1.12;
+}
+
+function googleLooksHeavy(signal = null) {
+  if (!signal) return false;
+  const { delayMinutes, ratio, level } = trafficMeta(signal);
+  return level === 'heavy' || delayMinutes >= 8 || ratio >= 1.35;
+}
+
+function cameraLooksClear(signal = null) {
+  if (!signal) return false;
+  const meta = signal.metadata || {};
+  const wait = Number(signal.normalizedWaitMin || 0);
+  const queue = Number(meta.queueVehicles ?? 0);
+  const flow15 = Number(meta.flowVehicles15 ?? meta.passed15 ?? 0);
+  return wait <= 12 && (queue <= 10 || flow15 >= 12);
+}
+
+function cameraShowsQueue(signal = null) {
+  if (!signal) return false;
+  const meta = signal.metadata || {};
+  const wait = Number(signal.normalizedWaitMin || 0);
+  const queue = Number(meta.queueVehicles ?? 0);
+  return wait >= 18 || queue >= 16;
+}
+
+function estimateRangeFromSignals(wait, { googleSignal = null, cameraSignal = null, publicSignals = [], reports = [] } = {}) {
+  const finalWait = clampWait(wait);
+  if (finalWait === null) return { rangeMin: null, rangeMax: null, confidenceHint: 'low' };
+  let spread = 8;
+  let confidenceHint = 'medium';
+  if (reports.length >= 2) {
+    spread = 6;
+    confidenceHint = 'medium-high';
+  } else if (googleLooksClear(googleSignal) && cameraLooksClear(cameraSignal)) {
+    spread = 5;
+    confidenceHint = 'medium-high';
+  } else if (googleSignal && cameraSignal) {
+    spread = 7;
+    confidenceHint = 'medium';
+  } else if (publicSignals.length && publicSignals.every(isSoftUpperBoundSource)) {
+    spread = 10;
+    confidenceHint = 'low-medium';
+  } else if (!googleSignal && !cameraSignal) {
+    spread = 12;
+    confidenceHint = 'low';
+  }
+  return {
+    rangeMin: Math.max(0, finalWait - spread),
+    rangeMax: Math.min(360, finalWait + spread + (googleLooksHeavy(googleSignal) ? 8 : 0)),
+    confidenceHint,
+  };
+}
+
+function applyTrafficSanityCaps(wait, { googleSignal = null, cameraSignal = null, publicSignals = [], reportAvg = null } = {}) {
+  let finalWait = clampWait(wait);
+  if (finalWait === null) return { wait: null, adjusted: false, reason: '' };
+
+  const hasDriverReports = reportAvg !== null;
+  const softPublicOnly = publicSignals.length > 0 && publicSignals.every(isSoftUpperBoundSource);
+  const hasHardPublic = publicSignals.some((item) => !isSoftUpperBoundSource(item) && Number(item.normalizedWaitMin || 0) >= 20);
+  const clearGoogle = googleLooksClear(googleSignal);
+  const clearCamera = cameraLooksClear(cameraSignal);
+  const strongCameraQueue = cameraShowsQueue(cameraSignal);
+
+  if (hasDriverReports || googleLooksHeavy(googleSignal)) return { wait: finalWait, adjusted: false, reason: '' };
+
+  if (clearGoogle && softPublicOnly && (!cameraSignal || clearCamera)) {
+    const capped = Math.min(finalWait, cameraSignal ? 12 : 14);
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google promet je normalan, a javni izvor daje samo gornju granicu; procjena je spuštena na nisko/umjereno čekanje.' };
+  }
+
+  if (clearGoogle && clearCamera && !hasHardPublic) {
+    const capped = Math.min(finalWait, 15);
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google i kamera zajedno pokazuju protočnost; veća procjena je ograničena.' };
+  }
+
+  if (clearGoogle && !strongCameraQueue && softPublicOnly) {
+    const capped = Math.min(finalWait, 16);
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google je plav/normalan pa se BIHAMK/HAK/AMS tekst “do 30 min” tretira kao gornja granica, ne kao stvarnih 25–30 min.' };
+  }
+
+  if (clearGoogle && cameraSignal && !strongCameraQueue && !hasHardPublic) {
+    const capped = Math.min(finalWait, 20);
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google ne vidi cestovni zastoj; bez jake kamere ili tvrdog javnog izvora čekanje se ne diže visoko.' };
+  }
+
+  return { wait: finalWait, adjusted: false, reason: '' };
+}
+
 async function buildGoogleTrafficSnapshots() {
   if (!GOOGLE_TRAFFIC_ESTIMATE_ENABLED || !serverKey) return [];
   const jobs = [];
@@ -1560,28 +1723,33 @@ async function buildGoogleTrafficSnapshots() {
     const payload = await computeCrossingRoutes(crossing.id, direction);
     const route = payload.routes?.[0];
     if (!route) return null;
-    const baseWait = borderDelay(crossing, direction, 'car');
     const googleDelay = Math.max(0, Number(route.delayMinutes || 0));
-    const ratioPenalty = Math.max(0, Math.round((Number(route.ratio || 1) - 1) * 18));
-    const estimatedWait = clampWait(Math.round(baseWait * 0.55 + googleDelay * 1.6 + ratioPenalty));
+    const ratio = Math.max(0.1, Number(route.ratio || 1) || 1);
+    const estimate = estimateWaitFromGoogleRoute(route);
+    const estimatedWait = clampWait(estimate.wait);
     return {
       crossingId: crossing.id,
       direction,
       sourceName: 'Google Routes',
       sourceType: 'google-traffic-estimate',
       sourceUrl: '',
-      rawStatus: `Google traffic delay ${googleDelay} min u kontrolnoj zoni; route ratio ${route.ratio || 1}`,
+      rawStatus: `Google traffic ${estimate.level}; delay ${googleDelay} min u kontrolnoj zoni; route ratio ${ratio}`,
       rawText: `${payload.source || 'Google Routes API'} · ${payload.note || ''}`.slice(0, 1200),
       rawWaitMin: estimatedWait,
       normalizedWaitMin: estimatedWait,
-      confidence: Math.max(46, Math.min(72, 54 + Math.min(12, googleDelay) + (route.routeGuard?.valid ? 4 : 0))),
-      weight: 0.72,
+      confidence: Math.max(46, Math.min(78, estimate.confidence + (route.routeGuard?.ok ? 4 : 0))),
+      weight: estimate.weight,
       metadata: {
         adapter: 'google-routes-zone-estimate',
         durationMinutes: route.durationMinutes,
         staticMinutes: route.staticMinutes,
         delayMinutes: route.delayMinutes,
         distanceKm: route.distanceKm,
+        ratio,
+        level: estimate.level,
+        rangeMin: estimate.rangeMin,
+        rangeMax: estimate.rangeMax,
+        reason: estimate.reason,
         routeGuard: route.routeGuard || null,
       },
       fetchedAt: new Date().toISOString(),
@@ -1689,23 +1857,27 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
   const reportAvg = reports.length ? Math.round(reports.reduce((sum, item) => sum + Number(item.wait || 0), 0) / reports.length) : null;
 
   const candidates = [];
-  publicSignals.forEach((item) => candidates.push({
-    wait: waitForVehicle(item.normalizedWaitMin, multiplier, vehicle),
-    weight: Math.max(0.1, Number(item.weight || 1)) * Math.max(35, Number(item.confidence || 70)) * 1.15,
-    label: sourceDisplayName(item.sourceName),
-    sourceType: item.sourceType,
-    updatedAt: item.fetchedAt,
-  }));
+  publicSignals.forEach((item) => {
+    const softUpperBound = isSoftUpperBoundSource(item);
+    candidates.push({
+      wait: waitForVehicle(item.normalizedWaitMin, multiplier, vehicle),
+      weight: Math.max(0.1, Number(item.weight || 1)) * Math.max(35, Number(item.confidence || 70)) * (softUpperBound ? 0.82 : 1.15),
+      label: sourceDisplayName(item.sourceName),
+      sourceType: item.sourceType,
+      softUpperBound,
+      updatedAt: item.fetchedAt,
+    });
+  });
   if (cameraSignal) candidates.push({
-    wait: waitForVehicle(cameraSignal.normalizedWaitMin || staticWait, multiplier, vehicle),
-    weight: Math.max(0.1, Number(cameraSignal.weight || 0.72)) * Math.max(35, Number(cameraSignal.confidence || 58)) * (publicSignals.length ? 0.58 : 1),
+    wait: waitForVehicle(cameraSignal.normalizedWaitMin ?? staticWait, multiplier, vehicle),
+    weight: Math.max(0.1, Number(cameraSignal.weight || 0.72)) * Math.max(35, Number(cameraSignal.confidence || 58)) * (publicSignals.length ? 0.9 : 1.08) * (googleLooksClear(googleSignal) && cameraLooksClear(cameraSignal) ? 1.18 : 1),
     label: 'Kamera',
     sourceType: cameraSignal.sourceType,
     updatedAt: cameraSignal.fetchedAt,
   });
   if (googleSignal) candidates.push({
-    wait: waitForVehicle(googleSignal.normalizedWaitMin || staticWait, multiplier, vehicle),
-    weight: Math.max(0.1, Number(googleSignal.weight || 0.72)) * Math.max(35, Number(googleSignal.confidence || 56)) * (publicSignals.length ? 0.52 : 0.95),
+    wait: waitForVehicle(googleSignal.normalizedWaitMin ?? staticWait, multiplier, vehicle),
+    weight: Math.max(0.1, Number(googleSignal.weight || 0.84)) * Math.max(35, Number(googleSignal.confidence || 62)) * (publicSignals.length ? 0.86 : 1.02),
     label: 'Google',
     sourceType: googleSignal.sourceType,
     updatedAt: googleSignal.fetchedAt,
@@ -1720,19 +1892,28 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
 
   const blendedWait = weightedWait(candidates);
   if (blendedWait !== null) {
+    const sanity = applyTrafficSanityCaps(blendedWait, { googleSignal, cameraSignal, publicSignals, reportAvg });
+    const finalWait = sanity.wait;
+    const range = estimateRangeFromSignals(finalWait, { googleSignal, cameraSignal, publicSignals, reports });
     const signalNames = uniqueSignalNames(candidates);
     const hasMultipleOfficialSources = uniqueSignalNames(candidates.filter((item) => item.sourceType === 'public-text-status')).length > 1;
     const combined = signalNames.length > 1 || hasMultipleOfficialSources;
     const bestCandidate = [...candidates].sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0))[0];
+    const googleClearNote = googleLooksClear(googleSignal) ? ' Google plavo/normalno ne znači 0 min, ali sprječava visoku procjenu bez kamere, dojava ili tvrdog javnog signala.' : '';
     return {
-      wait: blendedWait,
+      wait: finalWait,
+      rangeMin: range.rangeMin,
+      rangeMax: range.rangeMax,
+      confidenceHint: range.confidenceHint,
       label: combined ? 'Kombinirana procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
       className: combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
       sourceType: combined ? 'combined-estimate' : bestCandidate.sourceType,
       confidence: Math.min(96, Math.round(Math.max(...candidates.map((item) => Number(item.weight || 0))) / 1.2 + (combined ? 5 : 0))),
-      note: combined
-        ? `Procjena spaja ${signalNames.join(' + ')}; izvori se ponderiraju po svježini, pouzdanosti i tipu signala.`
-        : `${bestCandidate.label} je trenutno najjači izvor za ovaj smjer.`,
+      note: sanity.adjusted
+        ? `${sanity.reason}${googleClearNote}`
+        : combined
+          ? `Procjena spaja ${signalNames.join(' + ')}; Google je protočni sanity-check, kamera je queue/flow signal, a javni “do X min” tretira se kao gornja granica.${googleClearNote}`
+          : `${bestCandidate.label} je trenutno najjači izvor za ovaj smjer.${googleClearNote}`,
       signals: latestSources,
       updatedAt: candidates.map((item) => item.updatedAt).filter(Boolean).sort().at(-1) || new Date().toISOString(),
     };
@@ -1753,6 +1934,8 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
 
   return {
     wait: staticWait,
+    rangeMin: Math.max(0, staticWait - 12),
+    rangeMax: Math.min(360, staticWait + 12),
     label: serverKey ? 'Google procjena' : 'Planerska procjena',
     className: serverKey ? 'google' : 'estimate',
     sourceType: serverKey ? 'google-traffic-estimate-pending' : 'planner-estimate',
@@ -2733,7 +2916,57 @@ function decodeJpegImage(buffer) {
   }
 }
 
-function analyzeSnapshotImage(image, camera, direction) {
+
+function clampNumber(value, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+function estimateCameraFlowFromSnapshot({ visibleTotal = 0, occupancyPct = 0, componentDensity = 0, direction = 'toBih', previousSnapshot = null } = {}) {
+  const queueVehicles = Math.max(0, Math.round(Number(visibleTotal || 0)));
+  const occupancyLoad = clampNumber(Number(occupancyPct || 0) / 45, 0, 1.6);
+  const densityLoad = clampNumber(Number(componentDensity || 0) / 2.2, 0, 1.4);
+  const queueLoad = clampNumber(Math.max(0, queueVehicles - 10) / 18, 0, 1.5);
+  let flowVehicles15 = 19 - occupancyLoad * 5.5 - densityLoad * 2.5 - queueLoad * 4;
+  if (queueVehicles <= 2) flowVehicles15 += 3;
+  if (direction === 'toHr') flowVehicles15 -= 1;
+
+  let queueTrend = 'unknown';
+  let trendDelta = 0;
+  const previousQueue = previousSnapshot ? Number(previousSnapshot.queueVehicles ?? previousSnapshot.visibleTotal ?? NaN) : NaN;
+  if (Number.isFinite(previousQueue)) {
+    trendDelta = queueVehicles - previousQueue;
+    if (trendDelta >= 4) {
+      queueTrend = 'rising';
+      flowVehicles15 -= Math.min(5, trendDelta * 0.7);
+    } else if (trendDelta <= -4) {
+      queueTrend = 'falling';
+      flowVehicles15 += Math.min(4, Math.abs(trendDelta) * 0.45);
+    } else {
+      queueTrend = 'steady';
+    }
+  }
+
+  flowVehicles15 = Math.max(4, Math.min(26, Math.round(flowVehicles15)));
+  const servicePerMinute = Math.max(0.25, flowVehicles15 / 15);
+  let wait = queueVehicles <= 0 ? 0 : Math.round(queueVehicles / servicePerMinute + (queueVehicles <= 2 ? 1 : 2));
+  if (queueVehicles > 14 && flowVehicles15 <= 10) wait += 4;
+  const confidence = Math.max(44, Math.min(86, Math.round(58 + Math.min(16, queueVehicles * 1.1) - Math.max(0, occupancyPct - 34) * 0.35 + (queueTrend === 'unknown' ? -4 : 4))));
+
+  return {
+    queueVehicles,
+    flowVehicles15,
+    throughputPerHour: Math.max(8, flowVehicles15 * 4),
+    wait: clampWait(wait),
+    queueTrend,
+    trendDelta,
+    confidence,
+    method: previousSnapshot ? 'snapshot-flow-v2' : 'snapshot-flow-v2-single-frame',
+  };
+}
+
+function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null) {
   const roi = camera.calibration?.roi || { x: 8, y: 12, w: 84, h: 76 };
   const rect = percentToRect(roi, image.width, image.height);
   const gridX = 24;
@@ -2863,15 +3096,24 @@ function analyzeSnapshotImage(image, camera, direction) {
     };
   });
 
+  const flowEstimate = estimateCameraFlowFromSnapshot({ visibleTotal, occupancyPct, componentDensity, direction, previousSnapshot });
+  const cameraWait = flowEstimate.wait;
+  const blendedConfidence = Math.max(CAMERA_SNAPSHOT_MIN_CONFIDENCE, Math.min(90, Math.round(confidence * 0.62 + flowEstimate.confidence * 0.38)));
+
   return {
     counts: blendedCounts,
     rawCounts: counts,
     visibleTotal,
-    queueVehicles: visibleTotal,
-    passed15: Math.max(1, Math.round(visibleTotal * 0.72)),
-    throughputPerHour: Math.max(8, Math.round(visibleTotal * 2.8 + Math.max(0, 24 - visibleTotal))),
-    wait: clampWait(Math.max(5, Math.round(visibleTotal * 4.8 + occupancyPct * 0.55 + (direction === 'toHr' ? 4 : 0)))) || 8,
-    confidence,
+    queueVehicles: flowEstimate.queueVehicles,
+    passed15: flowEstimate.flowVehicles15,
+    flowVehicles15: flowEstimate.flowVehicles15,
+    throughputPerHour: flowEstimate.throughputPerHour,
+    wait: cameraWait,
+    waitRangeMin: Math.max(0, cameraWait - (flowEstimate.queueTrend === 'unknown' ? 7 : 5)),
+    waitRangeMax: Math.min(360, cameraWait + (flowEstimate.queueTrend === 'rising' ? 12 : 8)),
+    queueTrend: flowEstimate.queueTrend,
+    trendDelta: flowEstimate.trendDelta,
+    confidence: blendedConfidence,
     detections,
     laneGroups: laneProfile,
     roi: camera.calibration?.roi || roi,
@@ -2880,11 +3122,11 @@ function analyzeSnapshotImage(image, camera, direction) {
     occupancyPct,
     componentCount: usefulComponents.length,
     componentDensity: Math.round(componentDensity * 100) / 100,
-    method: 'snapshot-counter-v1',
+    method: flowEstimate.method,
   };
 }
 
-async function runSnapshotCounter(camera, crossingId, direction) {
+async function runSnapshotCounter(camera, crossingId, direction, previousSnapshot = null) {
   if (!CAMERA_SNAPSHOT_COUNTING_ENABLED) return null;
   if (!/\.jpe?g(?:$|\?)/i.test(camera.url || '')) return null;
   const { buffer, contentType } = await fetchBinaryWithTimeout(camera.url);
@@ -2897,7 +3139,7 @@ async function runSnapshotCounter(camera, crossingId, direction) {
   if (!isJpegPayload || (!contentType.includes('image') && !contentType.includes('jpeg'))) return null;
 
   const image = decodeJpegImage(buffer);
-  const analysis = analyzeSnapshotImage(image, camera, direction);
+  const analysis = analyzeSnapshotImage(image, camera, direction, previousSnapshot);
   return {
     cameraId: camera.id,
     cameraLabel: camera.label,
@@ -2905,6 +3147,14 @@ async function runSnapshotCounter(camera, crossingId, direction) {
     sourceUrl: camera.url,
     imageStatus: 'ok',
     ...analysis,
+    metadata: {
+      flowVehicles15: analysis.flowVehicles15,
+      passed15: analysis.passed15,
+      queueTrend: analysis.queueTrend,
+      trendDelta: analysis.trendDelta,
+      waitRangeMin: analysis.waitRangeMin,
+      waitRangeMax: analysis.waitRangeMax,
+    },
     fetchedAt: new Date().toISOString(),
   };
 }
@@ -2929,10 +3179,13 @@ function normalizeCameraSnapshot(snapshot) {
     visibleTotal: Math.max(0, Number(snapshot.visibleTotal ?? totalCounts(counts)) || 0),
     queueVehicles: Math.max(0, Number(snapshot.queueVehicles ?? snapshot.visibleTotal ?? totalCounts(counts)) || 0),
     throughputPerHour: Math.max(0, Number(snapshot.throughputPerHour || 0) || 0),
+    passed15: Math.max(0, Number(snapshot.passed15 ?? snapshot.flowVehicles15 ?? snapshot.metadata?.passed15 ?? snapshot.metadata?.flowVehicles15 ?? 0) || 0),
+    flowVehicles15: Math.max(0, Number(snapshot.flowVehicles15 ?? snapshot.passed15 ?? snapshot.metadata?.flowVehicles15 ?? snapshot.metadata?.passed15 ?? 0) || 0),
+    queueTrend: snapshot.queueTrend || snapshot.metadata?.queueTrend || 'unknown',
     wait: clampWait(snapshot.wait),
     confidence: Math.max(0, Math.min(100, Math.round(Number(snapshot.confidence || 50)))) ,
     method: snapshot.method || 'snapshot-counter',
-    metadata: snapshot.metadata || {},
+    metadata: { ...(snapshot.metadata || {}), passed15: snapshot.passed15 ?? snapshot.flowVehicles15 ?? snapshot.metadata?.passed15, flowVehicles15: snapshot.flowVehicles15 ?? snapshot.passed15 ?? snapshot.metadata?.flowVehicles15, queueTrend: snapshot.queueTrend || snapshot.metadata?.queueTrend },
     fetchedAt,
     createdAt: snapshot.createdAt || fetchedAt,
   };
@@ -2998,6 +3251,9 @@ async function readLatestCameraSnapshots(crossingId, direction, hours = 3) {
       visibleTotal: Number(row.visible_total || 0),
       queueVehicles: Number(row.queue_vehicles || 0),
       throughputPerHour: Number(row.throughput_per_hour || 0),
+      passed15: Number(row.metadata?.passed15 ?? row.metadata?.flowVehicles15 ?? 0) || 0,
+      flowVehicles15: Number(row.metadata?.flowVehicles15 ?? row.metadata?.passed15 ?? 0) || 0,
+      queueTrend: row.metadata?.queueTrend || 'unknown',
       wait: row.wait_minutes === null || row.wait_minutes === undefined ? null : Number(row.wait_minutes),
       confidence: Number(row.confidence || 0),
       method: row.method,
@@ -3029,6 +3285,7 @@ function aggregateCameraSnapshots(snapshots = []) {
   }, { cars: 0, vans: 0, trucks: 0, buses: 0 });
   const visibleTotal = snapshots.reduce((sum, item) => sum + Number(item.visibleTotal || totalCounts(item.counts || {})), 0);
   const throughputPerHour = Math.max(0, Math.round(snapshots.reduce((sum, item) => sum + Number(item.throughputPerHour || 0), 0) / Math.max(1, snapshots.length)));
+  const flowVehicles15 = Math.max(0, Math.round(snapshots.reduce((sum, item) => sum + Number(item.flowVehicles15 ?? item.passed15 ?? item.metadata?.flowVehicles15 ?? item.metadata?.passed15 ?? 0), 0) / Math.max(1, snapshots.length)));
   const waitSamples = snapshots.filter((item) => item.wait !== null && item.wait !== undefined);
   const wait = waitSamples.length ? Math.round(waitSamples.reduce((sum, item) => sum + Number(item.wait || 0) * Math.max(1, Number(item.confidence || 50)), 0) / Math.max(1, waitSamples.reduce((sum, item) => sum + Math.max(1, Number(item.confidence || 50)), 0))) : null;
   return {
@@ -3036,7 +3293,10 @@ function aggregateCameraSnapshots(snapshots = []) {
     visibleTotal,
     queueVehicles: Math.max(0, Math.round(snapshots.reduce((sum, item) => sum + Number(item.queueVehicles || item.visibleTotal || 0), 0) / Math.max(1, snapshots.length))),
     throughputPerHour,
+    passed15: flowVehicles15,
+    flowVehicles15,
     wait,
+    queueTrend: snapshots.some((item) => item.queueTrend === 'rising' || item.metadata?.queueTrend === 'rising') ? 'rising' : snapshots.some((item) => item.queueTrend === 'falling' || item.metadata?.queueTrend === 'falling') ? 'falling' : 'steady',
     confidence: Math.round(snapshots.reduce((sum, item) => sum + Number(item.confidence || 0), 0) / Math.max(1, snapshots.length)),
     latestAt: snapshots.map((item) => item.fetchedAt).sort().at(-1),
     snapshots,
@@ -3073,7 +3333,7 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
     const cached = cachedByCamera.get(camera.id);
     const cachedFresh = cached && nowMs - new Date(cached.fetchedAt).getTime() < CAMERA_SNAPSHOT_REFRESH_INTERVAL_MS;
     if (!options.forceSnapshot && cachedFresh) return cached;
-    return runSnapshotCounter(camera, crossing.id, direction);
+    return runSnapshotCounter(camera, crossing.id, direction, cached || null);
   }));
   const snapshotAnalyses = snapshotResults.map((result, index) => {
     if (result.status === 'fulfilled') return result.value;
@@ -3127,7 +3387,7 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
   const snapshotCounts = aggregatedSnapshots?.counts ? normalizeCounts(aggregatedSnapshots.counts) : null;
   const liveWait = aggregatedSnapshots?.wait !== null && aggregatedSnapshots?.wait !== undefined ? clampWait(aggregatedSnapshots.wait) : wait;
   const liveThroughputPerHour = aggregatedSnapshots?.throughputPerHour ? Math.max(8, Number(aggregatedSnapshots.throughputPerHour)) : throughputPerHour;
-  const livePassed15 = Math.max(1, Math.round(liveThroughputPerHour / 4));
+  const livePassed15 = Math.max(0, Math.round(aggregatedSnapshots?.flowVehicles15 ?? aggregatedSnapshots?.passed15 ?? liveThroughputPerHour / 4));
   const liveRhythmSeconds = Math.round(3600 / Math.max(liveThroughputPerHour, 1));
   const liveQueueVehicles = aggregatedSnapshots?.queueVehicles ?? Math.max(0, Math.round((liveWait / 60) * liveThroughputPerHour * 0.72));
   const liveVehicleMix15 = hasIngest ? eventMix : (snapshotCounts || vehicleMix15);
@@ -3162,8 +3422,12 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
       confidence: Math.min(96, Math.max(58, Math.round(aggregatedSnapshots?.confidence || (86 + (hasIngest ? 5 : 0) + (cvEndpoint ? 4 : 0) + (hasSnapshotCounter ? 2 : 0) - (liveWait > 70 ? 5 : 0))))),
       throughputPerHour: liveThroughputPerHour,
       passed15: livePassed15,
+      flowVehicles15: livePassed15,
       rhythmSeconds: liveRhythmSeconds,
       queueVehicles: liveQueueVehicles,
+      queueTrend: aggregatedSnapshots?.queueTrend || (liveWait >= 65 ? 'rising' : liveWait <= 12 ? 'falling' : 'steady'),
+      waitRangeMin: Math.max(0, liveWait - (hasSnapshotCounter ? 6 : 10)),
+      waitRangeMax: Math.min(360, liveWait + (hasSnapshotCounter ? 9 : 14)),
       vehicleMix15: liveVehicleMix15,
       laneProfile,
       laneSignals,
@@ -3176,7 +3440,12 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
         visibleTotal: item.visibleTotal,
         queueVehicles: item.queueVehicles,
         throughputPerHour: item.throughputPerHour,
+        passed15: item.passed15 ?? item.metadata?.passed15,
+        flowVehicles15: item.flowVehicles15 ?? item.metadata?.flowVehicles15,
+        queueTrend: item.queueTrend || item.metadata?.queueTrend,
         wait: item.wait,
+        waitRangeMin: item.metadata?.waitRangeMin,
+        waitRangeMax: item.metadata?.waitRangeMax,
         confidence: item.confidence,
         method: item.method,
         fetchedAt: item.fetchedAt,
@@ -4104,7 +4373,7 @@ app.use((req, res, next) => {
 
 initializeDatastore()
   .then(() => {
-    app.listen(port, '0.0.0.0', () => {
+    app.listen(port, () => {
       console.log(`PrijelazRadar backend running on http://localhost:${port}`);
       console.log(`Datastore: ${datastoreMode}`);
       console.log(serverKey ? 'Routes API server key: configured' : 'Routes API server key: missing');

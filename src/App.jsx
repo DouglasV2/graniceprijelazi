@@ -641,11 +641,11 @@ const TABS_USER = ['Pregled', 'Moj put', 'Mapa', 'Povijest', 'Dojave'];
 const TABS_ADMIN = ['Pregled', 'Moj put', 'Mapa', 'Povijest', 'Dojave', 'Admin'];
 
 const NAV_META = {
-  Pregled: { label: 'Pregled', hint: 'čekanja uživo' },
+  Pregled: { label: 'Sada', hint: 'čekanja uživo' },
   'Moj put': { label: 'Moj put', hint: 'najbolji izbor' },
   Mapa: { label: 'Karta', hint: 'rute i kamere' },
-  Dojave: { label: 'Dojave', hint: 'stanje s puta' },
-  Povijest: { label: 'Prošlost', hint: 'kada krenuti' },
+  Dojave: { label: 'Dojavi', hint: 'stanje s puta' },
+  Povijest: { label: 'Trendovi', hint: 'kada krenuti' },
   Admin: { label: 'Uredi stanje', hint: 'za tim' },
 };
 
@@ -1384,6 +1384,9 @@ function getWaitSourceMeta(crossing, directionKey, overrides = {}) {
       className: source.className || 'official',
       note: source.note || 'Vrijednost je izračunata iz javnih izvora, kamera i dojava.',
       confidence: source.confidence,
+      confidenceHint: source.confidenceHint,
+      rangeMin: source.rangeMin,
+      rangeMax: source.rangeMax,
       updatedAt: source.updatedAt,
       displayReady: true,
     };
@@ -2304,8 +2307,9 @@ function makeRouteLabelElement(route) {
   const el = document.createElement('button');
   el.type = 'button';
   el.className = `gm-route-label ${route.primary ? 'primary' : ''}`;
+  const isZone = route.displayMode === 'control_zone';
   el.innerHTML = `
-    <span>${route.primary ? 'Ruta' : 'Alt.'}</span>
+    <span>${isZone ? 'Zona vožnja' : (route.primary ? 'Ruta' : 'Alt.')}</span>
     <strong>${formatMinutes(route.durationMinutes)}</strong>
     <small>${formatDistanceKm(route.distanceKm)}</small>
   `;
@@ -2731,6 +2735,11 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   const isControlZoneDisplay = routePayload.displayMode === 'control_zone' || activeRoute?.displayMode === 'control_zone' || primaryRoute?.displayMode === 'control_zone';
   const zone = routePayload.zone || getZone(selectedCrossing, selectedDirection);
   const routeMeta = routeAvailabilityMeta(routePayload);
+  const borderWait = getDisplayedWait(selectedCrossing, selectedDirection, overrides);
+  const borderSourceMeta = getWaitSourceMeta(selectedCrossing, selectedDirection, overrides);
+  const borderRange = hasKnownWait(borderSourceMeta.rangeMin) && hasKnownWait(borderSourceMeta.rangeMax)
+    ? `${formatMinutes(borderSourceMeta.rangeMin)}–${formatMinutes(borderSourceMeta.rangeMax)}`
+    : '';
   const suggestedCrossing = routePayload.suggestedCrossing ? CROSSINGS.find((item) => item.id === routePayload.suggestedCrossing.crossingId) : null;
 
   return (
@@ -2762,10 +2771,16 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
           ) : primaryRoute ? (
             <>
               <div className="route-summary">
-                <div><span>{isControlZoneDisplay ? 'Zona' : 'Ruta'}</span><b>{formatMinutes(primaryRoute.durationMinutes)}</b></div>
-                <div><span>{isControlZoneDisplay ? 'Dionica' : 'Udaljenost'}</span><b>{formatDistanceKm(primaryRoute.distanceKm)}</b></div>
-                <div><span>Zastoj</span><b>{formatMinutes(primaryRoute.delayMinutes || 0)}</b></div>
+                <div><span>Čekanje na granici</span><b>{hasKnownWait(borderWait) ? formatMinutes(borderWait) : 'čeka izvor'}</b></div>
+                <div><span>{isControlZoneDisplay ? 'Vožnja kroz zonu' : 'Trajanje rute'}</span><b>{formatMinutes(primaryRoute.durationMinutes)}</b></div>
+                <div><span>{isControlZoneDisplay ? 'Dionica zone' : 'Udaljenost'}</span><b>{formatDistanceKm(primaryRoute.distanceKm)}</b></div>
+                <div><span>Cestovni zastoj</span><b>{formatMinutes(primaryRoute.delayMinutes || 0)}</b></div>
               </div>
+              {(borderSourceMeta.note || borderRange) && (
+                <p className="route-note">
+                  {borderRange ? `Raspon procjene: ${borderRange}. ` : ''}{borderSourceMeta.note || ''}
+                </p>
+              )}
               {(routePayload.note || primaryRoute.displayNote) && <p className="route-note">{routePayload.note || primaryRoute.displayNote}</p>}
             </>
           ) : (
