@@ -25,8 +25,30 @@ const configuredCorsOrigins = String(process.env.CORS_ORIGINS || '')
 app.disable('x-powered-by');
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
+  // CSP: allow Google Maps JS/Tiles, Google Fonts, self scripts/styles/images.
+  // 'unsafe-inline' for styles is required by Google Maps SDK.
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      "script-src 'self' https://maps.googleapis.com https://maps.gstatic.com 'unsafe-inline'",
+      "style-src 'self' https://fonts.googleapis.com https://maps.googleapis.com 'unsafe-inline'",
+      "font-src 'self' https://fonts.gstatic.com",
+      "img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://m.hak.hr https://bihamk.ba https://ams-rs.com",
+      "connect-src 'self' https://maps.googleapis.com https://routes.googleapis.com",
+      "frame-src 'self' https://m.hak.hr https://bihamk.ba",
+      "frame-ancestors 'self'",
+      "object-src 'none'",
+      "base-uri 'self'",
+    ].join('; '),
+  );
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   if (req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store');
   next();
 });
@@ -468,6 +490,13 @@ function adminRequired(req, res, next) {
 }
 
 const rateBuckets = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of rateBuckets) {
+    if (now > bucket.resetAt) rateBuckets.delete(key);
+  }
+}, 15 * 60 * 1000);
+
 function rateLimit({ windowMs = 60000, max = 60, keyPrefix = 'api' } = {}) {
   return (req, res, next) => {
     const key = `${keyPrefix}:${req.ip}:${req.path}`;
@@ -1124,7 +1153,7 @@ async function fetchTextWithTimeout(url) {
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'PrijelazRadar/1.0 staging-pilot (+https://borderflow.local)',
+        'User-Agent': `PrijelazRadar/1.0 (+${process.env.SITE_URL || 'https://prijelazradar.hr'})`,
         Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
       },
     });
@@ -2119,8 +2148,8 @@ app.get('/api/sources/latest', async (req, res) => {
 });
 
 // Debug endpoint: full pipeline breakdown for a crossing+direction.
-// Shows exactly why finalWait is what it is.
-app.get('/api/debug/wait', async (req, res) => {
+// Admin-only — never expose to public users.
+app.get('/api/debug/wait', authRequired, adminRequired, async (req, res) => {
   const crossingId = String(req.query.crossingId || '').trim();
   const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
   if (!crossingId || !BORDER_CROSSINGS[crossingId]) {
@@ -2284,8 +2313,8 @@ app.get('/api/debug/wait', async (req, res) => {
 });
 
 // Validates the wait calculation pipeline against 5 known edge-case scenarios.
-// Used for regression testing after changes to the calculation logic.
-app.get('/api/debug/wait-scenarios', async (req, res) => {
+// Admin-only — never expose to public users.
+app.get('/api/debug/wait-scenarios', authRequired, adminRequired, async (req, res) => {
   function mockGoogleSignal({ delay = 1, ratio = 1.03, level = 'normal' } = {}) {
     const estimate = estimateWaitFromGoogleRoute({ delayMinutes: delay, ratio, level });
     return { normalizedWaitMin: estimate.wait, weight: estimate.weight, confidence: estimate.confidence, metadata: { delayMinutes: delay, ratio, level, reason: estimate.reason } };
@@ -2748,6 +2777,16 @@ app.get('/api/admin/daily-report', authRequired, adminRequired, async (req, res)
 });
 
 app.get('/api/health', async (req, res) => {
+  res.json({
+    ok: true,
+    service: 'PrijelazRadar API',
+    updatedAt: new Date().toISOString(),
+    uptimeSeconds: Math.round(process.uptime()),
+  });
+});
+
+// Admin-only detailed health: integrations, datastore, env checks.
+app.get('/api/admin/health', authRequired, adminRequired, async (req, res) => {
   const store = await readAppStore();
   let historySnapshotsCount = store.historySnapshots?.length || 0;
   let sourceSnapshotsCount = store.sourceSnapshots?.length || 0;
@@ -2786,7 +2825,6 @@ app.get('/api/health', async (req, res) => {
     },
     datastore: {
       mode: datastoreMode,
-      path: datastoreMode === 'postgres' ? 'DATABASE_URL' : (process.env.NODE_ENV === 'production' ? 'data/runtime-store.json' : storePath),
       users: store.users.length,
       overrides: Object.keys(store.overrides).length,
       reports: store.reports.length,

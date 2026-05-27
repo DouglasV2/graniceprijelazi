@@ -1346,6 +1346,13 @@ function formatRhythm(seconds) {
   return `${Math.round(seconds / 60)} min / vozilo`;
 }
 
+function confidenceLabel(confidence) {
+  const c = Number(confidence || 0);
+  if (c >= 75) return 'Visoka pouzdanost';
+  if (c >= 55) return 'Srednja pouzdanost';
+  return 'Niska pouzdanost';
+}
+
 function trafficClassFromWait(wait) {
   if (!hasKnownWait(wait)) return 'unknown';
   const n = Number(wait);
@@ -2427,9 +2434,9 @@ function routeAvailabilityMeta(payload = {}) {
   if (payload.closed || payload.routeStatus === 'closed_or_blocked') {
     return { label: 'Zatvoreno', className: 'closed' };
   }
-  if (payload.routeHidden || payload.routeStatus === 'pending_verification') return { label: 'Provjera rute', className: 'fallback' };
+  if (payload.routeHidden || payload.routeStatus === 'pending_verification') return { label: 'Provjera rute', className: 'pending' };
   if (payload.live) return { label: 'Ažurirano', className: 'live' };
-  if (payload.routes?.length) return { label: 'Validirana ruta', className: 'fallback' };
+  if (payload.routes?.length) return { label: 'Validirana ruta', className: 'official' };
   return { label: 'Nema rute', className: 'unavailable' };
 }
 
@@ -3254,8 +3261,8 @@ function CameraPanel({ crossing, selectedDirection }) {
             <span>🚐 {analytics.vehicleMix15.vans || 0}</span>
             <span>🚛 {analytics.vehicleMix15.trucks}</span>
             <span>🚌 {analytics.vehicleMix15.buses}</span>
-            <span>{analytics.confidence}% pouzdanost</span>
-            <span>izvor: {analytics.source === 'camera-ingest' || analytics.source === 'snapshot-counter' ? 'snapshot' : analytics.source === 'cv-detector' ? 'snapshot provjera' : 'procjena kamere'}</span>
+            <span>{confidenceLabel(analytics.confidence)}</span>
+            <span>Prema kameri</span>
           </div>
           {analytics.cameraSnapshots?.length ? <p className="camera-source-note">Procjena iz kamera pomaže orijentaciji, ali službene obavijesti i dalje imaju prednost.</p> : null}
         </article>
@@ -3294,8 +3301,7 @@ function CameraPanel({ crossing, selectedDirection }) {
             <strong>{signal.passed15} vozila / 15 min</strong>
             <small>u kadru: {signal.frame.cars} auta · {signal.frame.vans || 0} kombija · {signal.frame.trucks} kamiona · {signal.frame.buses} bus</small>
             {signal.laneGroups && <small className="lane-card-split">EU {formatMinutes(signal.laneGroups.eu?.wait)} · Non‑EU {formatMinutes(signal.laneGroups.nonEu?.wait)}</small>}
-            <small>{signal.model === 'cv-endpoint' ? 'snapshot provjera' : signal.model === 'snapshot-counter' ? 'snapshot' : 'procjena'}</small>
-            <i>{signal.confidence}%</i>
+            <i>{confidenceLabel(signal.confidence)}</i>
           </button>
         ))}
       </div>
@@ -3320,7 +3326,7 @@ function CameraPanel({ crossing, selectedDirection }) {
           </div>
           <div>
             <span>Pouzdanost</span>
-            <strong>{selectedSignalData.confidence}%</strong>
+            <strong>{confidenceLabel(selectedSignalData.confidence)}</strong>
           </div>
         </div>
       )}
@@ -3342,8 +3348,8 @@ function CameraPanel({ crossing, selectedDirection }) {
           </article>
         ))}
         <article className="camera-pipeline production-camera-note">
-          <h3>Snapshot provjera</h3>
-          <p>Kamera služi kao vizualni snapshot i pomoćna procjena protoka. Ne prikazujemo AI detekcije, bounding boxove ni confidence postotke dok stvarni CV pipeline nije uključen.</p>
+          <h3>Napomena o kamerama</h3>
+          <p>Kamere služe kao vizualna provjera i pomoć pri procjeni protoka. Procjena iz kamera je okvirna — za sigurnu odluku provjeri i ostale izvore ili dojave vozača.</p>
         </article>
       </div>
     </div>
