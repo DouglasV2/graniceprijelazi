@@ -644,8 +644,8 @@ const NAV_META = {
   Pregled: { label: 'Pregled', hint: 'čekanja uživo' },
   'Moj put': { label: 'Moj put', hint: 'najbolji izbor' },
   Mapa: { label: 'Karta', hint: 'rute i kamere' },
-  Dojave: { label: 'Dojavi', hint: 'stanje s puta' },
-  Povijest: { label: 'Trendovi', hint: 'kada krenuti' },
+  Dojave: { label: 'Dojave', hint: 'stanje s puta' },
+  Povijest: { label: 'Prošlost', hint: 'kada krenuti' },
   Admin: { label: 'Uredi stanje', hint: 'za tim' },
 };
 
