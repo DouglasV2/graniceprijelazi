@@ -906,9 +906,9 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       },
     },
     cameras: [
-      { id: 'ora-hak-zupanja', label: 'Županja', url: 'https://m.hak.hr/kamera.asp?g=2&k=44' },
-      { id: 'ora-hak-bih', label: 'BIH Orašje', url: 'https://m.hak.hr/kamera.asp?g=2&k=183' },
-      { id: 'ora-bihamk', label: 'Orašje / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere' },
+      { id: 'ora-hak-zupanja', label: 'Županja · HR strana', source: 'HAK', url: 'https://www.hak.hr/info/kamere/79.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=44' },
+      { id: 'ora-hak-bih', label: 'Orašje · BiH strana', source: 'HAK/BIHAMK', url: 'https://www.hak.hr/info/kamere/401.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=183' },
+      { id: 'ora-amsbih', label: 'Orašje · AMSBiH', source: 'AMSBiH', url: 'https://www.amsbih.ba/amsbih.ba/kamere/kamere/Lokacija20/0Orasje.jpg', externalUrl: 'https://bihamk.ba/spi/kamere' },
     ],
   },
   {
@@ -3437,6 +3437,92 @@ async function fetchBinaryWithTimeout(url, { accept = 'image/jpeg,image/*;q=0.9,
   }
 }
 
+const CAMERA_IMAGE_PAGE_CACHE_MS = Math.max(20, Number(process.env.CAMERA_IMAGE_PAGE_CACHE_SECONDS || 90)) * 1000;
+const resolvedCameraImageCache = new Map();
+
+function isDirectImageUrl(url = '') {
+  return /\.(?:jpe?g|png|webp)(?:$|[?#])/i.test(String(url || ''));
+}
+
+function absoluteUrl(maybeUrl = '', baseUrl = '') {
+  try {
+    return new URL(String(maybeUrl || '').trim(), baseUrl).toString();
+  } catch {
+    return '';
+  }
+}
+
+function uniqueUrls(urls = []) {
+  const seen = new Set();
+  return urls.filter((url) => {
+    const normalized = String(url || '').trim();
+    if (!normalized || seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+}
+
+function cameraImageCandidates(camera = {}) {
+  return uniqueUrls([
+    camera.imageUrl,
+    ...(Array.isArray(camera.imageUrls) ? camera.imageUrls : []),
+    isDirectImageUrl(camera.url) ? camera.url : '',
+  ]);
+}
+
+function extractImageUrlsFromCameraPage(html = '', baseUrl = '') {
+  const urls = [];
+  const source = String(html || '');
+  const attrRegex = /(?:src|href|data-src|data-original|data-lazy-src)=['"]([^'"]+\.(?:jpe?g|png|webp)(?:\?[^'"]*)?)['"]/gi;
+  let match;
+  while ((match = attrRegex.exec(source))) urls.push(absoluteUrl(match[1], baseUrl));
+
+  // HAK mobile pages sometimes emit direct image URLs in script blocks instead
+  // of normal <img src="..."> tags. Keep the pattern broad but still image-only.
+  const looseRegex = /(https?:\/\/[^\s'"<>]+\.(?:jpe?g|png|webp)(?:\?[^\s'"<>]*)?|\/[^\s'"<>]+\.(?:jpe?g|png|webp)(?:\?[^\s'"<>]*)?)/gi;
+  while ((match = looseRegex.exec(source))) urls.push(absoluteUrl(match[1], baseUrl));
+
+  return uniqueUrls(urls).filter((url) => /^https?:\/\//i.test(url));
+}
+
+async function resolveCameraImageUrl(camera = {}) {
+  const directCandidates = cameraImageCandidates(camera);
+  if (directCandidates.length) return directCandidates[0];
+  if (!camera.url) return '';
+
+  const cacheKey = `${camera.id || ''}:${camera.url}`;
+  const cached = resolvedCameraImageCache.get(cacheKey);
+  if (cached && Date.now() - cached.createdAt < CAMERA_IMAGE_PAGE_CACHE_MS) return cached.url;
+
+  const html = await fetchTextWithTimeout(camera.url);
+  const extracted = extractImageUrlsFromCameraPage(html, camera.url)
+    // Prefer actual public camera snapshots over logos/tracking pixels.
+    .filter((url) => !/logo|favicon|spinner|loader|blank/i.test(url));
+  const index = Math.max(0, Number(camera.imageIndex || 0) || 0);
+  const resolved = extracted[index] || extracted[0] || '';
+  if (!resolved) throw new Error(`Nije pronađen direktni image URL na stranici kamere: ${camera.url}`);
+  resolvedCameraImageCache.set(cacheKey, { url: resolved, createdAt: Date.now() });
+  return resolved;
+}
+
+async function fetchCameraImage(camera = {}, options = {}) {
+  const candidates = uniqueUrls([
+    ...cameraImageCandidates(camera),
+    await resolveCameraImageUrl(camera).catch(() => ''),
+  ]);
+  let lastError = null;
+  for (const url of candidates) {
+    try {
+      const image = await fetchBinaryWithTimeout(url, options);
+      if (String(image.contentType || '').startsWith('image/')) return { ...image, url };
+      lastError = new Error(`${url} nije vratio sliku (${image.contentType || 'bez Content-Type'})`);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('Nema dostupnog image URL-a za kameru.');
+}
+
 function percentToRect(roi = {}, width = 0, height = 0) {
   const x = Math.max(0, Math.min(width - 1, Math.round((Number(roi.x ?? 0) / 100) * width)));
   const y = Math.max(0, Math.min(height - 1, Math.round((Number(roi.y ?? 0) / 100) * height)));
@@ -3683,10 +3769,9 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null)
 
 async function runSnapshotCounter(camera, crossingId, direction, previousSnapshot = null) {
   if (!CAMERA_SNAPSHOT_COUNTING_ENABLED) return null;
-  if (!/\.jpe?g(?:$|\?)/i.test(camera.url || '')) return null;
-  const { buffer, contentType } = await fetchBinaryWithTimeout(camera.url);
+  const { buffer, contentType, url: resolvedImageUrl } = await fetchCameraImage(camera);
 
-  // Some HAK URLs keep a .jpg path but occasionally return HTML, an empty payload,
+  // Some public camera endpoints occasionally return HTML, an empty payload,
   // or a protected/redirect response. jpeg-js then fails with "SOI not found".
   // For staging we silently skip that snapshot and let calibrated/admin/BIHAMK
   // sources drive the wait estimate instead of spamming the console.
@@ -3699,7 +3784,7 @@ async function runSnapshotCounter(camera, crossingId, direction, previousSnapsho
     cameraId: camera.id,
     cameraLabel: camera.label,
     sourceName: camera.source || 'kamera',
-    sourceUrl: camera.url,
+    sourceUrl: resolvedImageUrl || camera.url,
     imageStatus: 'ok',
     ...analysis,
     metadata: {
@@ -4723,7 +4808,7 @@ app.get('/api/camera-image/:crossingId/:cameraId', async (req, res) => {
   }
 
   try {
-    const image = await fetchBinaryWithTimeout(camera.url, { timeoutMs: CAMERA_SNAPSHOT_TIMEOUT_MS });
+    const image = await fetchCameraImage(camera, { timeoutMs: CAMERA_SNAPSHOT_TIMEOUT_MS });
     if (!String(image.contentType || '').startsWith('image/')) {
       res.status(502).json({ ok: false, note: 'Izvor kamere nije vratio sliku.' });
       return;

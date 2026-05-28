@@ -125,9 +125,36 @@ const ADDITIONAL_CROSSINGS = [
       toHr: [{ label: 'Prilaz BiH', minutes: 12, level: 'medium' }, { label: 'Most', minutes: 8, level: 'low' }, { label: 'HR kontrola', minutes: 18, level: 'medium' }],
     },
     cameras: [
-      externalCamera({ id: 'ora-hak-zupanja', label: 'Županja', url: 'https://m.hak.hr/kamera.asp?g=2&k=44' }),
-      externalCamera({ id: 'ora-hak-bih', label: 'BIH Orašje', url: 'https://m.hak.hr/kamera.asp?g=2&k=183' }),
-      externalCamera({ id: 'ora-bihamk', label: 'Orašje / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', note: 'BIHAMK popis kamera uključuje GP Orašje - izlaz iz BiH.' }),
+      {
+        id: 'ora-hak-zupanja',
+        label: 'Županja · HR strana',
+        source: 'HAK direktna slika',
+        status: 'aktivna slika iz javnog izvora',
+        type: 'image',
+        url: 'https://www.hak.hr/info/kamere/79.jpg',
+        externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=44',
+        note: 'HAK kamera za zonu Županja/Orašje. Ako izvor privremeno ne vrati sliku, otvori izvor u novoj kartici.',
+      },
+      {
+        id: 'ora-hak-bih',
+        label: 'Orašje · BiH strana',
+        source: 'HAK/BIHAMK direktna slika',
+        status: 'aktivna slika iz javnog izvora',
+        type: 'image',
+        url: 'https://www.hak.hr/info/kamere/401.jpg',
+        externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=183',
+        note: 'Slika BiH strane prijelaza, proxyjana kroz aplikaciju radi stabilnog prikaza.',
+      },
+      {
+        id: 'ora-amsbih',
+        label: 'Orašje · AMSBiH',
+        source: 'AMSBiH direktna slika',
+        status: 'aktivna slika iz javnog izvora',
+        type: 'image',
+        url: 'https://www.amsbih.ba/amsbih.ba/kamere/kamere/Lokacija20/0Orasje.jpg',
+        externalUrl: 'https://bihamk.ba/spi/kamere',
+        note: 'Dodatna javna kamera za Orašje. U aplikaciji ide preko backend proxyja.',
+      },
     ],
     historyBase: { cars: 210, trucks: 82, buses: 14, wait: 32 }, bestDays: ['Ponedjeljak', 'Srijeda prije 11h', 'Nedjelja navečer'],
   }),
@@ -3084,7 +3111,11 @@ function VehicleVisionOverlay() {
 }
 
 function CameraFeed({ cam, refreshKey, signal, crossingId }) {
-  const proxiedImageUrl = cam.type === 'image' && crossingId
+  // Ne pokušavamo iframeati HAK/BIHAMK stranice jer one često šalju
+  // X-Frame-Options/CSP i browser ih blokira. Umjesto toga svaku poznatu
+  // kameru učitavamo kroz backend proxy; backend zna izvući direktni JPG
+  // čak i kad je u konfiguraciji upisan samo HAK `kamera.asp` page URL.
+  const proxiedImageUrl = crossingId && cam?.id
     ? `/api/camera-image/${encodeURIComponent(crossingId)}/${encodeURIComponent(cam.id)}?t=${refreshKey}`
     : '';
   const imageUrl = cam.previewImage || proxiedImageUrl;
@@ -3098,7 +3129,6 @@ function CameraFeed({ cam, refreshKey, signal, crossingId }) {
     return (
       <div className="camera-live-frame vision-frame">
         <img src={imageUrl} alt={`${cam.label} kamera`} loading="lazy" onError={() => setImageFailed(true)} />
-        {cam.type !== 'image' && <ExternalCameraNotice cam={cam} compact />}
         <VehicleVisionOverlay signal={signal} />
       </div>
     );
