@@ -1442,11 +1442,12 @@ function routeTrafficMeta(route = {}) {
 function routeLooksClear(route = null) {
   if (!route) return false;
   const { delayMinutes, ratio, level } = routeTrafficMeta(route);
-  return level === 'normal' && delayMinutes <= 2 && ratio < 1.12;
+  return (level === 'normal' && delayMinutes <= 2 && ratio < 1.12) || (delayMinutes <= 2.5 && ratio < 1.6);
 }
 
 function routeLooksHeavy(route = null) {
   if (!route) return false;
+  if (routeLooksClear(route)) return false;
   const { delayMinutes, ratio, level } = routeTrafficMeta(route);
   return level === 'heavy' || delayMinutes >= 8 || ratio >= 1.35;
 }
@@ -4375,6 +4376,13 @@ export default function App() {
     window.addEventListener('bf-route-sanity-updated', handleRouteSanityUpdated);
     return () => window.removeEventListener('bf-route-sanity-updated', handleRouteSanityUpdated);
   }, []);
+
+  useEffect(() => {
+    if (!focusTraffic) return;
+    const primary = routePayload?.routes?.find((route) => route.primary) || routePayload?.routes?.[0] || null;
+    if (!primary) return;
+    updateRouteSanityWait(selectedCrossing, selectedDirection, primary, overrides);
+  }, [focusTraffic, routePayload, serverStateVersion, selectedCrossing.id, selectedDirection, overrides]);
 
   useEffect(() => {
     let cancelled = false;

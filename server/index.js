@@ -1641,9 +1641,14 @@ function trafficMeta(signalOrRoute = {}) {
 
 function estimateWaitFromGoogleRoute(route = {}) {
   const { delayMinutes, ratio, level } = trafficMeta(route);
-  const clear = level === 'normal' && delayMinutes <= 2 && ratio < 1.12;
-  const slow = level === 'slow' || delayMinutes > 2 || ratio >= 1.12;
-  const heavy = level === 'heavy' || delayMinutes >= 8 || ratio >= 1.35;
+  // On very short border-control zones the ratio can look high even when the
+  // absolute Google delay is only ~1–2 minutes. For wait estimation, absolute
+  // delay is the safer signal: a 2 min approach delay + clear camera should not
+  // keep a 30–45 min border wait alive.
+  const lowAbsoluteDelay = delayMinutes <= 2.5;
+  const clear = (level === 'normal' && delayMinutes <= 2 && ratio < 1.12) || (lowAbsoluteDelay && ratio < 1.6);
+  const heavy = !clear && (level === 'heavy' || delayMinutes >= 8 || ratio >= 1.35);
+  const slow = !clear && (level === 'slow' || delayMinutes > 2 || ratio >= 1.12);
 
   if (clear) {
     return {
@@ -1721,17 +1726,19 @@ function sanitizeLegacyPublicSignal(item) {
 function googleLooksClear(signal = null) {
   if (!signal) return false;
   const { delayMinutes, ratio, level } = trafficMeta(signal);
-  return level === 'normal' && delayMinutes <= 2 && ratio < 1.12;
+  return (level === 'normal' && delayMinutes <= 2 && ratio < 1.12) || (delayMinutes <= 2.5 && ratio < 1.6);
 }
 
 function googleLooksSlow(signal = null) {
   if (!signal) return false;
+  if (googleLooksClear(signal)) return false;
   const { delayMinutes, ratio, level } = trafficMeta(signal);
   return level === 'slow' || delayMinutes > 2 || ratio >= 1.12;
 }
 
 function googleLooksHeavy(signal = null) {
   if (!signal) return false;
+  if (googleLooksClear(signal)) return false;
   const { delayMinutes, ratio, level } = trafficMeta(signal);
   return level === 'heavy' || delayMinutes >= 8 || ratio >= 1.35;
 }
