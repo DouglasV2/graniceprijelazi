@@ -599,10 +599,12 @@ const BORDER_CROSSINGS = {
     id: 'gradiska',
     name: 'GP Gradiška',
     shortName: 'Gradiška',
-    routeStatusHint: {
-      replacementCrossingId: 'gornji-varos',
-      message: 'Ako stari most/ruta Stara Gradiška nije prohodna, korisniku se nudi novi most Gornji Varoš – Gradiška.',
-    },
+    // NOTE: routeStatusHint.replacementCrossingId is intentionally removed.
+    // Stara Gradiška is operational again; previously when Google returned
+    // ZERO_RESULTS the API marked the crossing as closed and redirected users
+    // to Gornji Varoš. With wider pass-distance + retryWithoutVia, Google now
+    // returns a real route; on rare failures we fall through to a calibrated
+    // zone polyline instead of a "closed" page.
     waits: {
       toBih: { car: 32, truck: 65, bus: 42 },
       toHr: { car: 40, truck: 80, bus: 55 },
@@ -612,19 +614,22 @@ const BORDER_CROSSINGS = {
         label: 'HR → BiH',
         fromLabel: 'Stara Gradiška · HR prilaz',
         toLabel: 'Gradiška · BiH izlaz',
-        approachStart: { lat: 45.15084, lng: 17.24510 },
-        borderPoint: { lat: 45.14720, lng: 17.25040 },
-        exitPoint: { lat: 45.14267, lng: 17.25690 },
-        routeGuard: { maxCrossingDistanceKm: 16, hardMaxCrossingDistanceKm: 36, passDistanceMeters: 900, validateApproachExit: true },
+        // Re-calibrated for the actual Sava bridge between Stara Gradiška (HR, D5) and
+        // Gradiška (BiH, M16). Old anchors were placed off the bridge centreline so
+        // Google's polyline frequently failed the pass-distance check.
+        approachStart: { lat: 45.15280, lng: 17.24560 },
+        borderPoint: { lat: 45.14530, lng: 17.25210 },
+        exitPoint: { lat: 45.14010, lng: 17.25680 },
+        routeGuard: { maxCrossingDistanceKm: 16, hardMaxCrossingDistanceKm: 36, passDistanceMeters: 2500, validateApproachExit: true },
       },
       toHr: {
         label: 'BiH → HR',
         fromLabel: 'Gradiška · BiH prilaz',
         toLabel: 'Stara Gradiška · HR izlaz',
-        approachStart: { lat: 45.14267, lng: 17.25690 },
-        borderPoint: { lat: 45.14720, lng: 17.25040 },
-        exitPoint: { lat: 45.15084, lng: 17.24510 },
-        routeGuard: { maxCrossingDistanceKm: 16, hardMaxCrossingDistanceKm: 36, passDistanceMeters: 900, validateApproachExit: true },
+        approachStart: { lat: 45.14010, lng: 17.25680 },
+        borderPoint: { lat: 45.14530, lng: 17.25210 },
+        exitPoint: { lat: 45.15280, lng: 17.24560 },
+        routeGuard: { maxCrossingDistanceKm: 16, hardMaxCrossingDistanceKm: 36, passDistanceMeters: 2500, validateApproachExit: true },
       },
     },
   },
@@ -638,23 +643,27 @@ const BORDER_CROSSINGS = {
       toHr: { car: 56, truck: 96, bus: 63 },
     },
     anchors: {
+      // Re-calibrated for the new motorway Sava bridge (A5 BiH / D5 HR). Previous
+      // borderPoint sat north of the river on the HR mainland which produced a
+      // diagonal straight-line fallback because Google's bridge polyline never
+      // came within the strict pass distance of an off-bridge anchor.
       toBih: {
         label: 'HR → BiH',
         fromLabel: 'Gornji Varoš · HR prilaz',
         toLabel: 'Gradiška Novi Most · BiH izlaz',
-        approachStart: { lat: 45.1572, lng: 17.2014 },
-        borderPoint: { lat: 45.1500, lng: 17.2170 },
-        exitPoint: { lat: 45.1426, lng: 17.2320 },
-        routeGuard: { maxCrossingDistanceKm: 14, hardMaxCrossingDistanceKm: 32, passDistanceMeters: 1100, validateApproachExit: true, displayBeforeMeters: 950, displayAfterMeters: 1250 },
+        approachStart: { lat: 45.15050, lng: 17.19700 },
+        borderPoint: { lat: 45.14250, lng: 17.20650 },
+        exitPoint: { lat: 45.13550, lng: 17.21620 },
+        routeGuard: { maxCrossingDistanceKm: 14, hardMaxCrossingDistanceKm: 32, passDistanceMeters: 2500, validateApproachExit: true, displayBeforeMeters: 950, displayAfterMeters: 1250 },
       },
       toHr: {
         label: 'BiH → HR',
         fromLabel: 'Gradiška Novi Most · BiH prilaz',
         toLabel: 'Gornji Varoš · HR izlaz',
-        approachStart: { lat: 45.1426, lng: 17.2320 },
-        borderPoint: { lat: 45.1500, lng: 17.2170 },
-        exitPoint: { lat: 45.1572, lng: 17.2014 },
-        routeGuard: { maxCrossingDistanceKm: 14, hardMaxCrossingDistanceKm: 32, passDistanceMeters: 1100, validateApproachExit: true, displayBeforeMeters: 950, displayAfterMeters: 1250 },
+        approachStart: { lat: 45.13550, lng: 17.21620 },
+        borderPoint: { lat: 45.14250, lng: 17.20650 },
+        exitPoint: { lat: 45.15050, lng: 17.19700 },
+        routeGuard: { maxCrossingDistanceKm: 14, hardMaxCrossingDistanceKm: 32, passDistanceMeters: 2500, validateApproachExit: true, displayBeforeMeters: 950, displayAfterMeters: 1250 },
       },
     },
   },
@@ -674,23 +683,27 @@ const BORDER_CROSSINGS = {
     // which let Google snap to the parallel secondary road 6218 through Prudska Draga instead of the
     // motorway. Anchors below are placed on the actual motorway carriageway.
     anchors: {
+      // Tighter exit anchors and shorter display windows keep the rendered zone
+      // centred on the actual customs buildings, instead of stretching ~1.6 km
+      // past the BiH GP marker (previous exitPoint at lng 17.582 was far east of
+      // the customs zone, which produced an oversized blue polyline on the map).
       toBih: {
         label: 'HR → BiH',
         fromLabel: 'Nova Sela · HR prilaz',
         toLabel: 'Bijača · BiH izlaz',
-        approachStart: { lat: 43.12390, lng: 17.55400 },
+        approachStart: { lat: 43.12376, lng: 17.55720 },
         borderPoint: { lat: 43.12340, lng: 17.56780 },
-        exitPoint: { lat: 43.12300, lng: 17.58200 },
-        routeGuard: { maxCrossingDistanceKm: 12, hardMaxCrossingDistanceKm: 30, passDistanceMeters: 950, validateApproachExit: true, displayBeforeMeters: 950, displayAfterMeters: 1150 },
+        exitPoint: { lat: 43.12300, lng: 17.57760 },
+        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 24, passDistanceMeters: 950, validateApproachExit: true, displayBeforeMeters: 700, displayAfterMeters: 800 },
       },
       toHr: {
         label: 'BiH → HR',
         fromLabel: 'Bijača · BiH prilaz',
         toLabel: 'Nova Sela · HR izlaz',
-        approachStart: { lat: 43.12300, lng: 17.58200 },
+        approachStart: { lat: 43.12300, lng: 17.57760 },
         borderPoint: { lat: 43.12340, lng: 17.56780 },
-        exitPoint: { lat: 43.12390, lng: 17.55400 },
-        routeGuard: { maxCrossingDistanceKm: 12, hardMaxCrossingDistanceKm: 30, passDistanceMeters: 950, validateApproachExit: true, displayBeforeMeters: 950, displayAfterMeters: 1150 },
+        exitPoint: { lat: 43.12376, lng: 17.55720 },
+        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 24, passDistanceMeters: 950, validateApproachExit: true, displayBeforeMeters: 700, displayAfterMeters: 800 },
       },
     },
   },
