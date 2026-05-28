@@ -3201,6 +3201,26 @@ function CameraPanel({ crossing, selectedDirection }) {
     }
   }
 
+  const noCameras = !Array.isArray(crossing.cameras) || crossing.cameras.length === 0;
+
+  if (noCameras) {
+    return (
+      <div className="active-camera-section">
+        <div className="camera-toolbar">
+          <div>
+            <span className="kicker">Kamere</span>
+            <h3>{crossing.name}</h3>
+            <p className="camera-direction-note">Za ovaj prijelaz trenutno nemamo dostupne javne kamere.</p>
+          </div>
+        </div>
+        <article className="empty-state-card">
+          <strong>Nema dostupnih kamera</strong>
+          <span>Prati čekanje i Google promet u Pregledu; čim se otvori javni izvor kamere, prikazat će se i ovdje.</span>
+        </article>
+      </div>
+    );
+  }
+
   return (
     <div className="active-camera-section">
       <div className="camera-toolbar">

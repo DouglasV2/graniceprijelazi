@@ -790,6 +790,11 @@ const CAMERA_FEEDS = {
     { id: 'bij-hak-page', label: 'Nova Sela / Bijača', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=137' },
   ],
 };
+// NOTE: server-side CAMERA_FEEDS only contains crossings with a calibrated direct-image
+// URL (snapshot counter can run on them). The 10 remaining crossings have HAK iframe
+// pages registered in the frontend (src/App.jsx · `externalCamera`) and are shown via
+// the camera panel, but they don't feed the wait estimator because there is no
+// machine-readable image at those URLs.
 
 
 function routeAnchors(lat, lng, hrLabel, bihLabel, crossingName) {
@@ -1319,8 +1324,11 @@ function parseDirectionalWaitsFromText(rawText = '', options = {}) {
   if (/dug[aei]?\s+(?:su\s+)?kolon/.test(normalized) && /izlaz\w*\s+iz\s+(?:rh|hrvatsk)/.test(normalized)) {
     push('toBih', 75, 'Duga kolona na izlazu iz HR', 84, 1.3);
   }
-  if (/pojacan\w*\s+(?:je\s+)?izlaz/.test(normalized)) push(exitDirection, 45, sourceSide === 'hr' ? 'Pojačan izlaz iz HR' : 'Pojačan izlaz iz BiH/RS', 76, 1.05);
-  if (/pojacan\w*\s+(?:je\s+)?ulaz/.test(normalized)) push(entryDirection, 45, sourceSide === 'hr' ? 'Pojačan ulaz u HR' : 'Pojačan ulaz u BiH/RS', 76, 1.05);
+  // "Pojačan ulaz/izlaz" is a vague qualitative signal from HAK/BIHAMK — it says traffic
+  // is elevated, NOT that the wait is 45 minutes. Treat it as a soft upper bound so it
+  // can contribute to the estimate without dominating it when Google/camera disagree.
+  if (/pojacan\w*\s+(?:je\s+)?izlaz/.test(normalized)) push(exitDirection, 15, sourceSide === 'hr' ? 'Pojačan izlaz iz HR' : 'Pojačan izlaz iz BiH/RS', 64, 0.5, { softUpperBound: true, softMaxMinutes: 30, parser: 'pojacan-izlaz' });
+  if (/pojacan\w*\s+(?:je\s+)?ulaz/.test(normalized)) push(entryDirection, 15, sourceSide === 'hr' ? 'Pojačan ulaz u HR' : 'Pojačan ulaz u BiH/RS', 64, 0.5, { softUpperBound: true, softMaxMinutes: 30, parser: 'pojacan-ulaz' });
 
   // "nije/nisu duže od X min" — soft upper bound: treat as low/medium estimate, NOT literal X min.
   const under30 = minMention && minMention <= 35 && /ni(?:je|su)\s+duz\w*\s+od\s+\d{1,3}\s*(?:minuta|min|m)/.test(normalized);
@@ -1786,6 +1794,23 @@ function applyTrafficSanityCaps(wait, { googleSignal = null, cameraSignal = null
   // Last-resort: if Google is clear, never allow > 25 min regardless of other soft signals.
   if (clearGoogle && finalWait > 25) {
     return { wait: 25, adjusted: true, reason: 'Google promet je normalan; bez snažnijih signala procjena čekanja se zadržava na umjerenoj razini.' };
+  }
+
+  // No live Google snapshot at all (it expired or scheduler skipped). In that case the
+  // weighted average can be dominated by qualitative HAK/BIHAMK "pojačan ulaz" text.
+  // When the camera shows no queue, cap the displayed estimate so we never show a fake
+  // high value just because the road-traffic signal is missing.
+  if (!googleSignal && clearCamera && !hasHardPublic) {
+    const capped = Math.min(finalWait, 20);
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Live prometna provjera trenutno nedostaje, ali kamera ne pokazuje kolonu. Procjena je oprezna.' };
+  }
+  if (!googleSignal && cameraSignal && !strongCameraQueue && !hasHardPublic && softPublicOnly) {
+    const capped = Math.min(finalWait, 22);
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Live prometna provjera nedostaje; kombiniramo soft procjene iz javnih izvora i kameru bez vidljive kolone.' };
+  }
+  if (!googleSignal && softPublicOnly && !strongCameraQueue) {
+    const capped = Math.min(finalWait, 24);
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Live prometna provjera nedostaje; oslanjamo se na soft procjene iz javnih izvora.' };
   }
 
   return { wait: finalWait, adjusted: false, reason: '' };
@@ -4748,7 +4773,18 @@ app.use((req, res, next) => {
   });
 });
 
-export { app, initializeDatastore };
+export {
+  app,
+  initializeDatastore,
+  // Exposed for unit tests of pure helpers (no I/O).
+  parseDirectionalWaitsFromText,
+  isSoftUpperBoundSource,
+  applyTrafficSanityCaps,
+  googleLooksClear,
+  googleLooksHeavy,
+  cameraLooksClear,
+  cameraShowsQueue,
+};
 
 function assertProductionSafety() {
   if (process.env.NODE_ENV !== 'production') return;
