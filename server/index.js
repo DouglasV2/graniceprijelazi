@@ -2014,18 +2014,18 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     };
   }
 
+  // Production safety: when there is no live signal (no public source, no camera, no Google
+  // route, no driver report, no admin override) we must NOT show a static/planner value as a
+  // live wait. Static values still help internally for ranking/ordering (effectiveBorderDelay
+  // and trip ordering) but they are NEVER displayed as a user-facing estimate.
   return {
     wait: staticWait,
-    rangeMin: Math.max(0, staticWait - 12),
-    rangeMax: Math.min(360, staticWait + 12),
-    label: serverKey ? 'Google procjena' : 'Planerska procjena',
-    className: serverKey ? 'google' : 'estimate',
-    sourceType: serverKey ? 'google-traffic-estimate-pending' : 'planner-estimate',
-    confidence: serverKey ? 44 : 38,
-    displayReady: true,
-    note: serverKey
-      ? 'Koristi se privremena procjena dok ne stigne svježa Google Routes provjera za ovaj prijelaz.'
-      : 'Google Routes ključ nije postavljen; koristi se konzervativna planerska procjena dok ne stigne javni izvor, kamera ili dojava.',
+    label: 'Čeka live izvor',
+    className: 'pending',
+    sourceType: 'no-live-source',
+    confidence: 0,
+    displayReady: false,
+    note: 'Još nema svježeg javnog izvora, kamere, dojave ili potvrde tima za ovaj prijelaz. Čekanje će se prikazati čim stigne pouzdan signal.',
     signals: latestSources,
     updatedAt: new Date().toISOString(),
   };
@@ -2079,7 +2079,15 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   return res.json({ ok: true, user: publicUser(user), token: signToken(user) });
 });
 
+// Public self-registration is OFF by default. Enable only when ALLOW_PUBLIC_REGISTRATION=true
+// is set. In production the pilot team creates accounts through the admin/seed path; an open
+// /api/auth/register would let anyone create a foothold and skew driver-report data.
+const allowPublicRegistration = String(process.env.ALLOW_PUBLIC_REGISTRATION || 'false').toLowerCase() === 'true';
+
 app.post('/api/auth/register', authLimiter, async (req, res) => {
+  if (!allowPublicRegistration) {
+    return res.status(403).json({ ok: false, error: 'Registracija novih korisnika je trenutno isključena. Obrati se administratoru za pristup.' });
+  }
   const name = String(req.body?.name || '').trim().slice(0, 80);
   const email = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
@@ -2090,6 +2098,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
   if (store.users.some((item) => item.email === email)) {
     return res.status(409).json({ ok: false, error: 'Račun s tim emailom već postoji.' });
   }
+  // New self-registered accounts are always non-admin; admin role is reserved for seed/SQL.
   const user = { id: crypto.randomUUID(), name, email, role: 'user', passwordHash: hashPassword(password), createdAt: new Date().toISOString() };
   store.users.push(user);
   store.audit.unshift({ id: crypto.randomUUID(), type: 'auth_register', actor: publicUser(user), createdAt: new Date().toISOString() });
@@ -2717,10 +2726,14 @@ function aggregateHistoryCalendar(rows, dates) {
 }
 
 app.get('/api/history/:crossingId', async (req, res) => {
-  const crossingId = req.params.crossingId || 'maljevac';
+  const crossingId = String(req.params.crossingId || '').trim();
   const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
   const days = clampHistoryDays(req.query.days);
-  const crossing = BORDER_CROSSINGS[crossingId] || BORDER_CROSSINGS.maljevac;
+  if (!crossingId || !BORDER_CROSSINGS[crossingId]) {
+    res.status(404).json({ ok: false, error: 'Prijelaz nije pronađen.' });
+    return;
+  }
+  const crossing = BORDER_CROSSINGS[crossingId];
   const dates = historyDateList(days);
   const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) && dates.includes(String(req.query.date))
     ? String(req.query.date)
@@ -4349,7 +4362,12 @@ async function buildFallbackJourneyOptions(direction, vehicle, origin = '', dest
 }
 
 async function computeCrossingRoutes(crossingId, direction = 'toBih') {
-  const crossing = BORDER_CROSSINGS[crossingId] || BORDER_CROSSINGS.maljevac;
+  const crossing = BORDER_CROSSINGS[crossingId];
+  if (!crossing) {
+    const error = new Error(`Nepoznat prijelaz: ${crossingId}`);
+    error.statusCode = 404;
+    throw error;
+  }
   const anchor = crossing.anchors[direction] || crossing.anchors.toBih;
   if (!anchor.routeGuard) {
     return routePendingPayload(crossing, direction, 'Za ovaj prijelaz zasad prikazujemo čekanje, kamere i prometni sloj. Cestovnu liniju ćemo uključiti čim prođe provjeru, da mapa ne bi pokazivala čudnu ili krivu putanju.');
@@ -4477,9 +4495,13 @@ function safeError(error) {
 
 
 app.get('/api/camera-snapshots/:crossingId', async (req, res) => {
-  const crossingId = req.params.crossingId || 'maljevac';
+  const crossingId = String(req.params.crossingId || '').trim();
   const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
-  const crossing = BORDER_CROSSINGS[crossingId] || BORDER_CROSSINGS.maljevac;
+  if (!crossingId || !BORDER_CROSSINGS[crossingId]) {
+    res.status(404).json({ ok: false, error: 'Prijelaz nije pronađen.' });
+    return;
+  }
+  const crossing = BORDER_CROSSINGS[crossingId];
   try {
     // Public endpoint only reads stored snapshots. Admin camera scan performs forced refresh.
     const snapshots = await readLatestCameraSnapshots(crossing.id, direction, Number(req.query.hours || 6) || 6);
@@ -4499,8 +4521,12 @@ app.get('/api/camera-snapshots/:crossingId', async (req, res) => {
 });
 
 app.get('/api/camera-analytics/:crossingId', async (req, res) => {
-  const crossingId = req.params.crossingId || 'maljevac';
+  const crossingId = String(req.params.crossingId || '').trim();
   const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
+  if (!crossingId || !BORDER_CROSSINGS[crossingId]) {
+    res.status(404).json({ ok: false, error: 'Prijelaz nije pronađen.' });
+    return;
+  }
 
   try {
     res.json(await buildCameraAnalyticsPayload(crossingId, direction));
@@ -4511,9 +4537,13 @@ app.get('/api/camera-analytics/:crossingId', async (req, res) => {
 });
 
 app.get('/api/camera-history/:crossingId', async (req, res) => {
-  const crossingId = req.params.crossingId || 'maljevac';
+  const crossingId = String(req.params.crossingId || '').trim();
   const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
-  const crossing = BORDER_CROSSINGS[crossingId] || BORDER_CROSSINGS.maljevac;
+  if (!crossingId || !BORDER_CROSSINGS[crossingId]) {
+    res.status(404).json({ ok: false, error: 'Prijelaz nije pronađen.' });
+    return;
+  }
+  const crossing = BORDER_CROSSINGS[crossingId];
   const history = historyWithCameraEvents(crossing, direction);
   const totals = sumCounts(history);
   const laneProfile = sumLaneGroupsFromEvents(getRecentCameraEvents(crossing.id, direction, 60));
@@ -4531,8 +4561,12 @@ app.get('/api/camera-history/:crossingId', async (req, res) => {
 });
 
 app.post('/api/camera-scan/:crossingId', authRequired, adminRequired, writeLimiter, async (req, res) => {
-  const crossingId = req.params.crossingId || 'maljevac';
+  const crossingId = String(req.params.crossingId || '').trim();
   const direction = req.body?.direction === 'toHr' ? 'toHr' : 'toBih';
+  if (!crossingId || !BORDER_CROSSINGS[crossingId]) {
+    res.status(404).json({ ok: false, error: 'Prijelaz nije pronađen.' });
+    return;
+  }
 
   try {
     const payload = await buildCameraAnalyticsPayload(crossingId, direction, { storeScan: true });
@@ -4592,10 +4626,10 @@ app.post('/api/camera-ingest', writeLimiter, (req, res) => {
 });
 
 app.get('/api/routes/:crossingId', async (req, res) => {
-  const crossingId = req.params.crossingId || 'maljevac';
+  const crossingId = String(req.params.crossingId || '').trim();
   const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
 
-  if (!BORDER_CROSSINGS[crossingId]) {
+  if (!crossingId || !BORDER_CROSSINGS[crossingId]) {
     res.status(404).json({ ok: false, error: 'Prijelaz nije pronađen.' });
     return;
   }
@@ -4634,7 +4668,10 @@ app.get('/api/trip-options', async (req, res) => {
   const origin = String(req.query.origin || '').trim();
   const destination = String(req.query.destination || '').trim();
   const requestedDirection = req.query.direction === 'toHr' ? 'toHr' : req.query.direction === 'toBih' ? 'toBih' : null;
-  const direction = inferJourneyDirection(origin, destination) || requestedDirection || 'toBih';
+  // Explicit direction from the query must win. Only fall back to text inference when the
+  // caller did not state a direction — otherwise we would silently swap HR→BiH and BiH→HR
+  // for an Osijek→Tuzla style trip just because of a place-name hit.
+  const direction = requestedDirection || inferJourneyDirection(origin, destination) || 'toBih';
   const vehicle = vehicleKey(req.query.vehicle);
 
   if (!origin || !destination) {
@@ -4713,7 +4750,32 @@ app.use((req, res, next) => {
 
 export { app, initializeDatastore };
 
+function assertProductionSafety() {
+  if (process.env.NODE_ENV !== 'production') return;
+  const blockers = [];
+  if (sessionSecret === weakDefaultSecret) {
+    blockers.push('SESSION_SECRET nije postavljen — koristi se razvojna vrijednost. Postavi dugačak slučajan secret prije production deploya.');
+  }
+  const adminPass = process.env.BORDERFLOW_ADMIN_PASSWORD || '';
+  if (!adminPass || adminPass === 'change-this-admin-password') {
+    blockers.push('BORDERFLOW_ADMIN_PASSWORD nije postavljen ili koristi default vrijednost. Postavi jak admin password.');
+  }
+  if (process.env.BORDERFLOW_DEMO_USER_PASSWORD === 'change-this-user-password') {
+    blockers.push('BORDERFLOW_DEMO_USER_PASSWORD koristi default vrijednost. Promijeni ili ukloni demo user seed prije production deploya.');
+  }
+  if (allowPublicRegistration) {
+    console.warn('[startup] ALLOW_PUBLIC_REGISTRATION=true u produkciji — svatko može stvoriti račun. Razmisli o isključivanju.');
+  }
+  if (blockers.length) {
+    console.error('\n[startup] Production safety check FAILED:');
+    for (const blocker of blockers) console.error('  - ' + blocker);
+    console.error('\nAplikacija se neće pokrenuti dok se ovi blokeri ne riješe.\n');
+    process.exit(1);
+  }
+}
+
 if (process.env.NODE_ENV !== 'test') {
+  assertProductionSafety();
   initializeDatastore()
     .then(() => {
       app.listen(port, () => {

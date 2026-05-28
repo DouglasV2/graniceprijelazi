@@ -1846,76 +1846,81 @@ function DetailModal({ crossing, selectedDirection, overrides, onClose, onTrack,
   const direction = getDirection(crossing, selectedDirection);
   const wait = getDisplayedWait(crossing, selectedDirection, overrides);
   const sourceMeta = getWaitSourceMeta(crossing, selectedDirection, overrides);
+  const operational = getOperationalStatus(crossing, selectedDirection, wait, sourceMeta);
+  const freshness = getFreshnessMeta(sourceMeta, crossing);
+  const waitLabel = formatWaitDisplay(wait, sourceMeta);
   const alternatives = alternativesFor(crossing.id, selectedDirection, overrides);
   const bestAlt = alternatives[0];
-  const altDirection = getDirection(bestAlt, selectedDirection);
+  const bestAltWait = bestAlt ? getDisplayedWait(bestAlt, selectedDirection, overrides) : null;
+  const bestAltMeta = bestAlt ? getWaitSourceMeta(bestAlt, selectedDirection, overrides) : null;
   const altDeltaMeta = getAlternativeDeltaMeta(bestAlt?.netBenefit);
+  const dataKnown = sourceMeta?.displayReady !== false && hasKnownWait(wait);
+  const headline = dataKnown
+    ? `${waitLabel} · ${direction.label}`
+    : `Stanje za ${direction.label} još nije stiglo iz live izvora`;
+  const subline = dataKnown
+    ? (direction.waitAdvice || operational.note || sourceMeta.note || '')
+    : (sourceMeta?.note || 'Čim stigne svjež javni izvor, kamera ili dojava, ovdje će se prikazati čekanje.');
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <section className="detail-modal" onClick={(event) => event.stopPropagation()}>
+      <section className="detail-modal overview-modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <div>
-            <span className="kicker">Detalj prijelaza</span>
+          <div className="overview-head-copy">
+            <span className="kicker">Pregled prijelaza</span>
             <h2>{crossing.name}</h2>
-          </div>
-          <button type="button" onClick={onClose} className="icon-button">×</button>
-        </div>
-        <div className="detail-grid">
-          <RoadSign crossing={crossing} direction={direction} wait={wait} />
-          <article className="detail-card source-detail-card">
-            <span>Izvor čekanja</span>
-            <h3><span className={`source-badge ${sourceMeta.className}`}>{sourceMeta.label}</span></h3>
-            <p>{sourceMeta.note}</p>
-          </article>
-          <article className="detail-card main-decision">
-            <span>Što napraviti sada?</span>
-            <h3>{direction.waitAdvice}</h3>
-            <p>{direction.bottleneckText}</p>
-          </article>
-          <article className="detail-card">
-            <span>Status</span>
-            <h3>{(statusMeta[statusFromWait(wait)] || statusMeta.unknown).label}</h3>
-            <FieldBadge crossing={crossing} />
-            <p>{crossing.fieldNote}</p>
-          </article>
-          <article className="detail-card">
-            <span>Razlog zastoja</span>
-            <h3>{crossing.cause}</h3>
-            <p>{direction.bottleneckSide}</p>
-          </article>
-        </div>
-        <div className="detail-section">
-          <h3>Najbolja alternativa</h3>
-          <div className="alternative-card">
-            <div>
-              <span>{bestAlt.name}</span>
-              <strong>{isUsableMinuteValue(bestAlt.wait) ? formatMinutes(bestAlt.wait) : '—'}</strong>
-              <small>{isUsableMinuteValue(bestAlt.wait) ? 'Očekivano čekanje' : 'Čeka podatke'}</small>
-            </div>
-            <div className="alt-verdict-center">
-              <strong className={`alternative-delta ${altDeltaMeta.className}`}>{altDeltaMeta.label}</strong>
-            </div>
-            <p>{altDeltaMeta.note}</p>
-          </div>
-        </div>
-        <div className="detail-section two-col">
-          <div>
-            <h3>Gdje nastaje čekanje</h3>
-            <SegmentBar segments={direction.segments} />
-          </div>
-          <div>
-            <h3>Obavijesti za smjer</h3>
-            <p className="alert-context">Pravila vrijede za {direction.label}. Drugi smjer ima vlastite pragove.</p>
-            <div className="alert-rules">
-              {direction.alertRules.map((rule) => <span key={rule}>Javi kad {rule}</span>)}
+            <div className="overview-head-pills">
+              <span className={`operational-pill ${operational.className}`}>{operational.label}</span>
+              <span className={`freshness-pill ${freshness.className}`}>{freshness.label}</span>
             </div>
           </div>
+          <button type="button" onClick={onClose} className="icon-button" aria-label="Zatvori">×</button>
         </div>
+
+        <article className={`overview-hero-card ${dataKnown ? operational.className : 'pending'}`}>
+          <div className="overview-hero-copy">
+            <span className="overview-hero-eyebrow">Trenutno čekanje</span>
+            <strong className="overview-hero-wait">{dataKnown ? waitLabel : '—'}</strong>
+            <p className="overview-hero-sub">{headline}</p>
+            <p className="overview-hero-note">{subline}</p>
+          </div>
+          <div className="overview-hero-actions">
+            <button type="button" className="primary-button" onClick={() => { setTripCrossing(crossing.id); setSelectedCrossing(crossing); setActiveTab('Moj put'); onClose(); }}>Dodaj u Moj put</button>
+            <ShareRouteButton crossing={crossing} selectedDirection={selectedDirection} />
+          </div>
+        </article>
+
+        <div className="overview-grid">
+          <article className="overview-card">
+            <span>Najbolja alternativa</span>
+            {bestAlt ? (
+              <>
+                <h3>{bestAlt.shortName || bestAlt.name}</h3>
+                <strong>{bestAltMeta?.displayReady !== false && hasKnownWait(bestAltWait) ? formatWaitDisplay(bestAltWait, bestAltMeta) : '—'}</strong>
+                <small className={`alternative-delta ${altDeltaMeta.className}`}>{altDeltaMeta.label}</small>
+                <p>{altDeltaMeta.note}</p>
+              </>
+            ) : (
+              <>
+                <h3>—</h3>
+                <p>Trenutno nemamo bolju alternativu za ovaj smjer.</p>
+              </>
+            )}
+          </article>
+          <article className="overview-card">
+            <span>Izvor procjene</span>
+            <h3>{sourceMeta.label || 'Čeka izvor'}</h3>
+            <p>{sourceMeta.note || 'Procjena se osvježava čim stigne svjež signal.'}</p>
+          </article>
+          <article className="overview-card">
+            <span>Što napraviti sada</span>
+            <h3>{dataKnown ? direction.waitAdvice : 'Pričekaj svježu procjenu'}</h3>
+            <p>{dataKnown ? direction.bottleneckText : 'Ako moraš krenuti odmah, provjeri preporuku ili odaberi najbližu alternativu.'}</p>
+          </article>
+        </div>
+
         <div className="modal-actions">
           <button type="button" className={tracked ? 'ghost-button active' : 'ghost-button'} onClick={() => onTrack(crossing.id)}>{tracked ? '★ Favorit' : '+ Favorit'}</button>
-          <button type="button" className="ghost-button" onClick={() => { setTripCrossing(crossing.id); setSelectedCrossing(crossing); setActiveTab('Moj put'); onClose(); }}>Dodaj u Moj put</button>
-          <ShareRouteButton crossing={crossing} selectedDirection={selectedDirection} />
           {addNotificationRule && <button type="button" className="ghost-button" onClick={() => addNotificationRule({ crossingId: crossing.id, direction: selectedDirection, type: 'below_wait', threshold: 15 })}>Javi kad padne ispod 15 min</button>}
         </div>
       </section>
@@ -4345,24 +4350,27 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    async function loadServerState(forceRefresh = false) {
-      if (!currentUser?.token) return;
+    async function loadServerState() {
       try {
-        const payload = await fetchJson('/api/public/state', { timeoutMs: 9000, headers: { Authorization: `Bearer ${currentUser.token}` } });
-        if (!cancelled && payload?.overrides) {
+        // Public state endpoint is intentionally guest-readable so the app works
+        // before any login. When a token is present we still send it so admin
+        // overrides can be reconciled, but it is never required.
+        const headers = currentUser?.token ? { Authorization: `Bearer ${currentUser.token}` } : undefined;
+        const payload = await fetchJson('/api/public/state', { timeoutMs: 9000, headers });
+        if (!cancelled && payload?.ok) {
           globalThis.__BF_EFFECTIVE_WAITS = payload.effectiveWaits || {};
           globalThis.__BF_WAIT_SOURCES = payload.waitSources || {};
           globalThis.__BF_STATUS_OVERRIDES = payload.statusOverrides || {};
           globalThis.__BF_STATE_READY = true;
-          setOverrides(payload.overrides);
+          if (payload.overrides) setOverrides(payload.overrides);
           setServerStateVersion((value) => value + 1);
         }
       } catch {
         // App stays usable with local fallback state when backend is unavailable.
       }
     }
-    loadServerState(false);
-    const timer = window.setInterval(() => loadServerState(false), 90000);
+    loadServerState();
+    const timer = window.setInterval(loadServerState, 90000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -4458,10 +4466,6 @@ export default function App() {
     setActiveTab('Dojave');
   }
 
-  if (!currentUser) {
-    return <AuthScreen setCurrentUser={setCurrentUser} />;
-  }
-
   return (
     <main className="app">
       <header className="top-shell premium-shell">
@@ -4476,7 +4480,10 @@ export default function App() {
           <div className="top-actions premium-top-actions clean-top-actions">
             <LanguageToggle value={uiLanguage} onChange={setUiLanguage} />
             <button type="button" className="icon-help-button" onClick={() => setShowTerms(true)} aria-label="Kako računamo stanje" title="Kako računamo stanje">?</button>
-            <button type="button" className="logout-button" onClick={() => setCurrentUser(null)}><LogOut size={15}/> Odjava</button>
+            {currentUser
+              ? <button type="button" className="logout-button" onClick={() => setCurrentUser(null)}><LogOut size={15}/> Odjava</button>
+              : <button type="button" className="logout-button" onClick={() => setShowAuth(true)}>Prijava</button>
+            }
           </div>
         </div>
         <nav className="tabs production-tabs premium-tabs" aria-label="Glavna navigacija">{tabs.map((tab) => {
