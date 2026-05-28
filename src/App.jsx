@@ -4378,13 +4378,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!focusTraffic) return;
-    const primary = routePayload?.routes?.find((route) => route.primary) || routePayload?.routes?.[0] || null;
-    if (!primary) return;
-    updateRouteSanityWait(selectedCrossing, selectedDirection, primary, overrides);
-  }, [focusTraffic, routePayload, serverStateVersion, selectedCrossing.id, selectedDirection, overrides]);
-
-  useEffect(() => {
     let cancelled = false;
     async function loadServerState() {
       try {
