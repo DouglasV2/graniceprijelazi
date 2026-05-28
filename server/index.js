@@ -742,6 +742,7 @@ const CAMERA_FEEDS = {
       id: 'gv-hak-queue-9',
       label: 'Gornji Varoš · kamera 9',
       source: 'HAK',
+      imageIndex: 0,
       url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
       calibration: {
         roi: { x: 6, y: 18, w: 82, h: 68, rotate: -11 },
@@ -769,6 +770,7 @@ const CAMERA_FEEDS = {
       id: 'gv-hak-plaza-4',
       label: 'Gornji Varoš · zona kontrole',
       source: 'HAK',
+      imageIndex: 1,
       url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
       calibration: {
         roi: { x: 8, y: 18, w: 82, h: 70, rotate: -10 },
@@ -788,6 +790,7 @@ const CAMERA_FEEDS = {
   ],
   bijaca: [
     { id: 'bij-hak-page', label: 'Nova Sela / Bijača', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=137' },
+    { id: 'bij-bihamk-page', label: 'Bijača / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Bijača', 'Bijača', 'Bijaca'] },
   ],
 };
 // NOTE: server-side CAMERA_FEEDS only contains crossings with a calibrated direct-image
@@ -944,7 +947,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     cameras: [
       { id: 'bro-hak-slavonski', label: 'Slavonski Brod', url: 'https://m.hak.hr/kamera.asp?g=2&k=140' },
       { id: 'bro-hak-bih', label: 'BIH Bosanski Brod', url: 'https://m.hak.hr/kamera.asp?g=2&k=184' },
-      { id: 'bro-bihamk', label: 'Brod / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere' },
+      { id: 'bro-bihamk', label: 'Brod / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Brod - Izlaz iz BiH', 'GP Brod - Ulaz u BiH', 'GP Brod', 'Bosanski Brod'] },
     ],
   },
   {
@@ -985,7 +988,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     }),
     cameras: [
       { id: 'iza-hak-bih', label: 'BIH Izačić', url: 'https://m.hak.hr/kamera.asp?g=2&k=179' },
-      { id: 'iza-bihamk', label: 'Izačić / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere' },
+      { id: 'iza-bihamk', label: 'Izačić / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Izačić', 'Izačić', 'Izacic'] },
     ],
   },
   {
@@ -1000,7 +1003,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     }),
     cameras: [
       { id: 'kam-hak', label: 'Kamensko', url: 'https://m.hak.hr/kamera.asp?g=2&k=192' },
-      { id: 'kam-bihamk', label: 'Kamensko / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere' },
+      { id: 'kam-bihamk', label: 'Kamensko / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Kamensko', 'Kamensko'] },
     ],
   },
   {
@@ -1016,7 +1019,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     cameras: [
       { id: 'pri-hak-arzano', label: 'Aržano', url: 'https://m.hak.hr/kamera.asp?g=2&k=193' },
       { id: 'pri-hak-bih', label: 'BIH Prisika', url: 'https://m.hak.hr/kamera.asp?g=2&k=180' },
-      { id: 'pri-bihamk', label: 'Prisika / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere' },
+      { id: 'pri-bihamk', label: 'Prisika / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Prisika (Aržano)', 'GP Prisika', 'Prisika', 'Aržano', 'Arzano'] },
     ],
   },
   {
@@ -1055,7 +1058,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     }),
     cameras: [
       { id: 'cg-hak-bih', label: 'BIH Crveni Grm', url: 'https://m.hak.hr/kamera.asp?g=2&k=181' },
-      { id: 'cg-bihamk', label: 'Crveni Grm / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere' },
+      { id: 'cg-bihamk', label: 'Crveni Grm / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Crveni Grm', 'Crveni Grm'] },
     ],
   },
 ].forEach(addCrossing);
@@ -3470,19 +3473,98 @@ function cameraImageCandidates(camera = {}) {
   ]);
 }
 
-function extractImageUrlsFromCameraPage(html = '', baseUrl = '') {
-  const urls = [];
+function cameraSearchText(value = '') {
+  return normalizeAscii(String(value || '')
+    .replace(/\\\//g, '/')
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, code) => String.fromCharCode(parseInt(code, 16)))
+    .replace(/&quot;|&#34;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&nbsp;/g, ' '))
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cameraMatchTexts(camera = {}) {
+  return uniqueUrls([
+    camera.matchText,
+    ...(Array.isArray(camera.matchTexts) ? camera.matchTexts : []),
+  ]).map(cameraSearchText).filter(Boolean);
+}
+
+function extractImageRecordsFromCameraPage(html = '', baseUrl = '') {
   const source = String(html || '');
-  const attrRegex = /(?:src|href|data-src|data-original|data-lazy-src)=['"]([^'"]+\.(?:jpe?g|png|webp)(?:\?[^'"]*)?)['"]/gi;
+  const records = [];
+  const addRecord = (rawUrl, index) => {
+    const url = absoluteUrl(rawUrl, baseUrl);
+    if (!/^https?:\/\//i.test(url)) return;
+    records.push({
+      url,
+      context: source.slice(Math.max(0, index - 2200), Math.min(source.length, index + 2200)),
+    });
+  };
+
+  const attrRegex = /(?:src|href|data-src|data-original|data-lazy-src|data-full|poster)=['"]([^'"]+\.(?:jpe?g|png|webp)(?:\?[^'"]*)?)['"]/gi;
   let match;
-  while ((match = attrRegex.exec(source))) urls.push(absoluteUrl(match[1], baseUrl));
+  while ((match = attrRegex.exec(source))) addRecord(match[1], match.index);
 
-  // HAK mobile pages sometimes emit direct image URLs in script blocks instead
-  // of normal <img src="..."> tags. Keep the pattern broad but still image-only.
-  const looseRegex = /(https?:\/\/[^\s'"<>]+\.(?:jpe?g|png|webp)(?:\?[^\s'"<>]*)?|\/[^\s'"<>]+\.(?:jpe?g|png|webp)(?:\?[^\s'"<>]*)?)/gi;
-  while ((match = looseRegex.exec(source))) urls.push(absoluteUrl(match[1], baseUrl));
+  // HAK/BIHAMK pages can emit image URLs inside script JSON instead of <img src>.
+  const looseRegex = /(https?:\/\/[^\s'"<>\)]+\.(?:jpe?g|png|webp)(?:\?[^\s'"<>\)]*)?|\/[^\s'"<>\)]+\.(?:jpe?g|png|webp)(?:\?[^\s'"<>\)]*)?)/gi;
+  while ((match = looseRegex.exec(source))) addRecord(match[1], match.index);
 
-  return uniqueUrls(urls).filter((url) => /^https?:\/\//i.test(url));
+  const byUrl = new Map();
+  for (const record of records) {
+    if (!byUrl.has(record.url)) byUrl.set(record.url, record);
+    else byUrl.get(record.url).context += ` ${record.context}`;
+  }
+  return [...byUrl.values()];
+}
+
+function scoreCameraImageRecord(record = {}, camera = {}, fallbackIndex = 0) {
+  const url = String(record.url || '');
+  if (!url || /logo|favicon|spinner|loader|blank|placeholder|sprite|icon/i.test(url)) return -10000;
+
+  const haystack = cameraSearchText(`${record.context || ''} ${url}`);
+  const terms = cameraMatchTexts(camera);
+  let score = 100 - fallbackIndex;
+
+  for (const term of terms) {
+    if (!term) continue;
+    if (haystack.includes(term)) {
+      score += 500 + Math.min(160, term.length * 3);
+      continue;
+    }
+    const words = term.split(' ').filter((word) => word.length >= 3);
+    const hits = words.filter((word) => haystack.includes(word)).length;
+    if (words.length && hits === words.length) score += 220 + hits * 20;
+    else if (hits >= Math.max(1, Math.ceil(words.length * 0.6))) score += 70 + hits * 12;
+  }
+
+  const source = cameraSearchText(camera.source || '');
+  if (source.includes('bihamk') && /bihamk|video-nadzor/i.test(url)) score += 80;
+  if (source.includes('hak') && /hak\.hr/i.test(url)) score += 80;
+  if (source.includes('ams') && /ams|satwork/i.test(url)) score += 80;
+  return score;
+}
+
+function extractImageUrlsFromCameraPage(html = '', baseUrl = '', camera = {}) {
+  const records = extractImageRecordsFromCameraPage(html, baseUrl)
+    .map((record, index) => ({ ...record, score: scoreCameraImageRecord(record, camera, index), index }))
+    .filter((record) => record.score > -10000);
+
+  const hasMatcher = cameraMatchTexts(camera).length > 0;
+  if (hasMatcher) {
+    const matched = records
+      .filter((record) => record.score >= 180)
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .map((record) => record.url);
+    if (matched.length) return uniqueUrls(matched);
+  }
+
+  return uniqueUrls(records
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((record) => record.url));
 }
 
 async function resolveCameraImageUrl(camera = {}) {
@@ -3490,14 +3572,12 @@ async function resolveCameraImageUrl(camera = {}) {
   if (directCandidates.length) return directCandidates[0];
   if (!camera.url) return '';
 
-  const cacheKey = `${camera.id || ''}:${camera.url}`;
+  const cacheKey = `${camera.id || ''}:${camera.url}:${cameraMatchTexts(camera).join('|')}:${camera.imageIndex || 0}`;
   const cached = resolvedCameraImageCache.get(cacheKey);
   if (cached && Date.now() - cached.createdAt < CAMERA_IMAGE_PAGE_CACHE_MS) return cached.url;
 
   const html = await fetchTextWithTimeout(camera.url);
-  const extracted = extractImageUrlsFromCameraPage(html, camera.url)
-    // Prefer actual public camera snapshots over logos/tracking pixels.
-    .filter((url) => !/logo|favicon|spinner|loader|blank/i.test(url));
+  const extracted = extractImageUrlsFromCameraPage(html, camera.url, camera);
   const index = Math.max(0, Number(camera.imageIndex || 0) || 0);
   const resolved = extracted[index] || extracted[0] || '';
   if (!resolved) throw new Error(`Nije pronađen direktni image URL na stranici kamere: ${camera.url}`);

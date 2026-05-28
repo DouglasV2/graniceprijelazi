@@ -37,7 +37,7 @@ function makeCrossingHistory(baseCars, baseTrucks, baseBuses, baseWait) {
   }));
 }
 
-function externalCamera({ id, label, source = 'HAK izvor', url, note }) {
+function externalCamera({ id, label, source = 'HAK izvor', url, note, matchText, matchTexts, imageIndex }) {
   return {
     id,
     label,
@@ -47,6 +47,9 @@ function externalCamera({ id, label, source = 'HAK izvor', url, note }) {
     url,
     externalUrl: url,
     note: note || 'Javni izvor se otvara u novoj kartici ako preglednik blokira prikaz unutar aplikacije.',
+    ...(matchText ? { matchText } : {}),
+    ...(Array.isArray(matchTexts) ? { matchTexts } : {}),
+    ...(Number.isFinite(Number(imageIndex)) ? { imageIndex: Number(imageIndex) } : {}),
   };
 }
 
@@ -174,7 +177,7 @@ const ADDITIONAL_CROSSINGS = [
     cameras: [
       externalCamera({ id: 'bro-hak-slavonski', label: 'Slavonski Brod', url: 'https://m.hak.hr/kamera.asp?g=2&k=140' }),
       externalCamera({ id: 'bro-hak-bih', label: 'BIH Bosanski Brod', url: 'https://m.hak.hr/kamera.asp?g=2&k=184' }),
-      externalCamera({ id: 'bro-bihamk', label: 'Brod / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', note: 'BIHAMK ima ulaz i izlaz za GP Brod.' }),
+      externalCamera({ id: 'bro-bihamk', label: 'Brod / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Brod - Izlaz iz BiH', 'GP Brod - Ulaz u BiH', 'GP Brod', 'Bosanski Brod'], note: 'BIHAMK ima ulaz i izlaz za GP Brod.' }),
     ],
     historyBase: { cars: 235, trucks: 92, buses: 16, wait: 40 }, bestDays: ['Utorak', 'Četvrtak rano', 'Subota prije 8h'],
   }),
@@ -222,7 +225,7 @@ const ADDITIONAL_CROSSINGS = [
     },
     cameras: [
       externalCamera({ id: 'iza-hak-bih', label: 'BIH Izačić', url: 'https://m.hak.hr/kamera.asp?g=2&k=179' }),
-      externalCamera({ id: 'iza-bihamk', label: 'Izačić / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', note: 'BIHAMK popis kamera uključuje GP Izačić.' }),
+      externalCamera({ id: 'iza-bihamk', label: 'Izačić / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Izačić', 'Izačić', 'Izacic'], note: 'BIHAMK popis kamera uključuje GP Izačić.' }),
     ],
     historyBase: { cars: 280, trucks: 74, buses: 18, wait: 66 }, bestDays: ['Utorak rano', 'Srijeda', 'Četvrtak prije 9h'],
   }),
@@ -240,7 +243,7 @@ const ADDITIONAL_CROSSINGS = [
     },
     cameras: [
       externalCamera({ id: 'kam-hak', label: 'Kamensko', url: 'https://m.hak.hr/kamera.asp?g=2&k=192' }),
-      externalCamera({ id: 'kam-bihamk', label: 'Kamensko / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', note: 'BIHAMK popis kamera uključuje GP Kamensko.' }),
+      externalCamera({ id: 'kam-bihamk', label: 'Kamensko / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Kamensko', 'Kamensko'], note: 'BIHAMK popis kamera uključuje GP Kamensko.' }),
     ],
     historyBase: { cars: 145, trucks: 52, buses: 9, wait: 28 }, bestDays: ['Ponedjeljak', 'Utorak', 'Petak prije 12h'],
   }),
@@ -259,7 +262,7 @@ const ADDITIONAL_CROSSINGS = [
     cameras: [
       externalCamera({ id: 'pri-hak-arzano', label: 'Aržano', url: 'https://m.hak.hr/kamera.asp?g=2&k=193' }),
       externalCamera({ id: 'pri-hak-bih', label: 'BIH Prisika', url: 'https://m.hak.hr/kamera.asp?g=2&k=180' }),
-      externalCamera({ id: 'pri-bihamk', label: 'Prisika / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', note: 'BIHAMK popis kamera uključuje GP Prisika (Aržano).' }),
+      externalCamera({ id: 'pri-bihamk', label: 'Prisika / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Prisika (Aržano)', 'GP Prisika', 'Prisika', 'Aržano', 'Arzano'], note: 'BIHAMK popis kamera uključuje GP Prisika (Aržano).' }),
     ],
     historyBase: { cars: 110, trucks: 36, buses: 5, wait: 20 }, bestDays: ['Utorak', 'Srijeda', 'Nedjelja navečer'],
   }),
@@ -307,7 +310,7 @@ const ADDITIONAL_CROSSINGS = [
     },
     cameras: [
       externalCamera({ id: 'cg-hak-bih', label: 'BIH Crveni Grm', url: 'https://m.hak.hr/kamera.asp?g=2&k=181' }),
-      externalCamera({ id: 'cg-bihamk', label: 'Crveni Grm / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', note: 'BIHAMK popis kamera uključuje GP Crveni Grm.' }),
+      externalCamera({ id: 'cg-bihamk', label: 'Crveni Grm / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Crveni Grm', 'Crveni Grm'], note: 'BIHAMK popis kamera uključuje GP Crveni Grm.' }),
     ],
     historyBase: { cars: 156, trucks: 50, buses: 8, wait: 30 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Nedjelja navečer'],
   }),
@@ -548,6 +551,7 @@ const CROSSINGS = [
         id: 'gv-hak-queue-9',
         label: 'Gornji Varoš · kamera 9',
         source: 'HAK izvor',
+        imageIndex: 0,
         status: 'izvor se otvara u novoj kartici',
         type: 'iframe',
         url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
@@ -569,6 +573,7 @@ const CROSSINGS = [
         id: 'gv-hak-plaza-4',
         label: 'Gornji Varoš · zona kontrole',
         source: 'HAK izvor',
+        imageIndex: 1,
         status: 'izvor se otvara u novoj kartici',
         type: 'iframe',
         url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
@@ -647,6 +652,7 @@ const CROSSINGS = [
         type: 'iframe',
         url: 'https://bihamk.ba/spi/kamere',
         externalUrl: 'https://bihamk.ba/spi/kamere',
+        matchTexts: ['GP Bijača', 'Bijača', 'Bijaca'],
         note: 'BIHAMK popis kamera uključuje GP Bijača. Izvor se otvara u novoj kartici kad direktan prikaz nije dostupan.',
       },
     ],
