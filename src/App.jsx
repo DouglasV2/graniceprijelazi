@@ -688,8 +688,8 @@ const CROSSINGS = [
         source: 'HAK direktna slika',
         status: 'aktivna slika iz javnog izvora',
         type: 'image',
-        url: 'https://m.hak.hr/kamera.asp?g=8&k=137',
-        externalUrl: 'https://m.hak.hr/kamera.asp?g=8&k=137',
+        url: 'https://m.hak.hr/kamera.asp?g=2&k=137',
+        externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=137',
         note: 'HAK kameru Nova Sela/Bijača treba tražiti u grupi A10, ne u grupi Granični prijelazi.',
       },
       {
@@ -698,8 +698,8 @@ const CROSSINGS = [
         source: 'HAK direktna slika',
         status: 'aktivna slika iz javnog izvora',
         type: 'image',
-        url: 'https://m.hak.hr/kamera.asp?g=8&k=137',
-        externalUrl: 'https://m.hak.hr/kamera.asp?g=8&k=137',
+        url: 'https://m.hak.hr/kamera.asp?g=2&k=137',
+        externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=137',
         note: 'Druga HAK slika s iste stranice Nova Sela/Bijača.',
       },
       {
@@ -3046,7 +3046,7 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   );
 }
 
-function MapView({ selectedDirection, selectedCrossing, setSelectedCrossing, requestedMode = 'map', overrides = {}, stateVersion = 0 }) {
+function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, setSelectedCrossing, requestedMode = 'map', overrides = {}, stateVersion = 0 }) {
   const [mode, setMode] = useState(requestedMode || 'map');
   const [showTraffic, setShowTraffic] = useState(true);
   const [focusTraffic, setFocusTraffic] = useState(true);
@@ -3088,6 +3088,10 @@ function MapView({ selectedDirection, selectedCrossing, setSelectedCrossing, req
           <button className={mode === 'camera' ? 'active' : ''} onClick={() => setMode('camera')}><Camera size={15} /> Kamere</button>
         </div>
       </div>
+
+      {typeof setSelectedDirection === 'function' && (
+        <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} compact />
+      )}
 
       {mode === 'map' && (
         <div className="map-tool-panel clean-map-tools">
@@ -4665,7 +4669,7 @@ export default function App() {
 
       {activeTab === 'Pregled' && <PublicView selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} trackedIds={trackedIds} toggleTracked={toggleTracked} openDetail={setDetailCrossing} overrides={overrides} addNotificationRule={addNotificationRule} />}
       {activeTab === 'Moj put' && <TripPlanner selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} tripCrossing={tripCrossing} setTripCrossing={setTripCrossing} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} setActiveTab={setActiveTab} overrides={overrides} currentUser={currentUser} />}
-      {activeTab === 'Mapa' && <MapView selectedDirection={selectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} requestedMode={mapModeRequest} overrides={overrides} stateVersion={serverStateVersion} />}
+      {activeTab === 'Mapa' && <MapView selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} requestedMode={mapModeRequest} overrides={overrides} stateVersion={serverStateVersion} />}
       {activeTab === 'Dojave' && <ChatView posts={posts} setPosts={setPosts} currentUser={viewer} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} selectedDirection={selectedDirection} trackedIds={trackedIds} toggleTracked={toggleTracked} />}
       {activeTab === 'Povijest' && <HistoryView selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} selectedDirection={selectedDirection} />}
       {activeTab === 'Admin' && viewer.role === 'admin' && currentUser && <AdminView selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} overrides={overrides} setOverrides={setOverrides} posts={posts} currentUser={currentUser} />}
