@@ -1685,8 +1685,37 @@ function estimateWaitFromGoogleRoute(route = {}) {
 function isSoftUpperBoundSource(item = {}) {
   if (item.metadata?.softUpperBound === true) return true;
   const text = normalizeAscii(`${item.rawStatus || ''} ${item.rawText || ''}`);
-  return /ni(?:je|su)\s+duz\w*\s+od\s+\d{1,3}\s*(?:minuta|min|m)/.test(text)
-    || /(?:zadrzavanj\w+|cekanj\w+)\s+(?:\w+\s+)?do\s+\d{1,3}\s*(?:minuta|min)\b/.test(text);
+  // Soft-bound textual patterns: "nije/nisu duže od X min", "čekanje do X min".
+  if (/ni(?:je|su)\s+duz\w*\s+od\s+\d{1,3}\s*(?:minuta|min|m)/.test(text)) return true;
+  if (/(?:zadrzavanj\w+|cekanj\w+)\s+(?:\w+\s+)?do\s+\d{1,3}\s*(?:minuta|min)\b/.test(text)) return true;
+  // "Pojačan ulaz/izlaz" is qualitative — no concrete minute count, treat as soft.
+  // This also covers legacy snapshots persisted before the parser was fixed.
+  if (/pojacan\w*\s+(?:je\s+)?(?:ulaz|izlaz)/.test(text)) return true;
+  return false;
+}
+
+// Legacy snapshots persisted before the parser fix can still have raw 45-min values
+// with hard confidence/weight. Re-normalize at read time so they cap correctly until
+// the storage rolls them off.
+function sanitizeLegacyPublicSignal(item) {
+  if (!item) return item;
+  if (item.metadata?.softUpperBound === true) return item;
+  if (!isSoftUpperBoundSource(item)) return item;
+  const originalWait = Number(item.normalizedWaitMin || 0);
+  if (!Number.isFinite(originalWait) || originalWait <= 18) return item;
+  return {
+    ...item,
+    normalizedWaitMin: Math.max(6, Math.round(originalWait * 0.35)),
+    confidence: Math.min(Number(item.confidence || 70), 64),
+    weight: Math.min(Number(item.weight || 1), 0.5),
+    metadata: {
+      ...(item.metadata || {}),
+      softUpperBound: true,
+      softMaxMinutes: originalWait,
+      parser: item.metadata?.parser || 'legacy-rewrite',
+      legacyOriginalWait: originalWait,
+    },
+  };
 }
 
 function googleLooksClear(signal = null) {
@@ -1752,6 +1781,13 @@ function estimateRangeFromSignals(wait, { googleSignal = null, cameraSignal = nu
   };
 }
 
+// Traffic sanity caps follow the user's "Google Maps colour" mental model:
+//   - Google blue (clear road, delay ≤ 2 min)           → wait ≤ 15 min
+//   - Google yellow/orange (slow, delay 2–8 min)        → wait ≤ 35 min
+//   - Google red (heavy, delay ≥ 8 min)                 → no cap (trust signals)
+// Hard explicit numbers from BIHAMK/HAK ("Eksplicitno čekanje 45 min"), strong camera
+// queues, and driver reports bypass the cap because they signal real congestion the
+// road-traffic API may have missed.
 function applyTrafficSanityCaps(wait, { googleSignal = null, cameraSignal = null, publicSignals = [], reportAvg = null } = {}) {
   let finalWait = clampWait(wait);
   if (finalWait === null) return { wait: null, adjusted: false, reason: '' };
@@ -1760,49 +1796,43 @@ function applyTrafficSanityCaps(wait, { googleSignal = null, cameraSignal = null
   const softPublicOnly = publicSignals.length > 0 && publicSignals.every(isSoftUpperBoundSource);
   const hasHardPublic = publicSignals.some((item) => !isSoftUpperBoundSource(item) && Number(item.normalizedWaitMin || 0) >= 20);
   const clearGoogle = googleLooksClear(googleSignal);
+  const slowGoogle = googleLooksSlow(googleSignal) && !googleLooksHeavy(googleSignal);
   const clearCamera = cameraLooksClear(cameraSignal);
   const strongCameraQueue = cameraShowsQueue(cameraSignal);
 
+  // Driver reports and heavy Google traffic bypass — those are evidence of real congestion.
   if (hasDriverReports || googleLooksHeavy(googleSignal)) return { wait: finalWait, adjusted: false, reason: '' };
 
-  if (clearGoogle && softPublicOnly && (!cameraSignal || clearCamera)) {
-    const capped = Math.min(finalWait, cameraSignal ? 12 : 14);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google promet je normalan; okvirna procjena je prilagođena prema dostupnim podacima.' };
-  }
-
-  if (clearGoogle && clearCamera && !hasHardPublic) {
-    const capped = Math.min(finalWait, 15);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google i kamera zajedno pokazuju da je prijelaz prohodan.' };
-  }
-
-  if (clearGoogle && !strongCameraQueue && softPublicOnly) {
-    const capped = Math.min(finalWait, 16);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google promet je normalan; prikazano čekanje je okvirna procjena, ne potvrđena vrijednost.' };
-  }
-
-  if (clearGoogle && cameraSignal && !strongCameraQueue && !hasHardPublic) {
-    const capped = Math.min(finalWait, 20);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google ne bilježi cestovni zastoj; procjena čekanja je umjerena.' };
-  }
-
-  // Camera overrides clear Google only when it shows strong queue (possible local congestion Google missed).
+  // === Google BLUE (clear road) → max 15 min ===
+  // A blue road in Google Maps means there is no traffic delay on the approach. The
+  // only way the wait can still be high is a stationary queue AT the booth itself,
+  // which we detect via camera (strongCameraQueue) or an explicit hard public number.
   if (clearGoogle && strongCameraQueue) {
+    // Camera disagrees with Google — possible booth queue Google can't see. Allow 25.
     const capped = Math.min(finalWait, 25);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Kamera pokazuje kolonu na prijelazu. Moguće je da lokalni zastoj nije vidljiv u prometnim podacima.' };
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google promet je normalan, ali kamera pokazuje kolonu na samom prijelazu. Procjena je ograničena na umjereno čekanje.' };
+  }
+  if (clearGoogle && hasHardPublic) {
+    // Hard explicit BIHAMK/HAK number disagrees with Google — split the difference.
+    const capped = Math.min(finalWait, 22);
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google promet je normalan, ali službeni izvor navodi konkretno čekanje. Procjena je umjerena.' };
+  }
+  if (clearGoogle && finalWait > 15) {
+    // Blue route, no strong-queue camera, no hard public number → must be ≤ 15.
+    return { wait: 15, adjusted: true, reason: 'Google promet je normalan (plava ruta) i nema vidljive kolone na kameri; čekanje se zadržava na maksimalno 15 min.' };
   }
 
-  // Last-resort: if Google is clear, never allow > 25 min regardless of other soft signals.
-  if (clearGoogle && finalWait > 25) {
-    return { wait: 25, adjusted: true, reason: 'Google promet je normalan; bez snažnijih signala procjena čekanja se zadržava na umjerenoj razini.' };
+  // === Google YELLOW/ORANGE (slow road) → max 35 min unless camera shows worse ===
+  if (slowGoogle && !strongCameraQueue && !hasHardPublic && finalWait > 35) {
+    return { wait: 35, adjusted: true, reason: 'Google promet je pojačan ali ne kritičan; bez tvrdog signala iz drugih izvora čekanje se zadržava ispod 35 min.' };
   }
 
-  // No live Google snapshot at all (it expired or scheduler skipped). In that case the
-  // weighted average can be dominated by qualitative HAK/BIHAMK "pojačan ulaz" text.
-  // When the camera shows no queue, cap the displayed estimate so we never show a fake
-  // high value just because the road-traffic signal is missing.
+  // === No Google snapshot at all (refresh failed / stale > 8h) ===
+  // The route panel may still show fresh Google colour, but the wait pipeline does not.
+  // Fall back to conservative caps based on camera + soft public.
   if (!googleSignal && clearCamera && !hasHardPublic) {
-    const capped = Math.min(finalWait, 20);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Live prometna provjera trenutno nedostaje, ali kamera ne pokazuje kolonu. Procjena je oprezna.' };
+    const capped = Math.min(finalWait, 18);
+    return { wait: capped, adjusted: capped !== finalWait, reason: 'Live prometna provjera trenutno nedostaje, ali kamera ne pokazuje kolonu.' };
   }
   if (!googleSignal && cameraSignal && !strongCameraQueue && !hasHardPublic && softPublicOnly) {
     const capped = Math.min(finalWait, 22);
@@ -1816,6 +1846,46 @@ function applyTrafficSanityCaps(wait, { googleSignal = null, cameraSignal = null
   return { wait: finalWait, adjusted: false, reason: '' };
 }
 
+// Builds a single Google source snapshot from a freshly computed route payload.
+// Extracted so the /api/routes/:crossingId handler can re-use the same shape when a
+// user opens the detail view — we immediately persist that fresh signal so the wait
+// estimator no longer relies on an aged scheduler snapshot.
+function buildGoogleSnapshotFromRoute(crossing, direction, payload) {
+  const route = payload?.routes?.[0];
+  if (!route) return null;
+  const googleDelay = Math.max(0, Number(route.delayMinutes || 0));
+  const ratio = Math.max(0.1, Number(route.ratio || 1) || 1);
+  const estimate = estimateWaitFromGoogleRoute(route);
+  const estimatedWait = clampWait(estimate.wait);
+  return {
+    crossingId: crossing.id,
+    direction,
+    sourceName: 'Google Routes',
+    sourceType: 'google-traffic-estimate',
+    sourceUrl: '',
+    rawStatus: `Google traffic ${estimate.level}; delay ${googleDelay} min u kontrolnoj zoni; route ratio ${ratio}`,
+    rawText: `${payload.source || 'Google Routes API'} · ${payload.note || ''}`.slice(0, 1200),
+    rawWaitMin: estimatedWait,
+    normalizedWaitMin: estimatedWait,
+    confidence: Math.max(46, Math.min(78, estimate.confidence + (route.routeGuard?.ok ? 4 : 0))),
+    weight: estimate.weight,
+    metadata: {
+      adapter: 'google-routes-zone-estimate',
+      durationMinutes: route.durationMinutes,
+      staticMinutes: route.staticMinutes,
+      delayMinutes: route.delayMinutes,
+      distanceKm: route.distanceKm,
+      ratio,
+      level: estimate.level,
+      rangeMin: estimate.rangeMin,
+      rangeMax: estimate.rangeMax,
+      reason: estimate.reason,
+      routeGuard: route.routeGuard || null,
+    },
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
 async function buildGoogleTrafficSnapshots() {
   if (!GOOGLE_TRAFFIC_ESTIMATE_ENABLED || !serverKey) return [];
   const jobs = [];
@@ -1824,39 +1894,7 @@ async function buildGoogleTrafficSnapshots() {
   }
   const snapshots = await mapWithConcurrency(jobs, GOOGLE_TRAFFIC_REFRESH_CONCURRENCY, async ({ crossing, direction }) => {
     const payload = await computeCrossingRoutes(crossing.id, direction);
-    const route = payload.routes?.[0];
-    if (!route) return null;
-    const googleDelay = Math.max(0, Number(route.delayMinutes || 0));
-    const ratio = Math.max(0.1, Number(route.ratio || 1) || 1);
-    const estimate = estimateWaitFromGoogleRoute(route);
-    const estimatedWait = clampWait(estimate.wait);
-    return {
-      crossingId: crossing.id,
-      direction,
-      sourceName: 'Google Routes',
-      sourceType: 'google-traffic-estimate',
-      sourceUrl: '',
-      rawStatus: `Google traffic ${estimate.level}; delay ${googleDelay} min u kontrolnoj zoni; route ratio ${ratio}`,
-      rawText: `${payload.source || 'Google Routes API'} · ${payload.note || ''}`.slice(0, 1200),
-      rawWaitMin: estimatedWait,
-      normalizedWaitMin: estimatedWait,
-      confidence: Math.max(46, Math.min(78, estimate.confidence + (route.routeGuard?.ok ? 4 : 0))),
-      weight: estimate.weight,
-      metadata: {
-        adapter: 'google-routes-zone-estimate',
-        durationMinutes: route.durationMinutes,
-        staticMinutes: route.staticMinutes,
-        delayMinutes: route.delayMinutes,
-        distanceKm: route.distanceKm,
-        ratio,
-        level: estimate.level,
-        rangeMin: estimate.rangeMin,
-        rangeMax: estimate.rangeMax,
-        reason: estimate.reason,
-        routeGuard: route.routeGuard || null,
-      },
-      fetchedAt: new Date().toISOString(),
-    };
+    return buildGoogleSnapshotFromRoute(crossing, direction, payload);
   });
   return snapshots.filter(Boolean);
 }
@@ -1932,6 +1970,62 @@ function uniqueSignalNames(candidates = []) {
   return [...new Set(candidates.map((item) => item.label).filter(Boolean))];
 }
 
+// Age decay: a signal's effective weight shrinks exponentially with its age in minutes.
+// halfLifeMinutes=25 means a 25-min-old signal carries 50% weight, 50-min-old 25%, etc.
+// This prevents stale snapshots from dragging the estimate when fresh data exists.
+function ageDecayMultiplier(fetchedAt, halfLifeMinutes = 25) {
+  if (!fetchedAt) return 0.5;
+  const ageMs = Date.now() - new Date(fetchedAt).getTime();
+  if (!Number.isFinite(ageMs) || ageMs < 0) return 1;
+  const ageMin = ageMs / 60000;
+  return Math.pow(0.5, ageMin / halfLifeMinutes);
+}
+
+// Trimmed-mean wait from the last N camera snapshots within the freshness window.
+// Drops the highest and lowest before averaging; resilient to a single bad frame
+// (sun glare, truck blocking ROI, etc.). Falls back to single signal when N<3.
+function trimmedMeanCameraSignal(snapshots = []) {
+  const valid = snapshots
+    .filter((item) => item && Number.isFinite(Number(item.normalizedWaitMin)))
+    .sort((a, b) => new Date(b.fetchedAt).getTime() - new Date(a.fetchedAt).getTime())
+    .slice(0, 5);
+  if (!valid.length) return null;
+  if (valid.length < 3) return valid[0];
+  const sorted = [...valid].sort((a, b) => Number(a.normalizedWaitMin) - Number(b.normalizedWaitMin));
+  const trimmed = sorted.slice(1, -1);
+  const avgWait = Math.round(trimmed.reduce((sum, item) => sum + Number(item.normalizedWaitMin), 0) / trimmed.length);
+  const avgConfidence = Math.round(trimmed.reduce((sum, item) => sum + Number(item.confidence || 60), 0) / trimmed.length);
+  const totalQueue = trimmed.reduce((sum, item) => sum + Number(item.metadata?.queueVehicles || 0), 0) / trimmed.length;
+  const totalFlow = trimmed.reduce((sum, item) => sum + Number(item.metadata?.flowVehicles15 ?? item.metadata?.passed15 ?? 0), 0) / trimmed.length;
+  const newest = valid[0];
+  return {
+    ...newest,
+    normalizedWaitMin: avgWait,
+    confidence: avgConfidence,
+    metadata: {
+      ...(newest.metadata || {}),
+      queueVehicles: Math.round(totalQueue),
+      flowVehicles15: Math.round(totalFlow),
+      passed15: Math.round(totalFlow),
+      cameraSnapshotsAveraged: trimmed.length,
+    },
+  };
+}
+
+// Cross-source agreement: when independent public sources agree within ±5 min,
+// boost confidence. When they disagree by >25 min, penalise.
+function crossSourceAgreement(publicSignals = []) {
+  const waits = publicSignals
+    .filter((item) => Number.isFinite(Number(item.normalizedWaitMin)))
+    .map((item) => Number(item.normalizedWaitMin));
+  if (waits.length < 2) return { boost: 0, spread: 0, agreement: 'single-source' };
+  const spread = Math.max(...waits) - Math.min(...waits);
+  if (spread <= 5) return { boost: 15, spread, agreement: 'strong' };
+  if (spread <= 12) return { boost: 6, spread, agreement: 'moderate' };
+  if (spread > 25) return { boost: -10, spread, agreement: 'conflicting' };
+  return { boost: 0, spread, agreement: 'weak' };
+}
+
 async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'car', storeInput = null) {
   const store = storeInput || await readAppStore();
   const overrideKey = `${crossing.id}:${direction}`;
@@ -1953,45 +2047,67 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
   }
 
   const latestSources = await readLatestSourceSnapshots(crossing.id, direction, 8);
-  const publicSignals = latestSources.filter((item) => !['camera-snapshot-model', 'google-traffic-estimate'].includes(item.sourceType) && item.normalizedWaitMin !== null && item.normalizedWaitMin !== undefined);
-  const cameraSignal = choosePublicSourceSignal(latestSources.filter((item) => item.sourceType === 'camera-snapshot-model'));
+  // Re-normalize any legacy public snapshots that pre-date the soft-bound parser fix
+  // (e.g., a stored "Pojačan = 45 min HARD" entry from yesterday's run).
+  const publicSignalsRaw = latestSources.filter((item) => !['camera-snapshot-model', 'google-traffic-estimate'].includes(item.sourceType) && item.normalizedWaitMin !== null && item.normalizedWaitMin !== undefined);
+  const publicSignals = publicSignalsRaw.map(sanitizeLegacyPublicSignal);
+  // Camera: use trimmed-mean of last 5 snapshots within the 8h window to reject outliers.
+  const cameraSnapshots = latestSources.filter((item) => item.sourceType === 'camera-snapshot-model');
+  const cameraSignal = trimmedMeanCameraSignal(cameraSnapshots) || choosePublicSourceSignal(cameraSnapshots);
   const googleSignal = choosePublicSourceSignal(latestSources.filter((item) => item.sourceType === 'google-traffic-estimate'));
   const reports = reportSignals(store, crossing.id, direction, 2);
   const reportAvg = reports.length ? Math.round(reports.reduce((sum, item) => sum + Number(item.wait || 0), 0) / reports.length) : null;
+  // Accept a single fresh driver report (<30 min) as a low-weight signal; previously we required ≥2.
+  const freshReports = reports.filter((r) => Date.now() - new Date(r.createdAt).getTime() < 30 * 60 * 1000);
+  const acceptReports = reports.length >= 2 || freshReports.length >= 1;
 
   const candidates = [];
   publicSignals.forEach((item) => {
     const softUpperBound = isSoftUpperBoundSource(item);
+    const ageMult = ageDecayMultiplier(item.fetchedAt);
     candidates.push({
       wait: waitForVehicle(item.normalizedWaitMin, multiplier, vehicle),
-      weight: Math.max(0.1, Number(item.weight || 1)) * Math.max(35, Number(item.confidence || 70)) * (softUpperBound ? 0.82 : 1.15),
+      weight: Math.max(0.1, Number(item.weight || 1)) * Math.max(35, Number(item.confidence || 70)) * (softUpperBound ? 0.82 : 1.15) * ageMult,
       label: sourceDisplayName(item.sourceName),
       sourceType: item.sourceType,
       softUpperBound,
       updatedAt: item.fetchedAt,
+      ageMultiplier: ageMult,
     });
   });
-  if (cameraSignal) candidates.push({
-    wait: waitForVehicle(cameraSignal.normalizedWaitMin ?? staticWait, multiplier, vehicle),
-    weight: Math.max(0.1, Number(cameraSignal.weight || 0.72)) * Math.max(35, Number(cameraSignal.confidence || 58)) * (publicSignals.length ? 0.9 : 1.08) * (googleLooksClear(googleSignal) && cameraLooksClear(cameraSignal) ? 1.18 : 1),
-    label: 'Kamera',
-    sourceType: cameraSignal.sourceType,
-    updatedAt: cameraSignal.fetchedAt,
-  });
-  if (googleSignal) candidates.push({
-    wait: waitForVehicle(googleSignal.normalizedWaitMin ?? staticWait, multiplier, vehicle),
-    weight: Math.max(0.1, Number(googleSignal.weight || 0.84)) * Math.max(35, Number(googleSignal.confidence || 62)) * (publicSignals.length ? 0.86 : 1.02),
-    label: 'Google',
-    sourceType: googleSignal.sourceType,
-    updatedAt: googleSignal.fetchedAt,
-  });
-  if (reportAvg !== null && reports.length >= 2) candidates.push({
-    wait: waitForVehicle(reportAvg, multiplier, vehicle),
-    weight: Math.min(90, 32 + reports.length * 9),
-    label: 'Dojave',
-    sourceType: 'driver-reports',
-    updatedAt: reports[0]?.createdAt || new Date().toISOString(),
-  });
+  if (cameraSignal) {
+    const ageMult = ageDecayMultiplier(cameraSignal.fetchedAt);
+    candidates.push({
+      wait: waitForVehicle(cameraSignal.normalizedWaitMin ?? staticWait, multiplier, vehicle),
+      weight: Math.max(0.1, Number(cameraSignal.weight || 0.72)) * Math.max(35, Number(cameraSignal.confidence || 58)) * (publicSignals.length ? 0.9 : 1.08) * (googleLooksClear(googleSignal) && cameraLooksClear(cameraSignal) ? 1.18 : 1) * ageMult,
+      label: 'Kamera',
+      sourceType: cameraSignal.sourceType,
+      updatedAt: cameraSignal.fetchedAt,
+      ageMultiplier: ageMult,
+    });
+  }
+  if (googleSignal) {
+    const ageMult = ageDecayMultiplier(googleSignal.fetchedAt, 18);
+    candidates.push({
+      wait: waitForVehicle(googleSignal.normalizedWaitMin ?? staticWait, multiplier, vehicle),
+      weight: Math.max(0.1, Number(googleSignal.weight || 0.84)) * Math.max(35, Number(googleSignal.confidence || 62)) * (publicSignals.length ? 0.86 : 1.02) * ageMult,
+      label: 'Google',
+      sourceType: googleSignal.sourceType,
+      updatedAt: googleSignal.fetchedAt,
+      ageMultiplier: ageMult,
+    });
+  }
+  if (reportAvg !== null && acceptReports) {
+    // Single fresh report ≈ weight 38; two reports ≈ 50; saturates at 90.
+    const baseWeight = Math.min(90, 28 + reports.length * 11 + (freshReports.length ? 10 : 0));
+    candidates.push({
+      wait: waitForVehicle(reportAvg, multiplier, vehicle),
+      weight: baseWeight,
+      label: 'Dojave',
+      sourceType: 'driver-reports',
+      updatedAt: reports[0]?.createdAt || new Date().toISOString(),
+    });
+  }
 
   const blendedWait = weightedWait(candidates);
   if (blendedWait !== null) {
@@ -2002,7 +2118,13 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     const hasMultipleOfficialSources = uniqueSignalNames(candidates.filter((item) => item.sourceType === 'public-text-status')).length > 1;
     const combined = signalNames.length > 1 || hasMultipleOfficialSources;
     const bestCandidate = [...candidates].sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0))[0];
+    const agreement = crossSourceAgreement(publicSignals);
     const googleClearNote = googleLooksClear(googleSignal) ? ' Google promet je normalan, ali to ne znači nulto čekanje.' : '';
+    const agreementNote = agreement.agreement === 'strong'
+      ? ' Više izvora se slaže pa je pouzdanost veća.'
+      : agreement.agreement === 'conflicting'
+        ? ' Izvori se ne slažu pa je raspon procjene širi.'
+        : '';
     return {
       wait: finalWait,
       rangeMin: range.rangeMin,
@@ -2011,16 +2133,18 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       label: combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
       className: combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
       sourceType: combined ? 'combined-estimate' : bestCandidate.sourceType,
-      confidence: Math.min(96, Math.round(Math.max(...candidates.map((item) => Number(item.weight || 0))) / 1.2 + (combined ? 5 : 0))),
+      confidence: Math.max(15, Math.min(96, Math.round(Math.max(...candidates.map((item) => Number(item.weight || 0))) / 1.2 + (combined ? 5 : 0) + agreement.boost))),
       hasGoogleSignal: Boolean(googleSignal),
       hasCameraSignal: Boolean(cameraSignal),
       hasStrongCameraQueue: cameraShowsQueue(cameraSignal),
       hasSoftUpperBoundPublic: publicSignals.length > 0 && publicSignals.every(isSoftUpperBoundSource),
+      sourceAgreement: agreement.agreement,
+      sourceSpreadMinutes: agreement.spread,
       note: sanity.adjusted
-        ? `${sanity.reason}${googleClearNote}`
+        ? `${sanity.reason}${googleClearNote}${agreementNote}`
         : combined
-          ? `Procjena se temelji na kombinaciji dostupnih izvora: ${signalNames.join(', ')}.${googleClearNote}`
-          : `${bestCandidate.label} je trenutno najjači izvor za ovaj smjer.${googleClearNote}`,
+          ? `Procjena se temelji na kombinaciji dostupnih izvora: ${signalNames.join(', ')}.${googleClearNote}${agreementNote}`
+          : `${bestCandidate.label} je trenutno najjači izvor za ovaj smjer.${googleClearNote}${agreementNote}`,
       signals: latestSources,
       updatedAt: candidates.map((item) => item.updatedAt).filter(Boolean).sort().at(-1) || new Date().toISOString(),
     };
@@ -2061,6 +2185,40 @@ async function effectiveBorderDelay(crossing, direction = 'toBih', vehicle = 'ca
   return signal.wait;
 }
 
+// Server-side EMA smoothing cache. Each entry holds the last displayed wait per
+// (crossing,direction). On the next /api/public/state poll the new raw wait is blended
+// with the previous one to suppress flicker (12 → 45 → 12 spikes from a noisy snapshot).
+// Big jumps (Δ > 25 min) bypass smoothing because they likely reflect a real change.
+const emaWaitCache = new Map();
+const EMA_TTL_MS = 30 * 60 * 1000;
+const EMA_ALPHA = 0.65; // weight on new value
+
+function emaSmoothWait(key, rawWait) {
+  if (!Number.isFinite(rawWait)) return rawWait;
+  const now = Date.now();
+  const prev = emaWaitCache.get(key);
+  if (!prev || now - prev.updatedAt > EMA_TTL_MS) {
+    emaWaitCache.set(key, { wait: rawWait, updatedAt: now });
+    return rawWait;
+  }
+  const delta = Math.abs(prev.wait - rawWait);
+  if (delta > 25) {
+    emaWaitCache.set(key, { wait: rawWait, updatedAt: now });
+    return rawWait;
+  }
+  const smoothed = Math.round(EMA_ALPHA * rawWait + (1 - EMA_ALPHA) * prev.wait);
+  emaWaitCache.set(key, { wait: smoothed, updatedAt: now });
+  return smoothed;
+}
+
+// Drop cache entries older than the TTL window. Called periodically to avoid memory drift.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of emaWaitCache) {
+    if (now - entry.updatedAt > EMA_TTL_MS) emaWaitCache.delete(key);
+  }
+}, 15 * 60 * 1000).unref?.();
+
 async function buildEffectiveWaitMaps(store) {
   const effectiveWaits = {};
   const waitSources = {};
@@ -2068,8 +2226,15 @@ async function buildEffectiveWaitMaps(store) {
     for (const direction of ['toBih', 'toHr']) {
       const signal = await effectiveBorderSignal(crossing, direction, 'car', store);
       const key = `${crossing.id}:${direction}`;
-      if (signal.displayReady !== false && Number.isFinite(Number(signal.wait))) {
-        effectiveWaits[key] = signal.wait;
+      const isLive = signal.displayReady !== false && Number.isFinite(Number(signal.wait));
+      if (isLive) {
+        // Admin override and driver-report-driven values bypass smoothing — they are
+        // already authoritative human signals that should appear instantly.
+        const bypassSmoothing = signal.sourceType === 'admin-override' || signal.sourceType === 'driver-reports';
+        effectiveWaits[key] = bypassSmoothing ? Number(signal.wait) : emaSmoothWait(key, Number(signal.wait));
+      } else {
+        // Clear the cache when source goes dark so we don't blend stale values back in.
+        emaWaitCache.delete(key);
       }
       waitSources[key] = {
         label: signal.label,
@@ -2084,6 +2249,8 @@ async function buildEffectiveWaitMaps(store) {
         hasCameraSignal: signal.hasCameraSignal,
         hasStrongCameraQueue: signal.hasStrongCameraQueue,
         hasSoftUpperBoundPublic: signal.hasSoftUpperBoundPublic,
+        sourceAgreement: signal.sourceAgreement,
+        sourceSpreadMinutes: signal.sourceSpreadMinutes,
         displayReady: signal.displayReady !== false,
         updatedAt: signal.updatedAt,
       };
@@ -4673,7 +4840,18 @@ app.get('/api/routes/:crossingId', async (req, res) => {
   }
 
   try {
-    res.json(await computeCrossingRoutes(crossingId, direction));
+    const payload = await computeCrossingRoutes(crossingId, direction);
+    // Production reliability: whenever a user opens a crossing we just fetched fresh
+    // Google traffic data for it. Persist that as a Google source snapshot so the wait
+    // estimator stops relying on an aged scheduler snapshot (previously the route panel
+    // showed a 1-min blue road while the wait still said 45 min from an 8h-old run).
+    try {
+      const googleSnap = buildGoogleSnapshotFromRoute(crossing, direction, payload);
+      if (googleSnap) await insertSourceSnapshots([googleSnap]);
+    } catch (snapErr) {
+      console.warn('[routes-api/google-snapshot-cache]', snapErr.message);
+    }
+    res.json(payload);
   } catch (error) {
     console.error('[routes-api]', error);
     if (isLikelyClosedOrBlockedRoute(error, crossing, direction)) {
@@ -4779,11 +4957,17 @@ export {
   // Exposed for unit tests of pure helpers (no I/O).
   parseDirectionalWaitsFromText,
   isSoftUpperBoundSource,
+  sanitizeLegacyPublicSignal,
   applyTrafficSanityCaps,
   googleLooksClear,
+  googleLooksSlow,
   googleLooksHeavy,
   cameraLooksClear,
   cameraShowsQueue,
+  ageDecayMultiplier,
+  trimmedMeanCameraSignal,
+  crossSourceAgreement,
+  emaSmoothWait,
 };
 
 function assertProductionSafety() {

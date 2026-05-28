@@ -101,18 +101,18 @@ describe('parseDirectionalWaitsFromText — "Pojačan ulaz/izlaz" is a soft uppe
   });
 });
 
-describe('applyTrafficSanityCaps — Google snapshot fresh and clear', () => {
-  it('soft public + clear Google + no/clear camera → caps to 12–14', () => {
+describe('applyTrafficSanityCaps — Google snapshot fresh and clear (Google-Maps colour model)', () => {
+  it('blue route → wait max 15 min (user mental model: blue = max 15)', () => {
     const sanity = applyTrafficSanityCaps(35, {
       googleSignal: makeGoogleSignal({ delayMinutes: 1, level: 'normal' }),
       cameraSignal: makeCameraSignal({ wait: 6, queueVehicles: 1, flowVehicles15: 14 }),
       publicSignals: [makeSoftPublicSignal('Zadržavanja nisu duža od 30 min', 10)],
     });
     expect(sanity.adjusted).toBe(true);
-    expect(sanity.wait).toBeLessThanOrEqual(14);
+    expect(sanity.wait).toBeLessThanOrEqual(15);
   });
 
-  it('clear Google + clear camera + no hard public → caps to 15', () => {
+  it('blue route + clear camera + no hard public → also caps to 15', () => {
     const sanity = applyTrafficSanityCaps(45, {
       googleSignal: makeGoogleSignal({ delayMinutes: 1 }),
       cameraSignal: makeCameraSignal({ wait: 6 }),
@@ -121,13 +121,13 @@ describe('applyTrafficSanityCaps — Google snapshot fresh and clear', () => {
     expect(sanity.wait).toBeLessThanOrEqual(15);
   });
 
-  it('catch-all: Google clear but unusual combo > 25 → caps to 25', () => {
+  it('blue route + hard public number (BIHAMK 45 min) → caps to 22 (split difference)', () => {
     const sanity = applyTrafficSanityCaps(45, {
       googleSignal: makeGoogleSignal({ delayMinutes: 1 }),
       cameraSignal: null,
       publicSignals: [makeHardPublicSignal('Eksplicitno čekanje 45 min', 45)],
     });
-    expect(sanity.wait).toBeLessThanOrEqual(25);
+    expect(sanity.wait).toBeLessThanOrEqual(22);
   });
 });
 
