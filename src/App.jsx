@@ -3082,13 +3082,21 @@ function VehicleVisionOverlay() {
   return null;
 }
 
-function CameraFeed({ cam, refreshKey, signal }) {
-  const imageUrl = cam.previewImage || (cam.type === 'image' ? `${cam.url}?t=${refreshKey}` : '');
+function CameraFeed({ cam, refreshKey, signal, crossingId }) {
+  const proxiedImageUrl = cam.type === 'image' && crossingId
+    ? `/api/camera-image/${encodeURIComponent(crossingId)}/${encodeURIComponent(cam.id)}?t=${refreshKey}`
+    : '';
+  const imageUrl = cam.previewImage || proxiedImageUrl;
+  const [imageFailed, setImageFailed] = useState(false);
 
-  if (imageUrl) {
+  useEffect(() => {
+    setImageFailed(false);
+  }, [imageUrl]);
+
+  if (imageUrl && !imageFailed) {
     return (
       <div className="camera-live-frame vision-frame">
-        <img src={imageUrl} alt={`${cam.label} kamera`} loading="lazy" />
+        <img src={imageUrl} alt={`${cam.label} kamera`} loading="lazy" onError={() => setImageFailed(true)} />
         {cam.type !== 'image' && <ExternalCameraNotice cam={cam} compact />}
         <VehicleVisionOverlay signal={signal} />
       </div>
@@ -3334,7 +3342,7 @@ function CameraPanel({ crossing, selectedDirection }) {
       <div className="camera-grid">
         {crossing.cameras.map((cam) => (
           <article className={selectedSignal === cam.id ? 'camera-card camera-card-live selected' : 'camera-card camera-card-live'} key={cam.id}>
-            <CameraFeed cam={cam} refreshKey={refreshKey} signal={analytics.laneSignals.find((signal) => signal.id === cam.id)} />
+            <CameraFeed cam={cam} refreshKey={refreshKey} signal={analytics.laneSignals.find((signal) => signal.id === cam.id)} crossingId={crossing.id} />
             <div className="camera-copy">
               <div className="camera-copy-top">
                 <h3>{cam.label}</h3>

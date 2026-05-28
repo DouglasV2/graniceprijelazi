@@ -38,9 +38,9 @@ app.use((req, res, next) => {
       "script-src 'self' https://maps.googleapis.com https://maps.gstatic.com 'unsafe-inline'",
       "style-src 'self' https://fonts.googleapis.com https://maps.googleapis.com 'unsafe-inline'",
       "font-src 'self' https://fonts.gstatic.com",
-      "img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://m.hak.hr https://bihamk.ba https://ams-rs.com",
+      "img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.hak.hr https://*.bihamk.ba https://*.ams-rs.com https://*.satwork.net https://gpmaljevac.com",
       "connect-src 'self' https://maps.googleapis.com https://routes.googleapis.com",
-      "frame-src 'self' https://m.hak.hr https://bihamk.ba",
+      "frame-src 'self' https://*.hak.hr https://*.bihamk.ba https://*.ams-rs.com https://gpmaljevac.com",
       "frame-ancestors 'self'",
       "object-src 'none'",
       "base-uri 'self'",
@@ -2026,7 +2026,7 @@ function crossSourceAgreement(publicSignals = []) {
   return { boost: 0, spread, agreement: 'weak' };
 }
 
-async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'car', storeInput = null) {
+async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'car', storeInput = null, extraSourceSnapshots = []) {
   const store = storeInput || await readAppStore();
   const overrideKey = `${crossing.id}:${direction}`;
   const multiplier = vehicleMultiplier(crossing, direction, vehicle);
@@ -2046,7 +2046,11 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     };
   }
 
-  const latestSources = await readLatestSourceSnapshots(crossing.id, direction, 8);
+  const storedSources = await readLatestSourceSnapshots(crossing.id, direction, 8);
+  const requestSources = (Array.isArray(extraSourceSnapshots) ? extraSourceSnapshots : [])
+    .map((item) => normalizeSourceSnapshot({ ...item, crossingId: item.crossingId || crossing.id, direction: item.direction || direction }))
+    .filter((item) => item.crossingId === crossing.id && item.direction === direction);
+  const latestSources = [...requestSources, ...storedSources];
   // Re-normalize any legacy public snapshots that pre-date the soft-bound parser fix
   // (e.g., a stored "Pojačan = 45 min HARD" entry from yesterday's run).
   const publicSignalsRaw = latestSources.filter((item) => !['camera-snapshot-model', 'google-traffic-estimate'].includes(item.sourceType) && item.normalizedWaitMin !== null && item.normalizedWaitMin !== undefined);
@@ -3222,8 +3226,12 @@ function countPayloadTooLarge(counts = {}) {
   return Object.values(normalizeCounts(counts)).some((value) => value > 600);
 }
 
+function findKnownCamera(crossingId, cameraId) {
+  return (CAMERA_FEEDS[crossingId] || []).find((camera) => camera.id === cameraId) || null;
+}
+
 function isKnownCamera(crossingId, cameraId) {
-  return (CAMERA_FEEDS[crossingId] || []).some((camera) => camera.id === cameraId);
+  return Boolean(findKnownCamera(crossingId, cameraId));
 }
 
 function parseIngestTimestamp(value) {
@@ -4653,7 +4661,13 @@ async function computeJourneyOption(crossing, direction, originText, destination
   const guard = validateRouteGuard(route, crossing, direction, 'journey');
   if (!guard.ok) throw new Error(`Ruta preko ${crossing.shortName} nije prošla route guard: ${[...(guard.errors || []), ...(guard.warnings || [])].join('; ')}`);
 
-  const borderSignal = await effectiveBorderSignal(crossing, direction, vehicle);
+  const routeForSignal = { ...route, routeGuard: guard, routeQuality: 'verified' };
+  const googleSource = buildGoogleSnapshotFromRoute(crossing, direction, {
+    routes: [routeForSignal],
+    source: 'Google Routes API',
+    note: 'Svježa ruta iz usporedbe putovanja.',
+  });
+  const borderSignal = await effectiveBorderSignal(crossing, direction, vehicle, null, googleSource ? [googleSource] : []);
   const delayKnown = borderSignal.displayReady !== false && Number.isFinite(Number(borderSignal.wait));
   const delay = delayKnown ? Number(borderSignal.wait) : 0;
   return {
@@ -4673,7 +4687,7 @@ async function computeJourneyOption(crossing, direction, originText, destination
     distanceKm: route.distanceKm,
     googleDelayMinutes: route.delayMinutes,
     level: delayKnown ? delayLevel(route.delayMinutes + Math.max(0, delay - 20), route.ratio) : delayLevel(route.delayMinutes, route.ratio),
-    route: { ...route, routeGuard: guard, routeQuality: 'verified' },
+    route: routeForSignal,
     routeGuard: guard,
     routeQuality: 'verified',
     zone: route.zone,
@@ -4685,6 +4699,36 @@ function safeError(error) {
 }
 
 
+
+
+app.get('/api/camera-image/:crossingId/:cameraId', async (req, res) => {
+  const crossingId = String(req.params.crossingId || '').trim();
+  const cameraId = String(req.params.cameraId || '').trim();
+  if (!crossingId || !BORDER_CROSSINGS[crossingId]) {
+    res.status(404).json({ ok: false, error: 'Prijelaz nije pronađen.' });
+    return;
+  }
+
+  const camera = findKnownCamera(crossingId, cameraId);
+  if (!camera?.url) {
+    res.status(404).json({ ok: false, error: 'Kamera nije pronađena za ovaj prijelaz.' });
+    return;
+  }
+
+  try {
+    const image = await fetchBinaryWithTimeout(camera.url, { timeoutMs: CAMERA_SNAPSHOT_TIMEOUT_MS });
+    if (!String(image.contentType || '').startsWith('image/')) {
+      res.status(502).json({ ok: false, note: 'Izvor kamere nije vratio sliku.' });
+      return;
+    }
+    res.setHeader('Content-Type', image.contentType || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=20, stale-while-revalidate=40');
+    res.send(image.buffer);
+  } catch (error) {
+    console.warn('[camera-image-proxy]', crossingId, cameraId, error.message);
+    res.status(502).json({ ok: false, note: 'Slika kamere trenutno nije dostupna.', error: safeError(error) });
+  }
+});
 
 app.get('/api/camera-snapshots/:crossingId', async (req, res) => {
   const crossingId = String(req.params.crossingId || '').trim();
