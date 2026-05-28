@@ -789,7 +789,8 @@ const CAMERA_FEEDS = {
     },
   ],
   bijaca: [
-    { id: 'bij-hak-page', label: 'Nova Sela / Bijača', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=137' },
+    { id: 'bij-hak-ulaz-hr', label: 'Nova Sela / Bijača · ulaz u HR', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=8&k=137', imageIndex: 0, externalUrl: 'https://m.hak.hr/kamera.asp?g=8&k=137' },
+    { id: 'bij-hak-izlaz-hr', label: 'Nova Sela / Bijača · izlaz iz HR', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=8&k=137', imageIndex: 1, externalUrl: 'https://m.hak.hr/kamera.asp?g=8&k=137' },
     { id: 'bij-bihamk-page', label: 'Bijača / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Bijača', 'Bijača', 'Bijaca'] },
   ],
 };
@@ -945,8 +946,10 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       },
     },
     cameras: [
-      { id: 'bro-hak-slavonski', label: 'Slavonski Brod', url: 'https://m.hak.hr/kamera.asp?g=2&k=140' },
-      { id: 'bro-hak-bih', label: 'BIH Bosanski Brod', url: 'https://m.hak.hr/kamera.asp?g=2&k=184' },
+      { id: 'bro-hak-sb-ulaz-hr', label: 'Slavonski Brod · ulaz u HR', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=140', imageIndex: 0, externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=140' },
+      { id: 'bro-hak-sb-izlaz-hr', label: 'Slavonski Brod · izlaz iz HR', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=140', imageIndex: 1, externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=140' },
+      { id: 'bro-hak-bb-izlaz-hr', label: 'Bosanski Brod · izlaz iz HR u BiH', source: 'HAK/BIHAMK', url: 'https://m.hak.hr/kamera.asp?g=2&k=184', imageIndex: 0, externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=184' },
+      { id: 'bro-hak-bb-ulaz-hr', label: 'Bosanski Brod · ulaz u HR', source: 'HAK/BIHAMK', url: 'https://m.hak.hr/kamera.asp?g=2&k=184', imageIndex: 1, externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=184' },
       { id: 'bro-bihamk', label: 'Brod / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Brod - Izlaz iz BiH', 'GP Brod - Ulaz u BiH', 'GP Brod', 'Bosanski Brod'] },
     ],
   },
@@ -1760,7 +1763,21 @@ function cameraShowsQueue(signal = null) {
   const meta = signal.metadata || {};
   const wait = Number(signal.normalizedWaitMin || 0);
   const queue = Number(meta.queueVehicles ?? 0);
-  return wait >= 18 || queue >= 16;
+  const flow15 = Number(meta.flowVehicles15 ?? meta.passed15 ?? 0);
+
+  // "Kolona vidljiva" is intentionally conservative. A few stopped cars in the
+  // frame (for example Orašje HR→BiH) should not be presented as a full queue.
+  // We only mark a strong camera queue when the camera-derived wait is clearly
+  // high enough for a real delay, or when many vehicles are visible and flow is weak.
+  return wait >= 25 || queue >= 22 || (queue >= 18 && flow15 <= 7);
+}
+
+const CAMERA_SIGNAL_MAX_AGE_MS = Math.max(5, Number(process.env.CAMERA_SIGNAL_MAX_AGE_MINUTES || 45)) * 60 * 1000;
+
+function isFreshCameraSourceSnapshot(item = {}) {
+  const fetchedAt = item.fetchedAt || item.createdAt;
+  const ageMs = fetchedAt ? Date.now() - new Date(fetchedAt).getTime() : Infinity;
+  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= CAMERA_SIGNAL_MAX_AGE_MS;
 }
 
 function estimateRangeFromSignals(wait, { googleSignal = null, cameraSignal = null, publicSignals = [], reports = [] } = {}) {
@@ -2066,7 +2083,9 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
   const publicSignalsRaw = latestSources.filter((item) => !['camera-snapshot-model', 'google-traffic-estimate'].includes(item.sourceType) && item.normalizedWaitMin !== null && item.normalizedWaitMin !== undefined);
   const publicSignals = publicSignalsRaw.map(sanitizeLegacyPublicSignal);
   // Camera: use trimmed-mean of last 5 snapshots within the 8h window to reject outliers.
-  const cameraSnapshots = latestSources.filter((item) => item.sourceType === 'camera-snapshot-model');
+  const cameraSnapshots = latestSources
+    .filter((item) => item.sourceType === 'camera-snapshot-model')
+    .filter(isFreshCameraSourceSnapshot);
   const cameraSignal = trimmedMeanCameraSignal(cameraSnapshots) || choosePublicSourceSignal(cameraSnapshots);
   const googleSignal = choosePublicSourceSignal(latestSources.filter((item) => item.sourceType === 'google-traffic-estimate'));
   const reports = reportSignals(store, crossing.id, direction, 2);
@@ -4504,6 +4523,60 @@ function buildFallbackCrossingRoute(crossing, direction = 'toBih', reason = 'Goo
   return routePendingPayload(crossing, direction, reason, extra);
 }
 
+function buildCalibratedControlZoneRoute(crossing, direction = 'toBih', reason = 'Google trenutno ne vraća traffic rutu, pa prikazujemo ručno kalibriranu zonu prijelaza.', extra = {}) {
+  const anchor = crossing.anchors?.[direction] || crossing.anchors?.toBih || {};
+  const path = [anchor.approachStart, anchor.borderPoint, anchor.exitPoint].filter(Boolean);
+  const distanceMetersValue = Math.max(1, Math.round(pathDistanceMeters(path)));
+  const durationMinutes = Math.max(1, Math.round((distanceMetersValue / 1000 / 35) * 60));
+  const route = {
+    id: `${crossing.id}-calibrated-zone`,
+    label: 'Kalibrirana zona',
+    description: 'Ručna sigurnosna zona prijelaza',
+    primary: true,
+    crossingId: crossing.id,
+    crossingName: crossing.name,
+    direction,
+    encodedPolyline: '',
+    path,
+    durationMinutes,
+    staticMinutes: durationMinutes,
+    delayMinutes: 0,
+    ratio: 1,
+    distanceKm: metersToKm(distanceMetersValue),
+    distanceMeters: distanceMetersValue,
+    level: 'unknown',
+    speedReadingIntervals: [],
+    trafficSegments: [],
+    source: 'calibrated-control-zone',
+    routeQuality: 'calibrated-fallback',
+    routeGuard: { ok: true, enabled: false, fallback: true, warnings: ['Google route nije dostupan; prikaz je ručno kalibrirana zona.'], errors: [], metrics: {} },
+    displayMode: 'control_zone',
+    displayNote: 'Google trenutno ne vraća pouzdanu lokalnu putanju za ovu zonu. Ovo nije oznaka zatvaranja, nego privremeni prikaz kalibrirane dionice.',
+    zone: {
+      from: anchor.fromLabel,
+      border: crossing.name,
+      to: anchor.toLabel,
+      label: anchor.label,
+    },
+  };
+
+  return {
+    ok: true,
+    live: false,
+    direction,
+    crossingId: crossing.id,
+    crossing: crossing.name,
+    zone: route.zone,
+    updatedAt: new Date().toISOString(),
+    source: 'calibrated-control-zone',
+    routeStatus: 'calibrated_fallback',
+    displayMode: 'control_zone',
+    note: reason,
+    routes: path.length >= 2 ? [route] : [],
+    ...extra,
+  };
+}
+
 function trafficSegmentColorSpeed(speed) {
   if (speed === 'TRAFFIC_JAM') return 'jam';
   if (speed === 'SLOW') return 'slow';
@@ -4752,7 +4825,22 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
     alternatives: true,
   });
 
-  const data = await fetchRoutes(body);
+  let data;
+  try {
+    data = await fetchRoutes(body);
+  } catch (error) {
+    // Some newly opened or recently reconfigured crossings (notably Gornji Varoš
+    // and some motorway crossings) fail when the border point is forced as a
+    // strict via-waypoint, even though Google Maps can route through the crossing.
+    // Retry once with a normal stopover waypoint before falling back.
+    if (anchor.routeGuard?.retryWithoutVia === false) throw error;
+    data = await fetchRoutes(routeRequest({
+      origin: latLngWaypoint(anchor.approachStart),
+      destination: latLngWaypoint(anchor.exitPoint),
+      intermediates: [latLngWaypoint(anchor.borderPoint)],
+      alternatives: true,
+    }));
+  }
   const rawRoutes = (data.routes || [])
     .map((route, index) => normalizeRoute(route, index, {
       id: `${crossing.id}-route-${index + 1}`,
@@ -4801,19 +4889,34 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
 
 async function computeJourneyOption(crossing, direction, originText, destinationText, vehicle) {
   const anchor = crossing.anchors[direction] || crossing.anchors.toBih;
-  const data = await fetchRoutes(routeRequest({
-    origin: addressWaypoint(originText),
-    destination: addressWaypoint(destinationText),
-    // Production route guard: for a trip via Maljevac/Gradiška we force the side-specific
-    // approach, checkpoint and exit anchors in order. This prevents Google from using a
-    // random nearby pin or a parallel local road as the crossing waypoint.
-    intermediates: anchor.routeGuard ? [
-      latLngWaypoint(anchor.approachStart, { via: true }),
-      latLngWaypoint(anchor.borderPoint, { via: true }),
-      latLngWaypoint(anchor.exitPoint, { via: true }),
-    ] : [latLngWaypoint(anchor.borderPoint, { via: true })],
-    alternatives: false,
-  }));
+  let data;
+  try {
+    data = await fetchRoutes(routeRequest({
+      origin: addressWaypoint(originText),
+      destination: addressWaypoint(destinationText),
+      // Production route guard: for a trip via Maljevac/Gradiška we force the side-specific
+      // approach, checkpoint and exit anchors in order. This prevents Google from using a
+      // random nearby pin or a parallel local road as the crossing waypoint.
+      intermediates: anchor.routeGuard ? [
+        latLngWaypoint(anchor.approachStart, { via: true }),
+        latLngWaypoint(anchor.borderPoint, { via: true }),
+        latLngWaypoint(anchor.exitPoint, { via: true }),
+      ] : [latLngWaypoint(anchor.borderPoint, { via: true })],
+      alternatives: false,
+    }));
+  } catch (error) {
+    if (!anchor.routeGuard || anchor.routeGuard?.retryWithoutVia === false) throw error;
+    data = await fetchRoutes(routeRequest({
+      origin: addressWaypoint(originText),
+      destination: addressWaypoint(destinationText),
+      intermediates: [
+        latLngWaypoint(anchor.approachStart),
+        latLngWaypoint(anchor.borderPoint),
+        latLngWaypoint(anchor.exitPoint),
+      ],
+      alternatives: false,
+    }));
+  }
 
   const route = normalizeRoute(data.routes?.[0] || {}, 0, {
     id: `${crossing.id}-journey`,
@@ -5070,14 +5173,14 @@ app.get('/api/routes/:crossingId', async (req, res) => {
     res.json(payload);
   } catch (error) {
     console.error('[routes-api]', error);
-    if (isLikelyClosedOrBlockedRoute(error, crossing, direction)) {
-      res.json(routeClosedPayload(crossing, direction, 'Google trenutačno ne vraća lokalnu putanju kroz ovaj prijelaz; to obično znači da je most/granična ruta zatvorena, privremeno blokirana ili preusmjerena.', {
+    if (isLikelyClosedOrBlockedRoute(error, crossing, direction) && crossing.routeStatusHint?.replacementCrossingId) {
+      res.json(routeClosedPayload(crossing, direction, 'Stara ruta preko ovog prijelaza ne vraća pouzdanu putanju. Ako ideš na područje Gradiške, koristi novi prijelaz Gornji Varoš / Gradiška Novi Most.', {
         error: safeError(error),
       }));
       return;
     }
-    res.json(buildFallbackCrossingRoute(crossing, direction, 'Google Routes/route guard trenutno nisu vratili sigurnu cestovnu putanju; rutu ne crtamo dok ne bude validirana.', {
-      source: 'routes-api-fallback',
+    res.json(buildCalibratedControlZoneRoute(crossing, direction, 'Google Routes/route guard trenutno nisu vratili sigurnu cestovnu putanju, ali prijelaz ne označavamo kao zatvoren. Prikazujemo ručno kalibriranu zonu dok Google ne vrati validnu lokalnu rutu.', {
+      source: 'routes-api-calibrated-fallback',
       error: safeError(error),
     }));
   }
