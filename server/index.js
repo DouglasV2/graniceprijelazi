@@ -624,7 +624,7 @@ const BORDER_CROSSINGS = {
         // Google ZERO_RESULTS on this bridge. The free approach→exit route always
         // crosses the actual border zone. For this crossing we fail open so a guard mismatch
         // logs as a warning instead of dropping back to a straight calibrated line.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1250, displayAfterMeters: 1550 },
       },
       toHr: {
         label: 'BiH → HR',
@@ -633,7 +633,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.14010, lng: 17.25680 },
         borderPoint: { lat: 45.14530, lng: 17.25210 },
         exitPoint: { lat: 45.15280, lng: 17.24560 },
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1250, displayAfterMeters: 1550 },
       },
     },
   },
@@ -660,7 +660,7 @@ const BORDER_CROSSINGS = {
         exitPoint: { lat: 45.13550, lng: 17.21620 },
         // Same treatment as Gradiška: skip via-intermediate and fail open so the UI
         // prefers Google's road-following polyline over the straight calibrated fallback.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1150, displayAfterMeters: 1650 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1450, displayAfterMeters: 2200 },
       },
       toHr: {
         label: 'BiH → HR',
@@ -669,7 +669,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.13550, lng: 17.21620 },
         borderPoint: { lat: 45.14250, lng: 17.20650 },
         exitPoint: { lat: 45.15050, lng: 17.19700 },
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1150, displayAfterMeters: 1650 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1450, displayAfterMeters: 2200 },
       },
     },
   },
@@ -4374,6 +4374,37 @@ function routeAnchorScore(route, anchor = {}, { includeApproachExit = true } = {
   return points.reduce((total, item) => total + Math.min(minDistanceToPathMeters(item.point, path), 50000), 0);
 }
 
+function controlZoneSubpath(path = [], startPoint, endPoint) {
+  if (!Array.isArray(path) || path.length < 2 || !startPoint || !endPoint) return [];
+  const startIndex = nearestPathIndex(startPoint, path);
+  const endIndex = nearestPathIndex(endPoint, path);
+  if (startIndex < 0 || endIndex < 0) return [];
+  const from = Math.min(startIndex, endIndex);
+  const to = Math.max(startIndex, endIndex);
+  return path.slice(from, to + 1);
+}
+
+function routeControlZoneDirectness(route, anchor = {}) {
+  const path = Array.isArray(route?.path) ? route.path : [];
+  if (!path.length || !anchor?.approachStart || !anchor?.exitPoint) return Number.POSITIVE_INFINITY;
+  const segment = controlZoneSubpath(path, anchor.approachStart, anchor.exitPoint);
+  if (segment.length < 2) return Number.POSITIVE_INFINITY;
+  const segmentDistance = pathDistanceMeters(segment);
+  const directDistance = distanceMeters(anchor.approachStart, anchor.exitPoint);
+  if (!segmentDistance || !directDistance) return Number.POSITIVE_INFINITY;
+  return Number((segmentDistance / Math.max(directDistance, 1)).toFixed(3));
+}
+
+function routeAnchorOrderPenalty(route, anchor = {}) {
+  const path = Array.isArray(route?.path) ? route.path : [];
+  if (!path.length || !anchor?.approachStart || !anchor?.borderPoint || !anchor?.exitPoint) return 0;
+  const approachIndex = nearestPathIndex(anchor.approachStart, path);
+  const borderIndex = nearestPathIndex(anchor.borderPoint, path);
+  const exitIndex = nearestPathIndex(anchor.exitPoint, path);
+  if (approachIndex < 0 || borderIndex < 0 || exitIndex < 0) return 0;
+  return approachIndex <= borderIndex && borderIndex <= exitIndex ? 0 : 1;
+}
+
 function sortCrossingRoutesByAnchorFit(routes = [], anchor = {}) {
   return [...routes]
     .map((route, index) => ({
@@ -4381,11 +4412,15 @@ function sortCrossingRoutesByAnchorFit(routes = [], anchor = {}) {
       index,
       strictScore: routeAnchorScore(route, anchor, { includeApproachExit: true }),
       borderScore: routeAnchorScore(route, anchor, { includeApproachExit: false }),
+      orderPenalty: routeAnchorOrderPenalty(route, anchor),
+      directness: routeControlZoneDirectness(route, anchor),
       durationMinutes: Number(route.durationMinutes || 0),
       distanceKm: Number(route.distanceKm || 0),
     }))
     .sort((a, b) => {
       if (a.strictScore !== b.strictScore) return a.strictScore - b.strictScore;
+      if (a.orderPenalty !== b.orderPenalty) return a.orderPenalty - b.orderPenalty;
+      if (a.directness !== b.directness) return a.directness - b.directness;
       if (a.borderScore !== b.borderScore) return a.borderScore - b.borderScore;
       if (a.durationMinutes !== b.durationMinutes) return a.durationMinutes - b.durationMinutes;
       if (a.distanceKm !== b.distanceKm) return a.distanceKm - b.distanceKm;
