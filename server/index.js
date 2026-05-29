@@ -622,8 +622,9 @@ const BORDER_CROSSINGS = {
         exitPoint: { lat: 45.14010, lng: 17.25680 },
         // useViaIntermediate: false → skip the strict via waypoint that triggers
         // Google ZERO_RESULTS on this bridge. The free approach→exit route always
-        // crosses the actual border zone; pass-distance check validates it.
-        routeGuard: { maxCrossingDistanceKm: 16, hardMaxCrossingDistanceKm: 36, passDistanceMeters: 3500, validateApproachExit: true, useViaIntermediate: false },
+        // crosses the actual border zone. For this crossing we fail open so a guard mismatch
+        // logs as a warning instead of dropping back to a straight calibrated line.
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false },
       },
       toHr: {
         label: 'BiH → HR',
@@ -632,7 +633,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.14010, lng: 17.25680 },
         borderPoint: { lat: 45.14530, lng: 17.25210 },
         exitPoint: { lat: 45.15280, lng: 17.24560 },
-        routeGuard: { maxCrossingDistanceKm: 16, hardMaxCrossingDistanceKm: 36, passDistanceMeters: 3500, validateApproachExit: true, useViaIntermediate: false },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false },
       },
     },
   },
@@ -657,8 +658,9 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.15050, lng: 17.19700 },
         borderPoint: { lat: 45.14250, lng: 17.20650 },
         exitPoint: { lat: 45.13550, lng: 17.21620 },
-        // Same treatment as Gradiška: skip via-intermediate, very lenient pass distance.
-        routeGuard: { maxCrossingDistanceKm: 14, hardMaxCrossingDistanceKm: 32, passDistanceMeters: 3500, validateApproachExit: true, useViaIntermediate: false, displayBeforeMeters: 950, displayAfterMeters: 1250 },
+        // Same treatment as Gradiška: skip via-intermediate and fail open so the UI
+        // prefers Google's road-following polyline over the straight calibrated fallback.
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 950, displayAfterMeters: 1250 },
       },
       toHr: {
         label: 'BiH → HR',
@@ -667,7 +669,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.13550, lng: 17.21620 },
         borderPoint: { lat: 45.14250, lng: 17.20650 },
         exitPoint: { lat: 45.15050, lng: 17.19700 },
-        routeGuard: { maxCrossingDistanceKm: 14, hardMaxCrossingDistanceKm: 32, passDistanceMeters: 3500, validateApproachExit: true, useViaIntermediate: false, displayBeforeMeters: 950, displayAfterMeters: 1250 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 950, displayAfterMeters: 1250 },
       },
     },
   },
@@ -700,8 +702,9 @@ const BORDER_CROSSINGS = {
         exitPoint: { lat: 43.12300, lng: 17.57760 },
         // useViaIntermediate: false — Google A1 motorway via constraint produced ZERO_RESULTS,
         // which dropped Bijača into the straight-line calibrated fallback. The free A1 route
-        // naturally passes through the border zone within the relaxed pass distance.
-        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 24, passDistanceMeters: 2000, validateApproachExit: true, useViaIntermediate: false, displayBeforeMeters: 700, displayAfterMeters: 800 },
+        // naturally passes through the border zone. Fail open here because the previous
+        // strict guard caused a straight-line fallback that visibly missed the motorway.
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 700, displayAfterMeters: 800 },
       },
       toHr: {
         label: 'BiH → HR',
@@ -710,7 +713,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 43.12300, lng: 17.57760 },
         borderPoint: { lat: 43.12340, lng: 17.56780 },
         exitPoint: { lat: 43.12376, lng: 17.55720 },
-        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 24, passDistanceMeters: 2000, validateApproachExit: true, useViaIntermediate: false, displayBeforeMeters: 700, displayAfterMeters: 800 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 700, displayAfterMeters: 800 },
       },
     },
   },
@@ -4419,7 +4422,7 @@ function validateRouteGuard(route, crossing, direction = 'toBih', context = 'cro
   }
 
   const passDistanceMeters = guard.passDistanceMeters || ROUTE_GUARD_DEFAULTS.passDistanceMeters;
-  const includeApproachExit = context !== 'journey' || guard.validateApproachExit !== false;
+  const includeApproachExit = guard.validateApproachExit !== false;
   const requiredPoints = routePassPoints(anchor, { includeApproachExit });
   if (!requiredPoints.length) return { ok: true, enabled: ROUTE_GUARD_ENABLED, configured: true, warnings, errors, metrics };
 
@@ -4448,12 +4451,20 @@ function validateRouteGuard(route, crossing, direction = 'toBih', context = 'cro
     }
   }
 
+  const failOpen = guard.rejectOnFail === false || guard.failOpen === true || guard.enforcement === 'warn';
+  const blockingErrors = [...errors];
+  if (failOpen && blockingErrors.length) {
+    warnings.push(...blockingErrors.map((issue) => `Route guard upozorenje (ne blokira prikaz): ${issue}`));
+  }
+
   return {
-    ok: errors.length === 0,
+    ok: failOpen || blockingErrors.length === 0,
     enabled: true,
+    failOpen,
     passDistanceMeters,
     warnings,
-    errors,
+    errors: failOpen ? [] : blockingErrors,
+    ignoredErrors: failOpen ? blockingErrors : [],
     metrics,
   };
 }
@@ -4951,6 +4962,12 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
   const { accepted, rejected } = guardedRoutes(rawRoutes, crossing, direction, 'crossing');
   if (!accepted.length) {
     const reason = [...(rejected[0]?.routeGuard?.errors || []), ...(rejected[0]?.routeGuard?.warnings || [])].join('; ') || 'ruta nije prošla kroz ručno kalibrirane točke prijelaza';
+    console.warn('[route-guard/rejected]', {
+      crossingId: crossing.id,
+      direction,
+      reason,
+      rejectedRoutes: rejected.map((route) => ({ id: route.id, distanceKm: route.distanceKm, routeGuard: route.routeGuard })),
+    });
     const error = new Error(`Route guard odbio rutu za ${crossing.shortName}: ${reason}`);
     error.rejectedRoutes = rejected.map((route) => ({ id: route.id, distanceKm: route.distanceKm, routeGuard: route.routeGuard }));
     throw error;
