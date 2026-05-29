@@ -760,8 +760,10 @@ const CAMERA_FEEDS = {
     },
   ],
   gradiska: [
+    // HAK page k=185 ("BIH Bosanska Gradiška") actually embeds cam.asp?id=404 and 405.
+    // The old 185.jpg returned a valid JPEG but of a different camera (k != image id on HAK).
     { id: 'gra-hak-page', label: 'Bosanska Gradiška / HAK', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=185',
-      imageUrls: ['https://www.hak.hr/info/kamere/185.jpg'],
+      imageUrls: ['https://www.hak.hr/info/kamere/404.jpg', 'https://www.hak.hr/info/kamere/405.jpg'],
       externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=185' },
     { id: 'gra-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_17_GP_CA02/slika.jpg', calibration: {
       roi: { x: 10, y: 18, w: 78, h: 68, rotate: -8 },
@@ -786,7 +788,9 @@ const CAMERA_FEEDS = {
       source: 'HAK',
       imageIndex: 0,
       url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
-      imageUrls: ['https://www.hak.hr/info/kamere/303.jpg'],
+      // FIX: k=303 page embeds cam.asp?id=1021 & 1022 (the real Gornji Varoš images).
+      // The old 303.jpg was actually the Vinjani Donji camera (id 303) — wrong location.
+      imageUrls: ['https://www.hak.hr/info/kamere/1021.jpg'],
       externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=303',
       calibration: {
         roi: { x: 6, y: 18, w: 82, h: 68, rotate: -11 },
@@ -816,7 +820,8 @@ const CAMERA_FEEDS = {
       source: 'HAK',
       imageIndex: 1,
       url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
-      imageUrls: ['https://www.hak.hr/info/kamere/303.jpg'],
+      // FIX: second Gornji Varoš HAK frame is cam.asp?id=1022 (was wrongly the 303.jpg = Vinjani Donji).
+      imageUrls: ['https://www.hak.hr/info/kamere/1022.jpg'],
       externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=303',
       calibration: {
         roi: { x: 8, y: 18, w: 82, h: 70, rotate: -10 },
@@ -921,10 +926,14 @@ function calibratedAnchors({ hrLabel, bihLabel, approachHr, borderPoint, exitBih
   };
 }
 
-// HAK mobile page URLs follow `https://m.hak.hr/kamera.asp?g=2&k=NNN`. The page
-// loads the JPG via JavaScript so the HTML scraper sometimes misses it. The
-// direct image at `https://www.hak.hr/info/kamere/{k}.jpg` works for every
-// camera id we use, so we derive that as the proxy's first candidate.
+// HAK mobile page URLs follow `https://m.hak.hr/kamera.asp?g=2&k=NNN`. IMPORTANT:
+// the `k` value is the *page group* id, NOT the still-image id. Each page embeds one
+// or more `cam.asp?id=NNN` images, and the matching direct still is
+// `https://www.hak.hr/info/kamere/{imageId}.jpg`. Deriving the URL from `k` is therefore
+// usually WRONG — `info/kamere/{k}.jpg` returns either HAK's red "invalid webcam"
+// placeholder (a ~22.8 kB PNG) or, worse, a valid image of a different crossing.
+// We keep the k-derived guess only as a LAST-RESORT fallback (appended, never first),
+// so the explicit per-camera imageUrls (the verified image ids) always win.
 function hakDirectImageFromPageUrl(url = '') {
   const match = /[?&]k=(\d+)/i.exec(String(url || ''));
   if (!match) return '';
@@ -940,7 +949,9 @@ function withHakImageFallbacks(camera = {}) {
   if (existing.includes(direct)) return camera;
   return {
     ...camera,
-    imageUrls: [direct, ...existing],
+    // Append (not prepend): explicit verified imageUrls take priority; the k-derived
+    // guess is a final fallback only used when every real image id fails.
+    imageUrls: [...existing, direct],
     externalUrl: camera.externalUrl || url,
   };
 }
@@ -998,6 +1009,9 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       },
     },
     cameras: [
+      // NEEDS VERIFICATION: HAK page k=44 ("Županja") currently embeds no cam.asp image
+      // (camera appears offline). 79.jpg returns a valid live JPEG but its framing is unconfirmed
+      // as the Županja crossing — verify visually before relying on it for queue detection.
       { id: 'ora-hak-zupanja', label: 'Županja · HR strana', source: 'HAK', url: 'https://www.hak.hr/info/kamere/79.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=44' },
       { id: 'ora-hak-bih', label: 'Orašje · BiH strana', source: 'HAK/BIHAMK', url: 'https://www.hak.hr/info/kamere/401.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=183' },
       { id: 'ora-amsbih', label: 'Orašje · AMSBiH', source: 'AMSBiH', url: 'https://www.amsbih.ba/amsbih.ba/kamere/kamere/Lokacija20/0Orasje.jpg', externalUrl: 'https://bihamk.ba/spi/kamere' },
@@ -1034,17 +1048,20 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       },
     },
     cameras: [
+      // FIX: k=140 ("Slavonski Brod") → cam.asp?id=195/196; k=184 ("BIH Bosanski Brod") → 402/403.
+      // The old 140/141/184/185.jpg ids were the page-group ids, not the still-image ids.
+      // Ulaz/izlaz direction split is best-effort (needs visual verification on HAK).
       { id: 'bro-hak-sb-ulaz-hr', label: 'Slavonski Brod · ulaz u HR', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=140', imageIndex: 0,
-        imageUrls: ['https://www.hak.hr/info/kamere/140.jpg', 'https://m.hak.hr/cams/140.jpg'],
+        imageUrls: ['https://www.hak.hr/info/kamere/195.jpg'],
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=140' },
       { id: 'bro-hak-sb-izlaz-hr', label: 'Slavonski Brod · izlaz iz HR', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=140', imageIndex: 1,
-        imageUrls: ['https://www.hak.hr/info/kamere/141.jpg', 'https://m.hak.hr/cams/141.jpg'],
+        imageUrls: ['https://www.hak.hr/info/kamere/196.jpg'],
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=140' },
       { id: 'bro-hak-bb-izlaz-hr', label: 'Bosanski Brod · izlaz iz HR u BiH', source: 'HAK/BIHAMK', url: 'https://m.hak.hr/kamera.asp?g=2&k=184', imageIndex: 0,
-        imageUrls: ['https://www.hak.hr/info/kamere/184.jpg', 'https://m.hak.hr/cams/184.jpg'],
+        imageUrls: ['https://www.hak.hr/info/kamere/402.jpg'],
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=184' },
       { id: 'bro-hak-bb-ulaz-hr', label: 'Bosanski Brod · ulaz u HR', source: 'HAK/BIHAMK', url: 'https://m.hak.hr/kamera.asp?g=2&k=184', imageIndex: 1,
-        imageUrls: ['https://www.hak.hr/info/kamere/185.jpg', 'https://m.hak.hr/cams/185.jpg'],
+        imageUrls: ['https://www.hak.hr/info/kamere/403.jpg'],
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=184' },
       { id: 'bro-bihamk', label: 'Brod / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Brod - Izlaz iz BiH', 'GP Brod - Ulaz u BiH', 'GP Brod', 'Bosanski Brod'] },
     ],
@@ -1060,7 +1077,8 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       exitBih: { lat: 45.05647, lng: 18.49083 },
       guard: { maxCrossingDistanceKm: 9, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 850, displayBeforeMeters: 800, displayAfterMeters: 1000 },
     }),
-    cameras: [{ id: 'sam-hak', label: 'Slavonski Šamac', url: 'https://m.hak.hr/kamera.asp?g=2&k=300' }],
+    // FIX: k=300 ("Slavonski Šamac") embeds cam.asp?id=1015/1016. The k-derived 300.jpg was wrong.
+    cameras: [{ id: 'sam-hak', label: 'Slavonski Šamac', url: 'https://m.hak.hr/kamera.asp?g=2&k=300', imageUrls: ['https://www.hak.hr/info/kamere/1015.jpg', 'https://www.hak.hr/info/kamere/1016.jpg'] }],
   },
   {
     id: 'svilaj', name: 'GP Svilaj', shortName: 'Svilaj', lat: 45.10810, lng: 18.31310, hrLabel: 'Svilaj', bihLabel: 'Odžak',
@@ -1076,7 +1094,8 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     cameras: [{
       id: 'svi-hak', label: 'Svilaj',
       url: 'https://m.hak.hr/kamera.asp?g=2&k=211',
-      imageUrls: ['https://www.hak.hr/info/kamere/211.jpg', 'https://m.hak.hr/cams/211.jpg'],
+      // FIX: k=211 ("Svilaj") embeds cam.asp?id=461/462/463. Old 211.jpg = invalid-webcam placeholder.
+      imageUrls: ['https://www.hak.hr/info/kamere/461.jpg', 'https://www.hak.hr/info/kamere/462.jpg', 'https://www.hak.hr/info/kamere/463.jpg'],
       externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=211',
     }],
   },
@@ -1091,7 +1110,8 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 850, displayBeforeMeters: 700, displayAfterMeters: 900 },
     }),
     cameras: [
-      { id: 'iza-hak-bih', label: 'BIH Izačić', url: 'https://m.hak.hr/kamera.asp?g=2&k=179' },
+      // FIX: k=179 ("BIH Izačić") embeds cam.asp?id=407. Old 179.jpg = invalid-webcam placeholder.
+      { id: 'iza-hak-bih', label: 'BIH Izačić', url: 'https://m.hak.hr/kamera.asp?g=2&k=179', imageUrls: ['https://www.hak.hr/info/kamere/407.jpg'] },
       { id: 'iza-bihamk', label: 'Izačić / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Izačić', 'Izačić', 'Izacic'] },
     ],
   },
@@ -1106,7 +1126,8 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       guard: { maxCrossingDistanceKm: 9, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 900, displayBeforeMeters: 850, displayAfterMeters: 1050 },
     }),
     cameras: [
-      { id: 'kam-hak', label: 'Kamensko', url: 'https://m.hak.hr/kamera.asp?g=2&k=192' },
+      // FIX: k=192 ("Kamensko") embeds cam.asp?id=317/318/408. The k-derived 192.jpg was wrong.
+      { id: 'kam-hak', label: 'Kamensko', url: 'https://m.hak.hr/kamera.asp?g=2&k=192', imageUrls: ['https://www.hak.hr/info/kamere/317.jpg', 'https://www.hak.hr/info/kamere/318.jpg', 'https://www.hak.hr/info/kamere/408.jpg'] },
       { id: 'kam-bihamk', label: 'Kamensko / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Kamensko', 'Kamensko'] },
     ],
   },
@@ -1121,34 +1142,47 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       guard: { maxCrossingDistanceKm: 9, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 900, displayBeforeMeters: 800, displayAfterMeters: 1050 },
     }),
     cameras: [
-      { id: 'pri-hak-arzano', label: 'Aržano', url: 'https://m.hak.hr/kamera.asp?g=2&k=193' },
-      { id: 'pri-hak-bih', label: 'BIH Prisika', url: 'https://m.hak.hr/kamera.asp?g=2&k=180' },
+      // FIX: k=193 ("Aržano") → cam.asp?id=315/316; k=180 ("BIH Prisika") → cam.asp?id=409.
+      // Old 193.jpg / 180.jpg returned the invalid-webcam placeholder.
+      { id: 'pri-hak-arzano', label: 'Aržano', url: 'https://m.hak.hr/kamera.asp?g=2&k=193', imageUrls: ['https://www.hak.hr/info/kamere/315.jpg', 'https://www.hak.hr/info/kamere/316.jpg'] },
+      { id: 'pri-hak-bih', label: 'BIH Prisika', url: 'https://m.hak.hr/kamera.asp?g=2&k=180', imageUrls: ['https://www.hak.hr/info/kamere/409.jpg'] },
       { id: 'pri-bihamk', label: 'Prisika / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Prisika (Aržano)', 'GP Prisika', 'Prisika', 'Aržano', 'Arzano'] },
     ],
   },
   {
     id: 'vinjani-donji', name: 'GP Vinjani Donji', shortName: 'Vinjani Donji', lat: 43.42261, lng: 17.27443, hrLabel: 'Vinjani Donji', bihLabel: 'Gorica',
     waits: { toBih: { car: 37, truck: 58, bus: 42 }, toHr: { car: 29, truck: 52, bus: 34 } },
+    // ROUTE FIX (needs visual verification): the previous control zone was only ~110 m end-to-end,
+    // far too short to capture the queue. Approach/exit anchors extended ~330 m along the road
+    // bearing and the display window widened. Marker (lat/lng) unchanged.
     anchors: calibratedAnchors({
       hrLabel: 'Vinjani Donji', bihLabel: 'Gorica',
-      approachHr: { lat: 43.42261, lng: 17.27443 },
+      approachHr: { lat: 43.42417, lng: 17.27095 },
       borderPoint: { lat: 43.42235, lng: 17.27500 },
-      exitBih: { lat: 43.42210, lng: 17.27561 },
-      guard: { maxCrossingDistanceKm: 7, hardMaxCrossingDistanceKm: 18, passDistanceMeters: 800, displayBeforeMeters: 600, displayAfterMeters: 750 },
+      exitBih: { lat: 43.42054, lng: 17.27909 },
+      guard: { maxCrossingDistanceKm: 7, hardMaxCrossingDistanceKm: 18, passDistanceMeters: 1000, displayBeforeMeters: 900, displayAfterMeters: 1100 },
     }),
-    cameras: [{ id: 'vd-hak', label: 'Vinjani Donji', url: 'https://m.hak.hr/kamera.asp?g=2&k=39' }],
+    // FIX: k=39 ("Vinjani Donji") embeds cam.asp?id=302/303. Old 39.jpg = invalid-webcam placeholder.
+    cameras: [{ id: 'vd-hak', label: 'Vinjani Donji', url: 'https://m.hak.hr/kamera.asp?g=2&k=39', imageUrls: ['https://www.hak.hr/info/kamere/302.jpg', 'https://www.hak.hr/info/kamere/303.jpg'] }],
   },
   {
     id: 'vinjani-gornji', name: 'GP Vinjani Gornji', shortName: 'Vinjani Gornji', lat: 43.45998, lng: 17.28453, hrLabel: 'Vinjani Gornji', bihLabel: 'Orahovlje',
     waits: { toBih: { car: 24, truck: 42, bus: 28 }, toHr: { car: 27, truck: 46, bus: 30 } },
+    // ROUTE FIX (needs visual verification): the previous control zone was only ~300 m end-to-end
+    // (approach == marker), so Google often returned a too-short / straight-line polyline that did
+    // not follow the road toward the crossing and missed the real queue. The approach (HR) and
+    // exit (BiH) anchors below are extended ~350 m further out along the established road bearing
+    // (NW→SE), and the display window is widened so the rendered "provjerena zona" captures the
+    // column on both sides of the border. Marker (lat/lng) is unchanged.
     anchors: calibratedAnchors({
       hrLabel: 'Vinjani Gornji', bihLabel: 'Orahovlje',
-      approachHr: { lat: 43.45998, lng: 17.28453 },
+      approachHr: { lat: 43.46128, lng: 17.28063 },
       borderPoint: { lat: 43.45945, lng: 17.28610 },
-      exitBih: { lat: 43.45895, lng: 17.28765 },
-      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 850, displayBeforeMeters: 700, displayAfterMeters: 850 },
+      exitBih: { lat: 43.45765, lng: 17.29155 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1000, displayAfterMeters: 1250 },
     }),
-    cameras: [{ id: 'vg-hak', label: 'Vinjani Gornji', url: 'https://m.hak.hr/kamera.asp?g=2&k=282' }],
+    // FIX: k=282 ("Vinjani Gornji") embeds cam.asp?id=994/995. Old 282.jpg = invalid-webcam placeholder.
+    cameras: [{ id: 'vg-hak', label: 'Vinjani Gornji', url: 'https://m.hak.hr/kamera.asp?g=2&k=282', imageUrls: ['https://www.hak.hr/info/kamere/994.jpg', 'https://www.hak.hr/info/kamere/995.jpg'] }],
   },
   {
     id: 'crveni-grm', name: 'GP Crveni Grm', shortName: 'Crveni Grm', lat: 43.16035, lng: 17.47755, hrLabel: 'Prolog', bihLabel: 'Crveni Grm',
@@ -1161,7 +1195,8 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 850, displayBeforeMeters: 700, displayAfterMeters: 900 },
     }),
     cameras: [
-      { id: 'cg-hak-bih', label: 'BIH Crveni Grm', url: 'https://m.hak.hr/kamera.asp?g=2&k=181' },
+      // FIX: k=181 ("BIH Crveni Grm") embeds cam.asp?id=410. Old 181.jpg = invalid-webcam placeholder.
+      { id: 'cg-hak-bih', label: 'BIH Crveni Grm', url: 'https://m.hak.hr/kamera.asp?g=2&k=181', imageUrls: ['https://www.hak.hr/info/kamere/410.jpg'] },
       { id: 'cg-bihamk', label: 'Crveni Grm / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Crveni Grm', 'Crveni Grm'] },
     ],
   },
@@ -3881,6 +3916,22 @@ function decodeJpegImage(buffer) {
   }
 }
 
+// HAK serves a fixed "nepostojeća kamera / invalid webcam" placeholder for unknown camera
+// ids: info/kamere/{id}.jpg returns a ~22.8 kB PNG, and m.hak.hr/cam.asp returns a GIF.
+// Real camera stills are always JPEG and comfortably larger than a few kB. Anything that is
+// not a sane-sized JPEG (PNG/GIF placeholder, HTML error page, empty/broken payload) must be
+// treated as "camera unavailable" so it is never decoded or analyzed as a real frame.
+const MIN_VALID_JPEG_BYTES = Math.max(800, Number(process.env.CAMERA_MIN_JPEG_BYTES || 3000));
+function isUsableCameraImage(buffer, contentType = '') {
+  if (!buffer || buffer.length < MIN_VALID_JPEG_BYTES) return false;
+  // JPEG magic bytes FF D8 FF — rejects PNG (89 50 4E 47) and GIF (47 49 46) placeholders.
+  const isJpegMagic = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  if (!isJpegMagic) return false;
+  const ct = String(contentType || '').toLowerCase();
+  if (ct && !ct.includes('jpeg') && !ct.includes('jpg')) return false;
+  return true;
+}
+
 
 function clampNumber(value, min, max) {
   const n = Number(value);
@@ -4095,12 +4146,11 @@ async function runSnapshotCounter(camera, crossingId, direction, previousSnapsho
   if (!CAMERA_SNAPSHOT_COUNTING_ENABLED) return null;
   const { buffer, contentType, url: resolvedImageUrl } = await fetchCameraImage(camera);
 
-  // Some public camera endpoints occasionally return HTML, an empty payload,
-  // or a protected/redirect response. jpeg-js then fails with "SOI not found".
-  // For staging we silently skip that snapshot and let calibrated/admin/BIHAMK
-  // sources drive the wait estimate instead of spamming the console.
-  const isJpegPayload = buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8;
-  if (!isJpegPayload || (!contentType.includes('image') && !contentType.includes('jpeg'))) return null;
+  // Some public camera endpoints occasionally return HTML, an empty payload, a HAK
+  // "invalid webcam" PNG/GIF placeholder, or a protected/redirect response. We skip
+  // those snapshots (returning null = "camera unavailable") and let calibrated/admin/
+  // BIHAMK sources drive the wait estimate, instead of analyzing a placeholder as a real frame.
+  if (!isUsableCameraImage(buffer, contentType)) return null;
 
   const image = decodeJpegImage(buffer);
   const analysis = analyzeSnapshotImage(image, camera, direction, previousSnapshot);
@@ -5383,6 +5433,12 @@ app.get('/api/camera-image/:crossingId/:cameraId', async (req, res) => {
       res.status(502).json({ ok: false, note: 'Izvor kamere nije vratio sliku.' });
       return;
     }
+    // Do not forward HAK's "invalid webcam" placeholder (PNG/GIF) to the UI — surface a
+    // graceful "unavailable" so the client shows the offline state instead of a red error image.
+    if (!isUsableCameraImage(image.buffer, image.contentType)) {
+      res.status(502).json({ ok: false, note: 'Kamera trenutno nije dostupna (izvor vraća zamjensku sliku).' });
+      return;
+    }
     res.setHeader('Content-Type', image.contentType || 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=20, stale-while-revalidate=40');
     res.send(image.buffer);
@@ -5710,6 +5766,10 @@ export {
   trimmedMeanCameraSignal,
   crossSourceAgreement,
   emaSmoothWait,
+  isUsableCameraImage,
+  withHakImageFallbacks,
+  CAMERA_FEEDS,
+  BORDER_CROSSINGS,
 };
 
 function assertProductionSafety() {
@@ -5727,6 +5787,12 @@ function assertProductionSafety() {
   }
   if (allowPublicRegistration) {
     console.warn('[startup] ALLOW_PUBLIC_REGISTRATION=true u produkciji — svatko može stvoriti račun. Razmisli o isključivanju.');
+  }
+  if (!configuredCorsOrigins.length) {
+    console.warn('[startup] CORS_ORIGINS nije postavljen — API prihvaća zahtjeve s bilo kojeg originala. Za produkciju postavi popis dopuštenih domena (npr. CORS_ORIGINS=https://prijelazradar.hr).');
+  }
+  if (!serverKey) {
+    console.warn('[startup] GOOGLE_MAPS_SERVER_KEY nije postavljen — Google rute neće raditi, prikazuju se samo kalibrirane/fallback zone.');
   }
   if (blockers.length) {
     console.error('\n[startup] Production safety check FAILED:');
