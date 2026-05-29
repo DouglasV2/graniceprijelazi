@@ -98,23 +98,47 @@ describe('Google BLUE → max 15 min (the Maljevac fix)', () => {
     expect(sanity.wait).toBeLessThanOrEqual(15);
   });
 
-  it('clear Google + strong camera queue still allows 25 (booth queue Google missed)', () => {
+  it('clear Google + strong camera queue is NOT capped (booth queue Google cannot see)', () => {
+    // New fusion policy: a strong camera queue is authoritative about the booth wait, so a
+    // blue approach road must not pull it down to 25.
     const sanity = applyTrafficSanityCaps(45, {
       googleSignal: makeGoogleSignal({ delayMinutes: 1 }),
       cameraSignal: makeCameraSignal({ wait: 25, queueVehicles: 22 }),
       publicSignals: [],
     });
-    expect(sanity.wait).toBeLessThanOrEqual(25);
-    expect(sanity.wait).toBeGreaterThan(15);
+    expect(sanity.wait).toBe(45);
+    expect(sanity.googleVsOfficial).toBe(true);
   });
 
-  it('clear Google + hard public BIHAMK number → caps to 22 (split difference)', () => {
+  it('clear Google + hard public 45 → kept (official source wins over blue road)', () => {
     const sanity = applyTrafficSanityCaps(45, {
       googleSignal: makeGoogleSignal({ delayMinutes: 1 }),
       cameraSignal: null,
       publicSignals: [makePublic('Eksplicitno čekanje 45 min', 45, 90, 1.35)],
     });
-    expect(sanity.wait).toBeLessThanOrEqual(22);
+    expect(sanity.wait).toBe(45);
+    expect(sanity.reason).toMatch(/granično|granic|kontrol/i);
+  });
+
+  it('clear Google + official 90 min → result floored at the official number, never 15/22', () => {
+    // The exact scenario from the brief: Google 8 min blue, HAK says 90 → stays ~90.
+    const sanity = applyTrafficSanityCaps(90, {
+      googleSignal: makeGoogleSignal({ delayMinutes: 1 }),
+      cameraSignal: null,
+      publicSignals: [makePublic('Eksplicitno čekanje 90 min', 90, 92, 1.35)],
+    });
+    expect(sanity.wait).toBe(90);
+    expect(sanity.googleVsOfficial).toBe(true);
+  });
+
+  it('clear Google + low blended value but official 60 → floored up to 60', () => {
+    // Even if the blend got diluted to 20, the official hard floor lifts it back to 60.
+    const sanity = applyTrafficSanityCaps(20, {
+      googleSignal: makeGoogleSignal({ delayMinutes: 1 }),
+      cameraSignal: null,
+      publicSignals: [makePublic('Eksplicitno čekanje 60 min', 60, 90, 1.35)],
+    });
+    expect(sanity.wait).toBe(60);
   });
 
   it('blue route with only Google signal also caps to 15', () => {

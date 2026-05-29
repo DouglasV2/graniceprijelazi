@@ -1509,7 +1509,9 @@ function getBaseWaitSourceMeta(crossing, directionKey, overrides = {}) {
       hasGoogleSignal: source.hasGoogleSignal,
       hasCameraSignal: source.hasCameraSignal,
       hasStrongCameraQueue: source.hasStrongCameraQueue,
+      hasHardPublicSignal: source.hasHardPublicSignal,
       hasSoftUpperBoundPublic: source.hasSoftUpperBoundPublic,
+      googleClearWhileQueue: source.googleClearWhileQueue,
       note: source.note || 'Vrijednost je izračunata iz javnih izvora, kamera i dojava.',
       confidence: source.confidence,
       confidenceHint: source.confidenceHint,
@@ -1562,34 +1564,46 @@ function sourceLooksProtected(meta = {}) {
   return ['admin-override', 'driver-reports'].includes(meta.sourceType) || meta.className === 'manual' || /dojav/i.test(meta.label || '');
 }
 
+// Authoritative-about-the-booth signals: an official hard public number, a strong camera
+// queue, or the backend's explicit "Google clear but booth queue" flag. The frontend route
+// sanity cap must NEVER pull these down — Google blue only describes the approach road, not
+// the queue at the control booth. Mirrors the server-side fusion policy.
+function sourceHasAuthoritativeQueue(meta = {}) {
+  return meta.hasHardPublicSignal === true
+    || meta.hasStrongCameraQueue === true
+    || meta.googleClearWhileQueue === true;
+}
+
 function sourceLooksSoftUpperBound(meta = {}) {
   const text = `${meta.label || ''} ${meta.note || ''}`.toLowerCase();
   return text.includes('gornja granica') || text.includes('do x min') || text.includes('do 30') || text.includes('nije du') || text.includes('soft') || text.includes('bihamk');
 }
 
 function computeRouteSanityWait(baseWait, sourceMeta = {}, route = null) {
-  if (!hasKnownWait(baseWait) || !route || sourceLooksProtected(sourceMeta) || routeLooksHeavy(route)) return null;
+  // Never re-cap a protected source (admin/reports) or an authoritative booth-queue signal
+  // (official hard number / strong camera / backend googleClearWhileQueue). A blue Google road
+  // must not override HAK/MUP/BIHAMK/AMS or a visible camera queue — the wait is at the booth.
+  if (!hasKnownWait(baseWait) || !route || sourceLooksProtected(sourceMeta) || sourceHasAuthoritativeQueue(sourceMeta) || routeLooksHeavy(route)) return null;
   const currentWait = Number(baseWait);
   if (!Number.isFinite(currentWait) || currentWait <= 15) return null;
   const { delayMinutes, ratio } = routeTrafficMeta(route);
   const isClear = routeLooksClear(route);
   if (!isClear) return null;
 
+  // Only soft-bound / Google-dominated combined estimates reach here. Strong camera/official
+  // signals were already excluded above, so this only trims genuinely Google-led numbers.
   const softUpperBound = sourceMeta.hasSoftUpperBoundPublic === true || sourceLooksSoftUpperBound(sourceMeta) || sourceMeta.className === 'combined' || sourceMeta.sourceType === 'combined-estimate';
-  const cap = sourceMeta.hasStrongCameraQueue ? 20 : softUpperBound ? 12 : 18;
+  const cap = softUpperBound ? 12 : 18;
   const wait = Math.min(currentWait, cap);
   if (wait >= currentWait) return null;
-  const reasonTail = sourceMeta.hasStrongCameraQueue
-    ? 'Kamera ipak pokazuje kolonu, pa se ne spušta na minimum nego se ograničava na umjereno čekanje.'
-    : 'Plavo ne znači 0 min, ali bez crvenog/narančastog zastoja, jake kamere ili dojava ne prikazujemo visoku procjenu.';
   return {
     wait,
     baseWait: currentWait,
-    rangeMin: sourceMeta.hasStrongCameraQueue ? 12 : softUpperBound ? 4 : 6,
-    rangeMax: sourceMeta.hasStrongCameraQueue ? 22 : softUpperBound ? 14 : 20,
+    rangeMin: softUpperBound ? 4 : 6,
+    rangeMax: softUpperBound ? 14 : 20,
     className: 'combined route-sanity',
     expiresAt: Date.now() + 3 * 60 * 1000,
-    note: `Google promet je normalan${delayMinutes > 0 ? ` (${formatMinutes(delayMinutes)} cestovnog zastoja)` : ''}, pa visoka procjena iz javnih izvora ne odražava stvarno stanje. ${reasonTail} Trenutna procjena je oko ${formatMinutes(wait)}.`,
+    note: `Google promet je normalan${delayMinutes > 0 ? ` (${formatMinutes(delayMinutes)} cestovnog zastoja)` : ''}, a nema tvrdog službenog signala, jake kamere ni dojava, pa se visoka procjena ne prikazuje. Plavo ne znači 0 min. Trenutna procjena je oko ${formatMinutes(wait)}.`,
   };
 }
 
@@ -3202,22 +3216,39 @@ function CameraFeed({ cam, refreshKey, signal, crossingId }) {
   const proxiedImageUrl = crossingId && cam?.id
     ? `/api/camera-image/${encodeURIComponent(crossingId)}/${encodeURIComponent(cam.id)}?t=${refreshKey}`
     : '';
-  const imageUrl = cam.previewImage || proxiedImageUrl;
-  const [imageFailed, setImageFailed] = useState(false);
+  const previewImage = cam.previewImage || '';
+  const [primaryFailed, setPrimaryFailed] = useState(false);
+  const [fallbackFailed, setFallbackFailed] = useState(false);
 
+  // Reset the failure state whenever the camera, crossing or refresh cycle changes, so a
+  // transient proxy hiccup never permanently pins the UI to the fallback/preview image.
   useEffect(() => {
-    setImageFailed(false);
-  }, [imageUrl]);
+    setPrimaryFailed(false);
+    setFallbackFailed(false);
+  }, [cam?.id, crossingId, refreshKey]);
 
-  if (imageUrl && !imageFailed) {
+  // 1) Always prefer the LIVE proxy image (real HAK/BIHAMK/AMS frame). The local preview is
+  //    only a placeholder and must never win over a working live source.
+  if (proxiedImageUrl && !primaryFailed) {
     return (
       <div className="camera-live-frame vision-frame">
-        <img src={imageUrl} alt={`${cam.label} kamera`} loading="lazy" onError={() => setImageFailed(true)} />
+        <img src={proxiedImageUrl} alt={`${cam.label} kamera`} loading="lazy" onError={() => setPrimaryFailed(true)} />
         <VehicleVisionOverlay signal={signal} />
       </div>
     );
   }
 
+  // 2) Proxy unavailable → fall back to the bundled preview image if one exists.
+  if (previewImage && !fallbackFailed) {
+    return (
+      <div className="camera-live-frame vision-frame">
+        <img src={previewImage} alt={`${cam.label} kamera`} loading="lazy" onError={() => setFallbackFailed(true)} />
+        <VehicleVisionOverlay signal={signal} />
+      </div>
+    );
+  }
+
+  // 3) Neither live proxy nor preview worked → external source notice.
   return <ExternalCameraNotice cam={cam} />;
 }
 

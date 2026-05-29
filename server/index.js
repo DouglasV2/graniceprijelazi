@@ -1225,9 +1225,27 @@ const PUBLIC_SOURCE_TARGETS = {
     preferred: ['BIHAMK', 'Google Routes', 'Kamera'],
   },
   gradiska: {
-    bihamkNames: ['Gradiška', 'Gradiska', 'GP Gradiška', 'Gradina'],
+    // Keep Gradiška aliases tight to the OLD Sava bridge so they do NOT swallow the
+    // separate "Gradiška novi most" entry, which belongs to gornji-varos below.
+    bihamkNames: ['GP Gradiška', 'Gradiška', 'Gradiska', 'Gradina'],
     preferred: ['BIHAMK', 'AMS RS', 'Google Routes', 'Kamera'],
     amsRsUrl: 'https://ams-rs.com/granicni-prelaz-gradiska/',
+  },
+  'gornji-varos': {
+    // GP Gornji Varoš sits on the NEW motorway Sava bridge ("Gradiška novi most").
+    // HAK/MUP and BIHAMK list it under several names; match all of them but keep the
+    // "novi most" qualifier so it is not confused with the old Gradiška crossing.
+    hakNames: [
+      'Gornji Varoš', 'Gornji Varos',
+      'Gradiška novi most', 'Gradiska novi most',
+      'Gradiška (novi most)', 'Gradiska (novi most)',
+      'Gradiška - novi most', 'Gradiska - novi most',
+    ],
+    bihamkNames: [
+      'Gornji Varoš', 'Gornji Varos',
+      'Gradiška Novi Most', 'Gradiska Novi Most',
+    ],
+    preferred: ['HAK', 'MUP', 'BIHAMK', 'AMS RS', 'Kamera', 'Google Routes'],
   },
   orasje: {
     bihamkNames: ['Orašje', 'Orasje', 'GP Orašje'],
@@ -1944,64 +1962,79 @@ function estimateRangeFromSignals(wait, { googleSignal = null, cameraSignal = nu
   };
 }
 
-// Traffic sanity caps follow the user's "Google Maps colour" mental model:
-//   - Google blue (clear road, delay ≤ 2 min)           → wait ≤ 15 min
-//   - Google yellow/orange (slow, delay 2–8 min)        → wait ≤ 35 min
-//   - Google red (heavy, delay ≥ 8 min)                 → no cap (trust signals)
-// Hard explicit numbers from BIHAMK/HAK ("Eksplicitno čekanje 45 min"), strong camera
-// queues, and driver reports bypass the cap because they signal real congestion the
-// road-traffic API may have missed.
+// Source-fusion sanity caps. Core rule: a clear/blue Google route only means the APPROACH
+// road is flowing — the queue AT the border booth is invisible to Google Routes. Google may
+// therefore CAP a low estimate ONLY when no higher-priority source disagrees:
+//   - admin override / hard official public number (HAK/MUP/BIHAMK/AMS) ≥ 20 min
+//   - strong camera queue
+//   - recent driver report ≥ 35 min
+// When any of those "authoritative" signals is present, Google must NOT pull the wait down;
+// the fused value (which already reflects the authoritative source) is kept and floored at the
+// official hard number. Without any authoritative signal the Google-colour model applies:
+//   - Google blue (clear, delay ≤ 2 min)     → wait ≤ 15 min
+//   - Google yellow/orange (slow)            → wait ≤ 35 min
+//   - Google red (heavy)                     → no cap
+const GOOGLE_VS_OFFICIAL_NOTE = 'Google promet izgleda protočno na prilaznoj cesti, ali službeni izvor/kamera pokazuje čekanje na samoj graničnoj kontroli.';
+
 function applyTrafficSanityCaps(wait, { googleSignal = null, cameraSignal = null, publicSignals = [], reportAvg = null } = {}) {
   let finalWait = clampWait(wait);
   if (finalWait === null) return { wait: null, adjusted: false, reason: '' };
 
   const hasDriverReports = reportAvg !== null;
+  const strongReport = hasDriverReports && Number(reportAvg) >= 35;
   const softPublicOnly = publicSignals.length > 0 && publicSignals.every(isSoftUpperBoundSource);
-  const hasHardPublic = publicSignals.some((item) => !isSoftUpperBoundSource(item) && Number(item.normalizedWaitMin || 0) >= 20);
+  const hardPublicSignals = publicSignals.filter((item) => !isSoftUpperBoundSource(item) && Number(item.normalizedWaitMin || 0) >= 20);
+  const hasHardPublic = hardPublicSignals.length > 0;
+  const hardPublicMax = hasHardPublic ? Math.max(...hardPublicSignals.map((item) => Number(item.normalizedWaitMin || 0))) : 0;
   const clearGoogle = googleLooksClear(googleSignal);
   const slowGoogle = googleLooksSlow(googleSignal) && !googleLooksHeavy(googleSignal);
   const clearCamera = cameraLooksClear(cameraSignal);
   const strongCameraQueue = cameraShowsQueue(cameraSignal);
 
-  // Driver reports and heavy Google traffic bypass — those are evidence of real congestion.
-  if (hasDriverReports || googleLooksHeavy(googleSignal)) return { wait: finalWait, adjusted: false, reason: '' };
+  // Heavy Google traffic = visible congestion → trust the fused value as-is.
+  if (googleLooksHeavy(googleSignal)) return { wait: finalWait, adjusted: false, reason: '' };
+
+  // === AUTHORITATIVE OVERRIDE — Google never caps a real booth queue ===
+  // If an official hard number, a strong camera queue, or a recent strong driver report
+  // exists, the booth wait is real even when the approach road is blue. Keep the fused
+  // value and never let it fall below the official hard number.
+  const hasAuthoritative = hasHardPublic || strongCameraQueue || strongReport;
+  if (hasAuthoritative) {
+    const floored = hasHardPublic ? Math.max(finalWait, clampWait(hardPublicMax)) : finalWait;
+    return {
+      wait: floored,
+      adjusted: floored !== finalWait,
+      reason: clearGoogle ? GOOGLE_VS_OFFICIAL_NOTE : '',
+      googleVsOfficial: clearGoogle,
+    };
+  }
+
+  // Any (non-strong) driver report present but no authoritative signal → still trust it,
+  // reports are first-hand evidence the road API can miss.
+  if (hasDriverReports) return { wait: finalWait, adjusted: false, reason: '' };
 
   // === Google BLUE (clear road) → max 15 min ===
-  // A blue road in Google Maps means there is no traffic delay on the approach. The
-  // only way the wait can still be high is a stationary queue AT the booth itself,
-  // which we detect via camera (strongCameraQueue) or an explicit hard public number.
-  if (clearGoogle && strongCameraQueue) {
-    // Camera disagrees with Google — possible booth queue Google can't see. Allow 25.
-    const capped = Math.min(finalWait, 25);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google promet je normalan, ali kamera pokazuje kolonu na samom prijelazu. Procjena je ograničena na umjereno čekanje.' };
-  }
-  if (clearGoogle && hasHardPublic) {
-    // Hard explicit BIHAMK/HAK number disagrees with Google — split the difference.
-    const capped = Math.min(finalWait, 22);
-    return { wait: capped, adjusted: capped !== finalWait, reason: 'Google promet je normalan, ali službeni izvor navodi konkretno čekanje. Procjena je umjerena.' };
-  }
   if (clearGoogle && finalWait > 15) {
-    // Blue route, no strong-queue camera, no hard public number → must be ≤ 15.
-    return { wait: 15, adjusted: true, reason: 'Google promet je normalan (plava ruta) i nema vidljive kolone na kameri; čekanje se zadržava na maksimalno 15 min.' };
+    return { wait: 15, adjusted: true, reason: 'Google promet je normalan (plava ruta) i nema službenog signala ni vidljive kolone na kameri; čekanje se zadržava na najviše 15 min.' };
   }
 
-  // === Google YELLOW/ORANGE (slow road) → max 35 min unless camera shows worse ===
-  if (slowGoogle && !strongCameraQueue && !hasHardPublic && finalWait > 35) {
+  // === Google YELLOW/ORANGE (slow road) → max 35 min ===
+  if (slowGoogle && finalWait > 35) {
     return { wait: 35, adjusted: true, reason: 'Google promet je pojačan ali ne kritičan; bez tvrdog signala iz drugih izvora čekanje se zadržava ispod 35 min.' };
   }
 
   // === No Google snapshot at all (refresh failed / stale > 8h) ===
   // The route panel may still show fresh Google colour, but the wait pipeline does not.
   // Fall back to conservative caps based on camera + soft public.
-  if (!googleSignal && clearCamera && !hasHardPublic) {
+  if (!googleSignal && clearCamera) {
     const capped = Math.min(finalWait, 18);
     return { wait: capped, adjusted: capped !== finalWait, reason: 'Live prometna provjera trenutno nedostaje, ali kamera ne pokazuje kolonu.' };
   }
-  if (!googleSignal && cameraSignal && !strongCameraQueue && !hasHardPublic && softPublicOnly) {
+  if (!googleSignal && cameraSignal && softPublicOnly) {
     const capped = Math.min(finalWait, 22);
     return { wait: capped, adjusted: capped !== finalWait, reason: 'Live prometna provjera nedostaje; kombiniramo soft procjene iz javnih izvora i kameru bez vidljive kolone.' };
   }
-  if (!googleSignal && softPublicOnly && !strongCameraQueue) {
+  if (!googleSignal && softPublicOnly) {
     const capped = Math.min(finalWait, 24);
     return { wait: capped, adjusted: capped !== finalWait, reason: 'Live prometna provjera nedostaje; oslanjamo se na soft procjene iz javnih izvora.' };
   }
@@ -2230,6 +2263,16 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
   const freshReports = reports.filter((r) => Date.now() - new Date(r.createdAt).getTime() < 30 * 60 * 1000);
   const acceptReports = reports.length >= 2 || freshReports.length >= 1;
 
+  // Source-fusion priority. Official hard numbers (HAK/MUP/BIHAMK/AMS ≥ 20 min), a strong
+  // camera queue, or a recent strong driver report (≥ 35 min) are AUTHORITATIVE about the
+  // booth wait. When any is present, Google Routes is demoted to a helper (heavy weight
+  // penalty) so a blue/clear approach road cannot dilute or cap down the real wait.
+  const hardPublicForFusion = publicSignals.filter((item) => !isSoftUpperBoundSource(item) && Number(item.normalizedWaitMin || 0) >= 20);
+  const hasHardPublicSignal = hardPublicForFusion.length > 0;
+  const strongCameraQueueSignal = cameraShowsQueue(cameraSignal);
+  const strongRecentReport = acceptReports && reportAvg !== null && reportAvg >= 35;
+  const authoritativePresent = hasHardPublicSignal || strongCameraQueueSignal || strongRecentReport;
+
   const candidates = [];
   publicSignals.forEach((item) => {
     const softUpperBound = isSoftUpperBoundSource(item);
@@ -2257,9 +2300,12 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
   }
   if (googleSignal) {
     const ageMult = ageDecayMultiplier(googleSignal.fetchedAt, 18);
+    // Google is a helper, never the lead when authoritative signals exist: drop its weight
+    // to ~12% so the fused value stays close to the official/camera/report number.
+    const googlePriorityFactor = authoritativePresent ? 0.12 : (publicSignals.length ? 0.86 : 1.02);
     candidates.push({
       wait: waitForVehicle(googleSignal.normalizedWaitMin ?? staticWait, multiplier, vehicle),
-      weight: Math.max(0.1, Number(googleSignal.weight || 0.84)) * Math.max(35, Number(googleSignal.confidence || 62)) * (publicSignals.length ? 0.86 : 1.02) * ageMult,
+      weight: Math.max(0.1, Number(googleSignal.weight || 0.84)) * Math.max(35, Number(googleSignal.confidence || 62)) * googlePriorityFactor * ageMult,
       label: 'Google',
       sourceType: googleSignal.sourceType,
       updatedAt: googleSignal.fetchedAt,
@@ -2306,11 +2352,15 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       hasGoogleSignal: Boolean(googleSignal),
       hasCameraSignal: Boolean(cameraSignal),
       hasStrongCameraQueue: cameraShowsQueue(cameraSignal),
+      hasHardPublicSignal,
       hasSoftUpperBoundPublic: publicSignals.length > 0 && publicSignals.every(isSoftUpperBoundSource),
+      // True when Google looks clear but an official/camera/report signal still shows a booth
+      // queue. The frontend uses this to explain why the wait is higher than the blue road.
+      googleClearWhileQueue: Boolean(sanity.googleVsOfficial),
       sourceAgreement: agreement.agreement,
       sourceSpreadMinutes: agreement.spread,
-      note: sanity.adjusted
-        ? `${sanity.reason}${googleClearNote}${agreementNote}`
+      note: sanity.reason
+        ? `${sanity.reason}${agreementNote}`
         : combined
           ? `Procjena se temelji na kombinaciji dostupnih izvora: ${signalNames.join(', ')}.${googleClearNote}${agreementNote}`
           : `${bestCandidate.label} je trenutno najjači izvor za ovaj smjer.${googleClearNote}${agreementNote}`,
@@ -2417,7 +2467,9 @@ async function buildEffectiveWaitMaps(store) {
         hasGoogleSignal: signal.hasGoogleSignal,
         hasCameraSignal: signal.hasCameraSignal,
         hasStrongCameraQueue: signal.hasStrongCameraQueue,
+        hasHardPublicSignal: signal.hasHardPublicSignal,
         hasSoftUpperBoundPublic: signal.hasSoftUpperBoundPublic,
+        googleClearWhileQueue: signal.googleClearWhileQueue,
         sourceAgreement: signal.sourceAgreement,
         sourceSpreadMinutes: signal.sourceSpreadMinutes,
         displayReady: signal.displayReady !== false,
@@ -5770,6 +5822,8 @@ export {
   withHakImageFallbacks,
   CAMERA_FEEDS,
   BORDER_CROSSINGS,
+  PUBLIC_SOURCE_TARGETS,
+  effectiveBorderSignal,
 };
 
 function assertProductionSafety() {

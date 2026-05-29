@@ -121,13 +121,16 @@ describe('applyTrafficSanityCaps — Google snapshot fresh and clear (Google-Map
     expect(sanity.wait).toBeLessThanOrEqual(15);
   });
 
-  it('blue route + hard public number (BIHAMK 45 min) → caps to 22 (split difference)', () => {
+  it('blue route + hard public number (BIHAMK 45 min) → kept at 45 (official source wins)', () => {
+    // New fusion policy: an official hard number is authoritative; a blue Google road does
+    // not split-the-difference it down. The booth queue is real even when the approach flows.
     const sanity = applyTrafficSanityCaps(45, {
       googleSignal: makeGoogleSignal({ delayMinutes: 1 }),
       cameraSignal: null,
       publicSignals: [makeHardPublicSignal('Eksplicitno čekanje 45 min', 45)],
     });
-    expect(sanity.wait).toBeLessThanOrEqual(22);
+    expect(sanity.wait).toBe(45);
+    expect(sanity.googleVsOfficial).toBe(true);
   });
 });
 
