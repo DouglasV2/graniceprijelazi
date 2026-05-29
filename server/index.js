@@ -835,14 +835,15 @@ const CAMERA_FEEDS = {
     },
   ],
   bijaca: [
-    // HAK mobile camera page often loads the JPG via JavaScript, so the HTML
-    // scraper can miss it. We include known direct-URL candidates first; the
-    // proxy walks them and falls back to in-page extraction only if all fail.
+    // Nova Sela/Bijača is a grouped HAK page (`k=137`), but the actual
+    // still-image IDs are 201 and 202. Using 137/138 returns HAK's red
+    // "invalid webcam" placeholder, so keep the public page as the external
+    // source and proxy the real JPEG endpoints.
     { id: 'bij-hak-ulaz-hr', label: 'Nova Sela / Bijača · ulaz u HR', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=137', imageIndex: 0,
-      imageUrls: ['https://www.hak.hr/info/kamere/137.jpg', 'https://m.hak.hr/cams/137.jpg'],
+      imageUrls: ['https://www.hak.hr/info/kamere/201.jpg'],
       externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=137' },
     { id: 'bij-hak-izlaz-hr', label: 'Nova Sela / Bijača · izlaz iz HR', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=137', imageIndex: 1,
-      imageUrls: ['https://www.hak.hr/info/kamere/138.jpg', 'https://m.hak.hr/cams/138.jpg'],
+      imageUrls: ['https://www.hak.hr/info/kamere/202.jpg'],
       externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=137' },
     { id: 'bij-bihamk-page', label: 'Bijača / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Bijača', 'Bijača', 'Bijaca'] },
   ],

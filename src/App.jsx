@@ -690,7 +690,7 @@ const CROSSINGS = [
         type: 'image',
         url: 'https://m.hak.hr/kamera.asp?g=2&k=137',
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=137',
-        note: 'HAK kameru Nova Sela/Bijača treba tražiti u grupi A10, ne u grupi Granični prijelazi.',
+        note: 'Proxy koristi stvarnu HAK JPEG sliku 201, jer grupna stranica k=137 ne odgovara direktnom JPG-u 137.',
       },
       {
         id: 'bij-hak-izlaz-hr',
@@ -700,7 +700,7 @@ const CROSSINGS = [
         type: 'image',
         url: 'https://m.hak.hr/kamera.asp?g=2&k=137',
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=137',
-        note: 'Druga HAK slika s iste stranice Nova Sela/Bijača.',
+        note: 'Proxy koristi stvarnu HAK JPEG sliku 202, jer grupna stranica k=137 ne odgovara direktnom JPG-u 138.',
       },
       {
         id: 'bij-bihamk-page',
