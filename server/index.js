@@ -660,7 +660,7 @@ const BORDER_CROSSINGS = {
         exitPoint: { lat: 45.13550, lng: 17.21620 },
         // Same treatment as Gradiška: skip via-intermediate and fail open so the UI
         // prefers Google's road-following polyline over the straight calibrated fallback.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 950, displayAfterMeters: 1250 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1150, displayAfterMeters: 1650 },
       },
       toHr: {
         label: 'BiH → HR',
@@ -669,7 +669,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.13550, lng: 17.21620 },
         borderPoint: { lat: 45.14250, lng: 17.20650 },
         exitPoint: { lat: 45.15050, lng: 17.19700 },
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 950, displayAfterMeters: 1250 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1150, displayAfterMeters: 1650 },
       },
     },
   },
@@ -704,7 +704,7 @@ const BORDER_CROSSINGS = {
         // which dropped Bijača into the straight-line calibrated fallback. The free A1 route
         // naturally passes through the border zone. Fail open here because the previous
         // strict guard caused a straight-line fallback that visibly missed the motorway.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 700, displayAfterMeters: 800 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1000, displayAfterMeters: 1050 },
       },
       toHr: {
         label: 'BiH → HR',
@@ -713,7 +713,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 43.12300, lng: 17.57760 },
         borderPoint: { lat: 43.12340, lng: 17.56780 },
         exitPoint: { lat: 43.12376, lng: 17.55720 },
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 700, displayAfterMeters: 800 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1000, displayAfterMeters: 1050 },
       },
     },
   },
@@ -4366,6 +4366,34 @@ function slicePathAroundPoint(path = [], centerPoint, beforeMeters = 900, afterM
   return sliced.length >= 2 ? sliced : path;
 }
 
+
+function routeAnchorScore(route, anchor = {}, { includeApproachExit = true } = {}) {
+  const path = Array.isArray(route?.path) ? route.path : [];
+  const points = routePassPoints(anchor, { includeApproachExit });
+  if (!path.length || !points.length) return Number.POSITIVE_INFINITY;
+  return points.reduce((total, item) => total + Math.min(minDistanceToPathMeters(item.point, path), 50000), 0);
+}
+
+function sortCrossingRoutesByAnchorFit(routes = [], anchor = {}) {
+  return [...routes]
+    .map((route, index) => ({
+      route,
+      index,
+      strictScore: routeAnchorScore(route, anchor, { includeApproachExit: true }),
+      borderScore: routeAnchorScore(route, anchor, { includeApproachExit: false }),
+      durationMinutes: Number(route.durationMinutes || 0),
+      distanceKm: Number(route.distanceKm || 0),
+    }))
+    .sort((a, b) => {
+      if (a.strictScore !== b.strictScore) return a.strictScore - b.strictScore;
+      if (a.borderScore !== b.borderScore) return a.borderScore - b.borderScore;
+      if (a.durationMinutes !== b.durationMinutes) return a.durationMinutes - b.durationMinutes;
+      if (a.distanceKm !== b.distanceKm) return a.distanceKm - b.distanceKm;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.route);
+}
+
 function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
   const guard = anchor.routeGuard || {};
   const beforeMeters = Number(guard.displayBeforeMeters || process.env.ROUTE_DISPLAY_BEFORE_METERS || 850);
@@ -4973,6 +5001,8 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
     throw error;
   }
 
+  const rankedAccepted = sortCrossingRoutesByAnchorFit(accepted, anchor);
+
   return {
     ok: true,
     live: true,
@@ -4990,7 +5020,7 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
     displayMode: 'control_zone',
     note: rejected.length ? `${rejected.length} Google alternativa je odbačena jer ne prolazi kroz kalibrirane točke prijelaza. Na karti prikazujemo samo provjerenu zonu oko granice.` : 'Na karti prikazujemo samo provjerenu cestovnu zonu oko prijelaza, bez umjetnih početnih i završnih točaka.',
     rejectedRoutes: process.env.NODE_ENV === 'production' ? undefined : rejected.map((route) => ({ id: route.id, distanceKm: route.distanceKm, routeGuard: route.routeGuard })),
-    routes: accepted.map((route, index) => makeMapFriendlyControlZoneRoute({ ...route, primary: index === 0 }, anchor)),
+    routes: rankedAccepted.map((route, index) => makeMapFriendlyControlZoneRoute({ ...route, primary: index === 0 }, anchor)),
   };
 }
 
