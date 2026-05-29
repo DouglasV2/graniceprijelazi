@@ -42,11 +42,11 @@ function externalCamera({ id, label, source = 'HAK izvor', url, note, matchText,
     id,
     label,
     source,
-    status: 'izvor se otvara u novoj kartici',
-    type: 'iframe',
+    status: 'javna slika kroz aplikaciju',
+    type: 'image',
     url,
     externalUrl: url,
-    note: note || 'Javni izvor se otvara u novoj kartici ako preglednik blokira prikaz unutar aplikacije.',
+    note: note || 'Slika se učitava kroz aplikacijski proxy. Original je dostupan preko gumba “Otvori izvor”.',
     ...(matchText ? { matchText } : {}),
     ...(Array.isArray(matchTexts) ? { matchTexts } : {}),
     ...(Number.isFinite(Number(imageIndex)) ? { imageIndex: Number(imageIndex) } : {}),
@@ -500,12 +500,12 @@ const CROSSINGS = [
       {
         id: 'gra-hak-page',
         label: 'Bosanska Gradiška / HAK',
-        source: 'HAK izvor',
-        status: 'izvor se otvara u novoj kartici',
-        type: 'iframe',
+        source: 'HAK direktna slika',
+        status: 'javna slika kroz aplikaciju',
+        type: 'image',
         url: 'https://m.hak.hr/kamera.asp?g=2&k=185',
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=185',
-        note: 'HAK izvor za GP Bosanska Gradiška otvara se u novoj kartici.',
+        note: 'HAK slika za GP Bosanska Gradiška učitava se kroz proxy.',
       },
       {
         id: 'gra-rs-in',
@@ -598,14 +598,14 @@ const CROSSINGS = [
       {
         id: 'gv-hak-queue-9',
         label: 'Gornji Varoš · kamera 9',
-        source: 'HAK izvor',
+        source: 'HAK direktna slika',
         imageIndex: 0,
-        status: 'izvor se otvara u novoj kartici',
-        type: 'iframe',
+        status: 'javna slika kroz aplikaciju',
+        type: 'image',
         url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=303',
         previewImage: '/camera-snapshots/gornji-varos-hak.png',
-        note: 'Izvor otvara kameru u novoj kartici. Referentni kadar ima ručno označenu EU krajnju lijevu traku i non‑EU ostale trake.',
+        note: 'HAK slika ima ručno označenu EU krajnju lijevu traku i non‑EU ostale trake.',
         laneCalibration: {
           zones: [
             { key: 'eu', label: 'EU · krajnja lijeva', x: 6, y: 29, w: 22, h: 53, rotate: -13 },
@@ -620,14 +620,14 @@ const CROSSINGS = [
       {
         id: 'gv-hak-plaza-4',
         label: 'Gornji Varoš · zona kontrole',
-        source: 'HAK izvor',
+        source: 'HAK direktna slika',
         imageIndex: 1,
-        status: 'izvor se otvara u novoj kartici',
-        type: 'iframe',
+        status: 'javna slika kroz aplikaciju',
+        type: 'image',
         url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=303',
         previewImage: '/camera-snapshots/gornji-varos-hak.png',
-        note: 'Drugi prikaz istog prijelaza koristi se za usporedbu: krajnja lijeva = EU, ostale trake = non‑EU.',
+        note: 'Drugi kadar istog prijelaza: krajnja lijeva traka = EU, ostale trake = non‑EU.',
         laneCalibration: {
           zones: [
             { key: 'eu', label: 'EU · krajnja lijeva', x: 6, y: 31, w: 21, h: 51, rotate: -14 },
@@ -928,6 +928,21 @@ function laneSignalText(profile = {}) {
   if (diff < 10) return 'EU i non‑EU kolone su približno ujednačene.';
   const slower = Number(profile.nonEu.wait) > Number(profile.eu.wait) ? 'Non‑EU' : 'EU';
   return `${slower} kolona je sporija za oko ${formatMinutes(diff)}.`;
+}
+
+// EU/Non-EU lane split is real only where we have lane calibration anchors on
+// at least one camera. Showing it elsewhere would invent numbers from a 0.5/0.5
+// fallback split, which misleads users. Gornji Varoš is currently the only
+// crossing with proper lane zones configured.
+function crossingHasLaneCalibration(crossing) {
+  if (!crossing || !Array.isArray(crossing.cameras)) return false;
+  return crossing.cameras.some((camera) => {
+    const cal = camera?.laneCalibration;
+    if (!cal) return false;
+    const zones = Array.isArray(cal.zones) ? cal.zones : [];
+    const profiles = cal.profiles || {};
+    return zones.length > 0 || profiles.toBih || profiles.toHr;
+  });
 }
 
 
@@ -2503,8 +2518,8 @@ function levelLabel(level) {
 }
 
 function routeAvailabilityMeta(payload = {}) {
-  if (payload.closed || payload.routeStatus === 'closed_or_blocked') {
-    return { label: 'Zatvoreno', className: 'closed' };
+  if (payload.closed || payload.routeStatus === 'closed_or_blocked' || payload.routeStatus === 'route_unavailable') {
+    return { label: payload.routeStatus === 'route_unavailable' ? 'Ruta nedostupna' : 'Zatvoreno', className: 'closed' };
   }
   if (payload.routeStatus === 'calibrated_fallback') return { label: 'Kalibrirana zona', className: 'pending' };
   if (payload.routeHidden || payload.routeStatus === 'pending_verification') return { label: 'Provjera rute', className: 'pending' };
@@ -3211,8 +3226,8 @@ function ExternalCameraNotice({ cam, compact = false }) {
     <div className={compact ? 'external-camera-note compact' : 'camera-live-frame external-camera-note'}>
       <div className="external-camera-icon"><AlertTriangle size={18} /></div>
       <div>
-        <strong>Izvor se ne može prikazati unutar aplikacije</strong>
-        <p>Neki izvori blokiraju prikaz na drugim stranicama. Kamera je dostupna preko gumba “Otvori izvor”.</p>
+        <strong>Slika trenutno nije dostupna iz izvora</strong>
+        <p>Aplikacija dohvaća sliku kroz proxy iz HAK/BIHAMK/AMS izvora. Ako izvor ne odgovara, pokušaj ponovno za nekoliko minuta ili otvori izvor izravno.</p>
         {!compact && <a href={cam.externalUrl || cam.url} target="_blank" rel="noreferrer">Otvori izvor</a>}
       </div>
     </div>
@@ -3267,6 +3282,7 @@ function CameraPanel({ crossing, selectedDirection }) {
   const maxPassed = Math.max(...historySeries.map((item) => item.passed), 1);
   const state = statusMeta[analytics.state] || statusMeta.normal;
   const laneProfile = analytics.laneProfile || aggregateLaneProfile(analytics.laneSignals || []);
+  const showLanes = crossingHasLaneCalibration(crossing);
   const selectedSignalData = analytics.laneSignals.find((signal) => signal.id === selectedSignal) || analytics.laneSignals[0];
 
   useEffect(() => {
@@ -3394,27 +3410,29 @@ function CameraPanel({ crossing, selectedDirection }) {
           </div>
         </article>
 
-        <LaneSplitCard profile={laneProfile} />
+        {showLanes && <LaneSplitCard profile={laneProfile} />}
       </div>
 
-      <div className="lane-signal-grid">
-        {analytics.laneSignals.map((signal) => (
-          <button
-            key={signal.id}
-            type="button"
-            className={selectedSignal === signal.id ? 'lane-signal-card active' : 'lane-signal-card'}
-            onClick={() => setSelectedSignal(signal.id)}
-          >
-            <span>{signal.label}</span>
-            <strong>{signal.passed15} vozila / 15 min</strong>
-            <small>u kadru: {signal.frame.cars} auta · {signal.frame.vans || 0} kombija · {signal.frame.trucks} kamiona · {signal.frame.buses} bus</small>
-            {signal.laneGroups && <small className="lane-card-split">EU {formatMinutes(signal.laneGroups.eu?.wait)} · Non‑EU {formatMinutes(signal.laneGroups.nonEu?.wait)}</small>}
-            <i>{confidenceLabel(signal.confidence)}</i>
-          </button>
-        ))}
-      </div>
+      {showLanes && (
+        <div className="lane-signal-grid">
+          {analytics.laneSignals.map((signal) => (
+            <button
+              key={signal.id}
+              type="button"
+              className={selectedSignal === signal.id ? 'lane-signal-card active' : 'lane-signal-card'}
+              onClick={() => setSelectedSignal(signal.id)}
+            >
+              <span>{signal.label}</span>
+              <strong>{signal.passed15} vozila / 15 min</strong>
+              <small>u kadru: {signal.frame.cars} auta · {signal.frame.vans || 0} kombija · {signal.frame.trucks} kamiona · {signal.frame.buses} bus</small>
+              {signal.laneGroups && <small className="lane-card-split">EU {formatMinutes(signal.laneGroups.eu?.wait)} · Non‑EU {formatMinutes(signal.laneGroups.nonEu?.wait)}</small>}
+              <i>{confidenceLabel(signal.confidence)}</i>
+            </button>
+          ))}
+        </div>
+      )}
 
-      {selectedSignalData && (
+      {showLanes && selectedSignalData && (
         <div className="selected-signal-strip">
           <div>
             <span>Aktivna kamera</span>
@@ -3449,16 +3467,11 @@ function CameraPanel({ crossing, selectedDirection }) {
                 <span>{cam.source}</span>
               </div>
               <p>{cam.status}</p>
-              <small>{cam.note}</small>
-              {cam.type !== 'image' && <small className="source-access-note">Ako se prikaz ne otvori u aplikaciji, izvor ne dopušta ugradnju.</small>}
+              {cam.note && <small>{cam.note}</small>}
               <a href={cam.externalUrl || cam.url} target="_blank" rel="noreferrer">Otvori izvor</a>
             </div>
           </article>
         ))}
-        <article className="camera-pipeline production-camera-note">
-          <h3>Napomena o kamerama</h3>
-          <p>Kamere služe kao vizualna provjera i pomoć pri procjeni protoka. Procjena iz kamera je okvirna — za sigurnu odluku provjeri i ostale izvore ili dojave vozača.</p>
-        </article>
       </div>
     </div>
   );

@@ -760,7 +760,9 @@ const CAMERA_FEEDS = {
     },
   ],
   gradiska: [
-    { id: 'gra-hak-page', label: 'Bosanska Gradiška / HAK', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=185' },
+    { id: 'gra-hak-page', label: 'Bosanska Gradiška / HAK', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=185',
+      imageUrls: ['https://www.hak.hr/info/kamere/185.jpg'],
+      externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=185' },
     { id: 'gra-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_17_GP_CA02/slika.jpg', calibration: {
       roi: { x: 10, y: 18, w: 78, h: 68, rotate: -8 },
       queueAnchor: { x: 62, y: 66 },
@@ -784,6 +786,8 @@ const CAMERA_FEEDS = {
       source: 'HAK',
       imageIndex: 0,
       url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
+      imageUrls: ['https://www.hak.hr/info/kamere/303.jpg'],
+      externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=303',
       calibration: {
         roi: { x: 6, y: 18, w: 82, h: 68, rotate: -11 },
         laneZones: [
@@ -812,6 +816,8 @@ const CAMERA_FEEDS = {
       source: 'HAK',
       imageIndex: 1,
       url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
+      imageUrls: ['https://www.hak.hr/info/kamere/303.jpg'],
+      externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=303',
       calibration: {
         roi: { x: 8, y: 18, w: 82, h: 70, rotate: -10 },
         laneZones: [
@@ -914,6 +920,30 @@ function calibratedAnchors({ hrLabel, bihLabel, approachHr, borderPoint, exitBih
   };
 }
 
+// HAK mobile page URLs follow `https://m.hak.hr/kamera.asp?g=2&k=NNN`. The page
+// loads the JPG via JavaScript so the HTML scraper sometimes misses it. The
+// direct image at `https://www.hak.hr/info/kamere/{k}.jpg` works for every
+// camera id we use, so we derive that as the proxy's first candidate.
+function hakDirectImageFromPageUrl(url = '') {
+  const match = /[?&]k=(\d+)/i.exec(String(url || ''));
+  if (!match) return '';
+  return `https://www.hak.hr/info/kamere/${match[1]}.jpg`;
+}
+
+function withHakImageFallbacks(camera = {}) {
+  const url = String(camera.url || '');
+  if (!/m\.hak\.hr\/kamera\.asp/i.test(url)) return camera;
+  const direct = hakDirectImageFromPageUrl(url);
+  if (!direct) return camera;
+  const existing = Array.isArray(camera.imageUrls) ? camera.imageUrls : [];
+  if (existing.includes(direct)) return camera;
+  return {
+    ...camera,
+    imageUrls: [direct, ...existing],
+    externalUrl: camera.externalUrl || url,
+  };
+}
+
 function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, cameras, anchors }) {
   BORDER_CROSSINGS[id] = {
     id,
@@ -922,16 +952,18 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     waits,
     anchors: anchors || routeAnchors(lat, lng, hrLabel, bihLabel, name),
   };
-  CAMERA_FEEDS[id] = cameras.map((camera) => ({
-    source: 'HAK',
-    ...camera,
-    calibration: camera.calibration || {
-      roi: { x: 14, y: 18, w: 74, h: 66, rotate: -10 },
-      queueAnchor: { x: 58, y: 62 },
-      countLine: { x1: 14, y1: 74, x2: 86, y2: 40, label: 'linija prolaska' },
-      baselineFrame: { cars: 5, vans: 1, trucks: 1, buses: 0 },
-    },
-  }));
+  CAMERA_FEEDS[id] = cameras.map((rawCamera) => {
+    const camera = withHakImageFallbacks({ source: 'HAK', ...rawCamera });
+    return {
+      ...camera,
+      calibration: camera.calibration || {
+        roi: { x: 14, y: 18, w: 74, h: 66, rotate: -10 },
+        queueAnchor: { x: 58, y: 62 },
+        countLine: { x1: 14, y1: 74, x2: 86, y2: 40, label: 'linija prolaska' },
+        baselineFrame: { cars: 5, vans: 1, trucks: 1, buses: 0 },
+      },
+    };
+  });
 }
 
 [
@@ -3146,6 +3178,130 @@ app.get('/api/admin/health', authRequired, adminRequired, async (req, res) => {
     },
     crossings: Object.keys(BORDER_CROSSINGS),
     focusWindow: '07-19',
+  });
+});
+
+async function collectHistoryAndCameraCounts() {
+  const store = await readAppStore();
+  const counts = {
+    historySnapshots: store.historySnapshots?.length || 0,
+    sourceSnapshots: store.sourceSnapshots?.length || 0,
+    cameraSnapshots: cameraSnapshotBuffer.length,
+    cameraEvents: cameraEvents.length,
+  };
+  if (datastoreMode === 'postgres') {
+    try {
+      const [h, s, c] = await Promise.all([
+        dbQuery('SELECT COUNT(*)::int AS count FROM borderflow_history_snapshots'),
+        dbQuery('SELECT COUNT(*)::int AS count FROM borderflow_source_snapshots'),
+        dbQuery('SELECT COUNT(*)::int AS count FROM borderflow_camera_snapshots'),
+      ]);
+      counts.historySnapshots = Number(h.rows[0]?.count || 0);
+      counts.sourceSnapshots = Number(s.rows[0]?.count || 0);
+      counts.cameraSnapshots = Number(c.rows[0]?.count || 0);
+    } catch {
+      // fall through to in-memory counts
+    }
+  }
+  return counts;
+}
+
+// Admin-only dev/test endpoint. Wipes camera/history/source snapshot buffers
+// and (in Postgres mode) truncates the matching tables. Users and admin
+// overrides are intentionally untouched — call dedicated admin endpoints to
+// edit those.
+app.post('/api/admin/reset-history', authRequired, adminRequired, writeLimiter, async (req, res) => {
+  try {
+    const before = await collectHistoryAndCameraCounts();
+
+    const store = await readAppStore();
+    store.historySnapshots = [];
+    store.sourceSnapshots = [];
+    await writeAppStore(store);
+
+    cameraEvents.length = 0;
+    cameraSnapshotBuffer.length = 0;
+    resolvedCameraImageCache.clear();
+
+    if (datastoreMode === 'postgres') {
+      try {
+        await dbQuery('TRUNCATE TABLE borderflow_history_snapshots, borderflow_source_snapshots, borderflow_camera_snapshots');
+      } catch (error) {
+        console.warn('[admin/reset-history] postgres truncate failed:', error.message);
+      }
+    }
+
+    const after = await collectHistoryAndCameraCounts();
+    await audit('history_reset', req.user, { before, after, mode: datastoreMode });
+    res.json({ ok: true, mode: datastoreMode, before, after });
+  } catch (error) {
+    console.error('[admin/reset-history]', error);
+    res.status(500).json({ ok: false, error: 'Reset povijesti nije uspio.', note: safeError(error) });
+  }
+});
+
+// Admin-only camera audit: probes every configured CAMERA_FEEDS entry through
+// the in-app proxy endpoint to confirm it returns an image (not the
+// "izvor se ne može prikazati" iframe fallback). Reports OK/broken status,
+// HTTP code, content-type and image dimensions when available.
+app.get('/api/admin/camera-audit', authRequired, adminRequired, async (req, res) => {
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const results = [];
+  for (const [crossingId, cameras] of Object.entries(CAMERA_FEEDS)) {
+    for (const camera of cameras) {
+      const entry = {
+        crossingId,
+        cameraId: camera.id,
+        label: camera.label || '',
+        source: camera.source || '',
+        url: camera.url || '',
+        externalUrl: camera.externalUrl || '',
+        imageUrls: Array.isArray(camera.imageUrls) ? camera.imageUrls : [],
+        proxiedImage: `/api/camera-image/${encodeURIComponent(crossingId)}/${encodeURIComponent(camera.id)}`,
+        render: 'proxied-image',
+        ok: false,
+        status: 0,
+        contentType: '',
+        width: null,
+        height: null,
+        error: '',
+      };
+      try {
+        const response = await fetch(`${baseUrl}${entry.proxiedImage}`, {
+          headers: { 'User-Agent': 'PrijelazRadar/1.0 admin-camera-audit' },
+        });
+        entry.status = response.status;
+        entry.contentType = String(response.headers.get('content-type') || '');
+        if (response.ok && entry.contentType.startsWith('image/')) {
+          entry.ok = true;
+          if (entry.contentType.includes('jpeg') || entry.contentType.includes('jpg')) {
+            try {
+              const buffer = Buffer.from(await response.arrayBuffer());
+              const decoded = jpeg.decode(buffer, { useTArray: true, maxMemoryUsageInMB: 32 });
+              entry.width = decoded.width;
+              entry.height = decoded.height;
+            } catch {
+              // not all images are jpeg; skip dimensions
+            }
+          }
+        } else {
+          let body = '';
+          try { body = await response.text(); } catch {}
+          entry.error = body.slice(0, 220) || `HTTP ${response.status}`;
+        }
+      } catch (error) {
+        entry.error = String(error?.message || error);
+      }
+      results.push(entry);
+    }
+  }
+  const broken = results.filter((r) => !r.ok);
+  const ok = results.filter((r) => r.ok);
+  res.json({
+    ok: true,
+    totals: { total: results.length, ok: ok.length, broken: broken.length },
+    broken,
+    cameras: results,
   });
 });
 
@@ -5409,6 +5565,42 @@ app.get('/api/routes/:crossingId', async (req, res) => {
       }));
       return;
     }
+
+    // Gradiška-specific guard: when Google cannot return a real cross-border route
+    // (e.g. old bridge closed / construction), the calibrated control zone is
+    // misleading because users see a zig-zag local path. Mark the route as
+    // unavailable and point users at Gornji Varoš instead of drawing a zone.
+    if (crossing.id === 'gradiska' && isLikelyClosedOrBlockedRoute(error, crossing, direction)) {
+      const replacement = BORDER_CROSSINGS['gornji-varos'];
+      const replacementAnchor = replacement?.anchors?.[direction] || replacement?.anchors?.toBih || {};
+      const payload = routeClosedPayload(
+        crossing,
+        direction,
+        'Ruta preko Gradiške trenutno nije dostupna — moguće je da je most zatvoren ili Google ne može izračunati legalan prelazak. Koristi Gornji Varoš (Novi Most) ako ideš na područje Gradiške.',
+        {
+          error: safeError(error),
+          source: 'routes-api-gradiska-unavailable',
+          routeStatus: 'route_unavailable',
+        }
+      );
+      if (replacement) {
+        payload.suggestedCrossing = {
+          crossingId: replacement.id,
+          crossingName: replacement.name,
+          shortName: replacement.shortName,
+          label: `Prikaži ${replacement.shortName}`,
+          zone: {
+            from: replacementAnchor.fromLabel,
+            border: replacement.name,
+            to: replacementAnchor.toLabel,
+            label: replacementAnchor.label,
+          },
+        };
+      }
+      res.json(payload);
+      return;
+    }
+
     res.json(buildCalibratedControlZoneRoute(crossing, direction, 'Google Routes/route guard trenutno nisu vratili sigurnu cestovnu putanju, ali prijelaz ne označavamo kao zatvoren. Prikazujemo ručno kalibriranu zonu dok Google ne vrati validnu lokalnu rutu.', {
       source: 'routes-api-calibrated-fallback',
       error: safeError(error),
