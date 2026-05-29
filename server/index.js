@@ -613,27 +613,44 @@ const BORDER_CROSSINGS = {
       toBih: {
         label: 'HR → BiH',
         fromLabel: 'Stara Gradiška · HR prilaz',
-        toLabel: 'Gradiška · BiH izlaz',
-        // Re-calibrated for the actual Sava bridge between Stara Gradiška (HR, D5) and
-        // Gradiška (BiH, M16). Old anchors were placed off the bridge centreline so
-        // Google's polyline frequently failed the pass-distance check.
-        approachStart: { lat: 45.15280, lng: 17.24560 },
+        toLabel: 'Gradiška · BiH izlaz (M6)',
+        // Anchors pulled tight to the Sava bridge: HR approach sits at the bridge entrance
+        // (Stara Gradiška side) and the BiH exit sits south of Gradiška city centre near
+        // the M6 highway, which is roughly where the current displayed polyline ends.
+        approachStart: { lat: 45.14850, lng: 17.25100 },
         borderPoint: { lat: 45.14530, lng: 17.25210 },
-        exitPoint: { lat: 45.14010, lng: 17.25680 },
+        exitPoint: { lat: 45.13800, lng: 17.25750 },
+        // Secondary approach via Vidovdanska street in Gradiška BiH — exposes traffic
+        // information for vehicles that take the eastern through-town corridor instead of
+        // the main southern Kozarskih brigada → M6 route.
+        additionalRoutes: [
+          {
+            label: 'Preko Vidovdanske',
+            description: 'Alternativni prilaz mostu kroz Vidovdansku ulicu (Gradiška BiH)',
+            exitPoint: { lat: 45.14250, lng: 17.25900 },
+          },
+        ],
         // useViaIntermediate: false → skip the strict via waypoint that triggers
         // Google ZERO_RESULTS on this bridge. The free approach→exit route always
         // crosses the actual border zone. For this crossing we fail open so a guard mismatch
         // logs as a warning instead of dropping back to a straight calibrated line.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 700, displayAfterMeters: 650 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 600, displayAfterMeters: 1100 },
       },
       toHr: {
         label: 'BiH → HR',
-        fromLabel: 'Gradiška · BiH prilaz',
+        fromLabel: 'Gradiška · BiH prilaz (M6)',
         toLabel: 'Stara Gradiška · HR izlaz',
-        approachStart: { lat: 45.14010, lng: 17.25680 },
+        approachStart: { lat: 45.13800, lng: 17.25750 },
         borderPoint: { lat: 45.14530, lng: 17.25210 },
-        exitPoint: { lat: 45.15280, lng: 17.24560 },
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 700, displayAfterMeters: 650 },
+        exitPoint: { lat: 45.14850, lng: 17.25100 },
+        additionalRoutes: [
+          {
+            label: 'Iz Vidovdanske',
+            description: 'Alternativni prilaz mostu iz Vidovdanske ulice (Gradiška BiH)',
+            approachStart: { lat: 45.14250, lng: 17.25900 },
+          },
+        ],
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1100, displayAfterMeters: 600 },
       },
     },
   },
@@ -660,7 +677,7 @@ const BORDER_CROSSINGS = {
         exitPoint: { lat: 45.13550, lng: 17.21620 },
         // Same treatment as Gradiška: skip via-intermediate and fail open so the UI
         // prefers Google's road-following polyline over the straight calibrated fallback.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2000, displayAfterMeters: 3200 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 3600 },
       },
       toHr: {
         label: 'BiH → HR',
@@ -669,7 +686,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.13550, lng: 17.21620 },
         borderPoint: { lat: 45.14250, lng: 17.20650 },
         exitPoint: { lat: 45.15050, lng: 17.19700 },
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2000, displayAfterMeters: 3200 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 3600 },
       },
     },
   },
@@ -4457,7 +4474,7 @@ function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
     ratio: staticMinutes ? Number((durationMinutes / staticMinutes).toFixed(2)) : route.ratio,
     level: delayLevel(delayMinutes, staticMinutes ? durationMinutes / staticMinutes : route.ratio),
     trafficSegments: buildTrafficSegments(displayPath, []),
-    label: route.primary ? 'Provjerena zona' : 'Alternativni prilaz',
+    label: route.primary ? 'Provjerena zona' : (route.variantLabel || 'Alternativni prilaz'),
     displayMode: 'control_zone',
     displayNote: 'Na karti je namjerno prikazana samo provjerena dionica oko prijelaza, bez čudnih početnih i završnih točaka.',
   };
@@ -5038,6 +5055,47 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
 
   const rankedAccepted = sortCrossingRoutesByAnchorFit(accepted, anchor);
 
+  // Optional secondary routes (e.g. Vidovdanska side-street approach). Each variant
+  // overrides approachStart and/or exitPoint while keeping the same borderPoint, so we
+  // surface congestion on alternate corridors that share the same physical checkpoint.
+  const variantSpecs = Array.isArray(anchor.additionalRoutes) ? anchor.additionalRoutes : [];
+  const variantRoutes = [];
+  for (const [variantIndex, variant] of variantSpecs.entries()) {
+    const variantApproach = variant.approachStart || anchor.approachStart;
+    const variantExit = variant.exitPoint || anchor.exitPoint;
+    if (!variantApproach || !variantExit) continue;
+    try {
+      const variantData = await fetchRoutes(routeRequest({
+        origin: latLngWaypoint(variantApproach),
+        destination: latLngWaypoint(variantExit),
+        intermediates: anchor.borderPoint ? [latLngWaypoint(anchor.borderPoint)] : [],
+        alternatives: false,
+      }));
+      const variantRaw = (variantData?.routes || [])
+        .map((route, index) => normalizeRoute(route, index, {
+          id: `${crossing.id}-variant-${variantIndex + 1}-${index + 1}`,
+          crossingId: crossing.id,
+          crossingName: crossing.name,
+          direction,
+          variantLabel: variant.label,
+          variantDescription: variant.description,
+          zone: {
+            from: variant.fromLabel || anchor.fromLabel,
+            border: crossing.name,
+            to: variant.toLabel || anchor.toLabel,
+            label: variant.label || anchor.label,
+          },
+        }))
+        .filter((route) => route.path.length);
+      const { accepted: variantAccepted } = guardedRoutes(variantRaw, crossing, direction, 'crossing');
+      if (variantAccepted.length) variantRoutes.push(variantAccepted[0]);
+    } catch (variantError) {
+      console.warn('[route-variant/failed]', { crossingId: crossing.id, direction, variant: variant.label, reason: variantError.message });
+    }
+  }
+
+  const combinedRoutes = [...rankedAccepted, ...variantRoutes];
+
   return {
     ok: true,
     live: true,
@@ -5055,7 +5113,7 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
     displayMode: 'control_zone',
     note: rejected.length ? `${rejected.length} Google alternativa je odbačena jer ne prolazi kroz kalibrirane točke prijelaza. Na karti prikazujemo samo provjerenu zonu oko granice.` : 'Na karti prikazujemo samo provjerenu cestovnu zonu oko prijelaza, bez umjetnih početnih i završnih točaka.',
     rejectedRoutes: process.env.NODE_ENV === 'production' ? undefined : rejected.map((route) => ({ id: route.id, distanceKm: route.distanceKm, routeGuard: route.routeGuard })),
-    routes: rankedAccepted.map((route, index) => makeMapFriendlyControlZoneRoute({ ...route, primary: index === 0 }, anchor)),
+    routes: combinedRoutes.map((route, index) => makeMapFriendlyControlZoneRoute({ ...route, primary: index === 0 }, anchor)),
   };
 }
 
