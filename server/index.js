@@ -3991,7 +3991,7 @@ function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
-function estimateCameraFlowFromSnapshot({ visibleTotal = 0, occupancyPct = 0, componentDensity = 0, direction = 'toBih', previousSnapshot = null } = {}) {
+function estimateCameraFlowFromSnapshot({ visibleTotal = 0, occupancyPct = 0, laneFullnessPct = 0, componentDensity = 0, direction = 'toBih', previousSnapshot = null } = {}) {
   const queueVehicles = Math.max(0, Math.round(Number(visibleTotal || 0)));
   const occupancyLoad = clampNumber(Number(occupancyPct || 0) / 45, 0, 1.6);
   const densityLoad = clampNumber(Number(componentDensity || 0) / 2.2, 0, 1.4);
@@ -4020,6 +4020,21 @@ function estimateCameraFlowFromSnapshot({ visibleTotal = 0, occupancyPct = 0, co
   const servicePerMinute = Math.max(0.25, flowVehicles15 / 15);
   let wait = queueVehicles <= 0 ? 0 : Math.round(queueVehicles / servicePerMinute + (queueVehicles <= 2 ? 1 : 2));
   if (queueVehicles > 14 && flowVehicles15 <= 10) wait += 4;
+  // Occupancy-gated trust floor. Bumper-to-bumper queues merge adjacent cars
+  // into a few large connected components, so the component-derived queue count
+  // under-reports a visibly full lane — which previously let a packed Maljevac
+  // lane read as "4 min". A high occupied-area fraction is independent evidence
+  // of a real queue, so floor the wait by how full the monitored band is. The
+  // gate (occupancy >= 42 AND at least a few detected vehicles) keeps empty or
+  // lane-striped asphalt and single-frame misreads from ever triggering it.
+  // Use the fullest lane band when available so a single packed lane still
+  // counts as "full" even though whole-frame occupancy is diluted by the empty
+  // side of the frame.
+  const fullnessForFloor = Math.max(Number(occupancyPct || 0), Number(laneFullnessPct || 0));
+  if (fullnessForFloor >= 45 && queueVehicles >= 3) {
+    const occupancyFloor = Math.round(clampNumber((fullnessForFloor - 38) * 0.7, 0, 42));
+    wait = Math.max(wait, occupancyFloor);
+  }
   const confidence = Math.max(44, Math.min(86, Math.round(58 + Math.min(16, queueVehicles * 1.1) - Math.max(0, occupancyPct - 34) * 0.35 + (queueTrend === 'unknown' ? -4 : 4))));
 
   return {
@@ -4076,7 +4091,10 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null)
   const darkThreshold = 0.23;
 
   cells.forEach((cell) => {
-    const roadBandBoost = cell.gy >= 3 && cell.gy <= 14;
+    // Include the foreground row (gy 15) and one more distant row (gy 2): the
+    // largest, most reliable queue vehicles sit in the foreground, and queues
+    // recede toward the top, so the old gy 3..14 band clipped both ends.
+    const roadBandBoost = cell.gy >= 2 && cell.gy <= 15;
     cell.occupied = roadBandBoost && ((cell.edgeScore >= edgeThreshold && cell.darkRatio >= 0.10) || cell.darkRatio >= darkThreshold);
   });
 
@@ -4137,7 +4155,30 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null)
   const visibleTotal = totalCounts(blendedCounts);
   const occupiedCells = cells.filter((cell) => cell.occupied).length;
   const occupancyPct = Math.round((occupiedCells / Math.max(cells.length, 1)) * 100);
+  // Lane fullness: a single bumper-to-bumper lane leaves the rest of the frame
+  // (the other lane, grass, booths) empty, so whole-frame occupancy understates
+  // it. Measure the fullest column third within the road band as the queue-lane
+  // signal — this is what lets a one-lane queue trigger the wait floor even when
+  // the camera has no per-lane ROI calibration.
+  const bandRows = cells.filter((cell) => cell.gy >= 2 && cell.gy <= 15);
+  let laneFullnessPct = 0;
+  for (let third = 0; third < 3; third += 1) {
+    const lo = Math.floor((third * gridX) / 3);
+    const hi = Math.floor(((third + 1) * gridX) / 3);
+    const bandThird = bandRows.filter((cell) => cell.gx >= lo && cell.gx < hi);
+    if (!bandThird.length) continue;
+    const occ = bandThird.filter((cell) => cell.occupied).length / bandThird.length;
+    laneFullnessPct = Math.max(laneFullnessPct, Math.round(occ * 100));
+  }
   const componentDensity = usefulComponents.length / Math.max(1, gridX * gridY / 32);
+  // Bumper-to-bumper cars merge into a few connected components, so the typed
+  // count (visibleTotal) under-reports a packed queue — a frame with ~9 queued
+  // cars was counting only 4. Cross-check with an area estimate from the
+  // occupied lane cells (~11 grid cells per vehicle for these ~768x576 frames)
+  // and take the larger, so a full lane is never counted as just a couple of
+  // cars. Conservative divisor + cap keep empty/striped asphalt from inflating.
+  const areaQueue = Math.round(occupiedCells / 11);
+  const queueEstimate = Math.min(40, Math.max(visibleTotal, Math.round(areaQueue * 0.85)));
   const confidence = Math.max(
     CAMERA_SNAPSHOT_MIN_CONFIDENCE,
     Math.min(88, Math.round(48 + Math.min(22, usefulComponents.length * 2.2) + Math.min(14, occupancyPct * 0.45) + (hasSignal ? 6 : -6)))
@@ -4164,7 +4205,7 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null)
     };
   });
 
-  const flowEstimate = estimateCameraFlowFromSnapshot({ visibleTotal, occupancyPct, componentDensity, direction, previousSnapshot });
+  const flowEstimate = estimateCameraFlowFromSnapshot({ visibleTotal: queueEstimate, occupancyPct, laneFullnessPct, componentDensity, direction, previousSnapshot });
   const cameraWait = flowEstimate.wait;
   const blendedConfidence = Math.max(CAMERA_SNAPSHOT_MIN_CONFIDENCE, Math.min(90, Math.round(confidence * 0.62 + flowEstimate.confidence * 0.38)));
 
@@ -5824,6 +5865,9 @@ export {
   BORDER_CROSSINGS,
   PUBLIC_SOURCE_TARGETS,
   effectiveBorderSignal,
+  estimateCameraFlowFromSnapshot,
+  analyzeSnapshotImage,
+  buildCameraAnalyticsPayload,
 };
 
 function assertProductionSafety() {
