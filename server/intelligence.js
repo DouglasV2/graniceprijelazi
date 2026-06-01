@@ -501,24 +501,131 @@ export function rankBestCrossings(crossings = [], opts = {}) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// 11. MEASURED WAIT
+// 11. MEASURED WAIT + GEOFENCE (spec V5 §1)
 // ───────────────────────────────────────────────────────────────────────────
-//
+
+// Haversine great-circle distance in metres.
+export function haversineMeters(a, b) {
+  if (!a || !b || !Number.isFinite(Number(a.lat)) || !Number.isFinite(Number(b.lat))) return null;
+  const R = 6371000;
+  const toRad = (d) => (Number(d) * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad((b.lng ?? b.lon) - (a.lng ?? a.lon));
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.min(1, Math.sqrt(h))));
+}
+
+// Which geofence zone a GPS point falls in for a given crossing/direction geofence.
+// Returns 'approach' | 'border' | 'exit' | 'far'.
+export function locateInGeofence(point, geofence) {
+  if (!point || !geofence) return 'far';
+  const dB = haversineMeters(point, geofence.border);
+  if (dB !== null && dB <= (geofence.borderRadiusM ?? 350)) return 'border';
+  const dA = haversineMeters(point, geofence.approach);
+  if (dA !== null && dA <= (geofence.approachRadiusM ?? 1200)) return 'approach';
+  const dE = haversineMeters(point, geofence.exit);
+  if (dE !== null && dE <= (geofence.exitRadiusM ?? 500)) return 'exit';
+  return 'far';
+}
+
 // Compute the real wait from a session: time from joining the queue to crossing.
-// GPS verification is best-effort: if start/end coordinates are near the booth and
-// the path looks like an approach, mark gpsVerified.
-export function computeMeasuredWait(session = {}) {
+// When a geofence is supplied we VERIFY the GPS track (anti-gaming): the start must be
+// near the approach, the end near/past the border, and the device must have actually
+// moved. A suspicious track (no movement for a long "wait", or coordinates nowhere near
+// the crossing) is flagged so the trust engine can discount it.
+export function computeMeasuredWait(session = {}, geofence = null) {
   const start = new Date(session.startedAt).getTime();
   const end = new Date(session.finishedAt).getTime();
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
   const minutes = Math.round((end - start) / 60000);
   if (minutes < 0 || minutes > 600) return null;
-  const gpsVerified = Boolean(session.startGps && session.endGps
-    && Number.isFinite(session.startGps.lat) && Number.isFinite(session.endGps.lat));
+
+  const startGps = session.startGps;
+  const endGps = session.endGps;
+  const hasGps = startGps && endGps && Number.isFinite(Number(startGps.lat)) && Number.isFinite(Number(endGps.lat));
+  let gpsVerified = false;
+  let gpsSuspicious = false;
+  if (hasGps) {
+    const moved = haversineMeters(startGps, endGps);
+    if (geofence) {
+      const startZone = locateInGeofence(startGps, geofence);
+      const endZone = locateInGeofence(endGps, geofence);
+      const startNearApproach = startZone === 'approach' || startZone === 'border';
+      const endPastBooth = endZone === 'border' || endZone === 'exit';
+      gpsVerified = startNearApproach && endPastBooth && moved !== null && moved >= 60;
+      // Implausible: claims a real wait but never moved, OR both points far from the crossing.
+      const startFar = locateInGeofence(startGps, geofence) === 'far';
+      const endFar = locateInGeofence(endGps, geofence) === 'far';
+      gpsSuspicious = (minutes >= 5 && moved !== null && moved < 40) || (startFar && endFar);
+    } else {
+      // No geofence reference: accept only a sane amount of movement as weakly verified.
+      gpsVerified = moved !== null && moved >= 50 && moved <= 8000;
+      gpsSuspicious = minutes >= 5 && moved !== null && moved < 40;
+    }
+  }
   return {
     wait: minutes,
     gpsVerified,
+    gpsSuspicious,
     durationMinutes: minutes,
     anonymous: !session.userId,
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 12. BIAS CORRECTION (spec V5 §2 foundation)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// From resolved accuracy records, learn a per-(crossing×direction×hour) signed-error
+// correction. Uses HIERARCHICAL SHRINKAGE: a fine bucket with few samples falls back
+// toward coarser buckets (part-of-day → crossing → global), and the correction is only
+// trusted once a minimum sample size is met. This avoids overfitting to 2-3 measurements
+// — the central risk when measured waits become the calibration anchor.
+//
+// `records` = [{ crossingId, direction, predictedWait, actualWait, predictedAt }]
+export function computeBiasCorrection(records = [], { minSample = 5 } = {}) {
+  const usable = records.filter((r) => Number.isFinite(Number(r.predictedWait)) && Number.isFinite(Number(r.actualWait)));
+  const partOfDay = (h) => (h < 6 ? 'night' : h < 11 ? 'morning' : h < 17 ? 'midday' : h < 22 ? 'evening' : 'night');
+  const buckets = new Map(); // key → signed errors (actual - predicted)
+  const add = (key, err) => { (buckets.get(key) || buckets.set(key, []).get(key)).push(err); };
+  for (const r of usable) {
+    const err = Number(r.actualWait) - Number(r.predictedWait);
+    const hour = new Date(r.predictedAt || Date.now()).getHours();
+    const pod = partOfDay(hour);
+    add('global', err);
+    add(`c:${r.crossingId}:${r.direction}`, err);
+    add(`p:${r.crossingId}:${r.direction}:${pod}`, err);
+    add(`h:${r.crossingId}:${r.direction}:${hour}`, err);
+  }
+  const med = (key) => { const v = buckets.get(key); return v && v.length ? { value: median(v), n: v.length } : null; };
+  const globalBias = med('global');
+
+  // Resolve the correction for a fine bucket by walking coarse→fine and trusting the
+  // finest bucket that has enough samples.
+  const correctionFor = (crossingId, direction, hour) => {
+    const pod = partOfDay(hour);
+    const chain = [`h:${crossingId}:${direction}:${hour}`, `p:${crossingId}:${direction}:${pod}`, `c:${crossingId}:${direction}`, 'global'];
+    for (const key of chain) {
+      const m = med(key);
+      if (m && m.n >= minSample) return { correctionMin: Math.round(m.value), basis: key, n: m.n };
+    }
+    return { correctionMin: 0, basis: 'insufficient', n: usable.length };
+  };
+
+  const perCrossing = {};
+  for (const r of usable) {
+    const key = `${r.crossingId}:${r.direction}`;
+    if (!perCrossing[key]) {
+      const m = med(`c:${r.crossingId}:${r.direction}`);
+      perCrossing[key] = m && m.n >= minSample ? { correctionMin: Math.round(m.value), n: m.n } : { correctionMin: 0, n: m?.n || 0, insufficient: true };
+    }
+  }
+  return {
+    sampleSize: usable.length,
+    globalBias: globalBias ? { correctionMin: Math.round(globalBias.value), n: globalBias.n } : null,
+    perCrossing,
+    correctionFor,
   };
 }

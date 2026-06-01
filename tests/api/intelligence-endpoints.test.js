@@ -55,6 +55,51 @@ describe('measured wait sessions (spec §5)', () => {
   });
 });
 
+describe('geofence + auto start/stop (V5 §1)', () => {
+  it('exposes geofence definitions for every crossing/direction', async () => {
+    const res = await request(app).get('/api/measured/geofences');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.geofences.length).toBeGreaterThan(0);
+    const f = res.body.geofences[0];
+    expect(f.approach).toHaveProperty('lat');
+    expect(f.border).toHaveProperty('lat');
+  });
+
+  it('auto-starts on approach and auto-finishes at the booth from GPS pings', async () => {
+    const fences = (await request(app).get('/api/measured/geofences')).body.geofences;
+    const fence = fences.find((g) => g.crossingId === 'gradiska' && g.direction === 'toBih') || fences[0];
+    const deviceId = `test-device-${Date.now()}`;
+
+    const started = await request(app).post('/api/measured/ping').send({ deviceId, gps: fence.approach });
+    expect(started.status).toBe(201);
+    expect(started.body.state).toBe('started');
+
+    const finished = await request(app).post('/api/measured/ping').send({ deviceId, gps: fence.border });
+    expect(finished.status).toBe(200);
+    expect(finished.body.state).toBe('finished');
+    expect(Number.isFinite(finished.body.wait)).toBe(true);
+    expect(finished.body.gpsVerified).toBe(true);
+  });
+
+  it('reports idle when far from any crossing', async () => {
+    const res = await request(app).post('/api/measured/ping').send({ deviceId: `far-${Date.now()}`, gps: { lat: 48.2, lng: 16.4 } });
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('idle');
+  });
+});
+
+describe('bias correction model (V5 §2)', () => {
+  it('rejects anonymous and returns the model (disabled by default) for admin', async () => {
+    expect([401, 403]).toContain((await request(app).get('/api/admin/bias')).status);
+    const res = await request(app).get('/api/admin/bias').set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.enabled).toBe(false);
+    expect(res.body).toHaveProperty('perCrossing');
+    expect(findIllegalJsonValue(res.body, '$')).toBeNull();
+  });
+});
+
 describe('best crossing engine (spec §10)', () => {
   it('returns a ranked list and a (possibly null) recommendation', async () => {
     const res = await request(app).get('/api/best-crossing').query({ direction: 'toBih' });

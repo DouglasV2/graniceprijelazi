@@ -24,6 +24,9 @@ import {
   evaluateWaitAlerts,
   rankBestCrossings,
   computeMeasuredWait,
+  haversineMeters,
+  locateInGeofence,
+  computeBiasCorrection,
 } from './intelligence.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -450,6 +453,7 @@ async function writeAppStore(store) {
 async function initializeDatastore() {
   if (datastoreMode === 'postgres') {
     await ensureSqlSchema();
+    await loadPersistedIntelligenceState();
   } else {
     readStore();
   }
@@ -1286,6 +1290,45 @@ const lastPredictionSampleAt = new Map(); // key → ms of last sampled predicti
 const PREDICTION_SAMPLE_INTERVAL_MS = Math.max(2, Number(process.env.PREDICTION_SAMPLE_INTERVAL_MINUTES || 10)) * 60 * 1000;
 const PREDICTION_MATCH_WINDOW_MS = 3 * 60 * 60 * 1000; // a measured wait can resolve a prediction up to 3h old
 
+// Build a measured-wait geofence for a crossing/direction from its calibrated route
+// anchors (approachStart = where you join the queue, borderPoint = the booth, exitPoint =
+// just past it). Used to GPS-verify measured sessions and to auto start/stop from pings.
+const GEOFENCE_APPROACH_RADIUS_M = Math.max(300, Number(process.env.GEOFENCE_APPROACH_RADIUS_M || 1300));
+const GEOFENCE_BORDER_RADIUS_M = Math.max(120, Number(process.env.GEOFENCE_BORDER_RADIUS_M || 350));
+const GEOFENCE_EXIT_RADIUS_M = Math.max(150, Number(process.env.GEOFENCE_EXIT_RADIUS_M || 500));
+
+function geofenceForCrossing(crossing, direction = 'toBih') {
+  const anchors = crossing?.anchors?.[direction];
+  if (!anchors?.approachStart || !anchors?.borderPoint) return null;
+  return {
+    crossingId: crossing.id,
+    direction,
+    approach: anchors.approachStart,
+    border: anchors.borderPoint,
+    exit: anchors.exitPoint || anchors.borderPoint,
+    approachRadiusM: GEOFENCE_APPROACH_RADIUS_M,
+    borderRadiusM: GEOFENCE_BORDER_RADIUS_M,
+    exitRadiusM: GEOFENCE_EXIT_RADIUS_M,
+  };
+}
+
+// Find the crossing/direction whose approach or border geofence a GPS point falls in.
+// Used by the auto start/stop ping endpoint. Returns the closest match by booth distance.
+function locateCrossingForPoint(point) {
+  let best = null;
+  for (const crossing of Object.values(BORDER_CROSSINGS)) {
+    for (const direction of ['toBih', 'toHr']) {
+      const fence = geofenceForCrossing(crossing, direction);
+      if (!fence) continue;
+      const zone = locateInGeofence(point, fence);
+      if (zone === 'far') continue;
+      const dist = haversineMeters(point, fence.border);
+      if (!best || (dist !== null && dist < best.dist)) best = { crossing, direction, fence, zone, dist: dist ?? Infinity };
+    }
+  }
+  return best;
+}
+
 // Validate a {lat,lng} GPS payload; returns null when missing or out of range.
 function sanitizeGps(gps) {
   if (!gps || typeof gps !== 'object') return null;
@@ -1327,6 +1370,7 @@ function recordPredictionSample(crossingId, direction, signal) {
     resolvedAt: null,
     source: 'state-sample',
   });
+  persistPredictionAccuracy(predictionAccuracyBuffer[0]).catch(() => {});
   while (predictionAccuracyBuffer.length > 20000) predictionAccuracyBuffer.pop();
 }
 
@@ -1347,12 +1391,101 @@ function recordResolvedAccuracy({ crossingId, direction, predictedWait, actualWa
     resolvedAt: new Date().toISOString(),
     source,
   });
+  persistPredictionAccuracy(predictionAccuracyBuffer[0]).catch(() => {});
   while (predictionAccuracyBuffer.length > 20000) predictionAccuracyBuffer.pop();
+  refreshBiasModel();
 }
 
 function recentResolvedAccuracy(hours = 24 * 14) {
   const since = Date.now() - hours * 60 * 60 * 1000;
   return predictionAccuracyBuffer.filter((r) => r.actualWait !== null && new Date(r.predictedAt).getTime() >= since);
+}
+
+// Learned bias model (spec V5 §2). Recomputed from resolved accuracy. Application into the
+// live estimate is OFF by default — it only kicks in once there is enough measured data and
+// the operator explicitly enables it, so we never "correct" toward a handful of samples.
+const BIAS_CORRECTION_ENABLED = process.env.BIAS_CORRECTION_ENABLED === 'true';
+const BIAS_MIN_SAMPLE = Math.max(3, Number(process.env.BIAS_MIN_SAMPLE || 8));
+const BIAS_MAX_ADJUST_MIN = Math.max(5, Number(process.env.BIAS_MAX_ADJUST_MIN || 20));
+let biasModel = computeBiasCorrection([], { minSample: BIAS_MIN_SAMPLE });
+function refreshBiasModel() {
+  biasModel = computeBiasCorrection(recentResolvedAccuracy(), { minSample: BIAS_MIN_SAMPLE });
+}
+// Apply a clamped, sufficient-sample correction to a live wait. Returns the (possibly
+// unchanged) wait plus metadata for the explanation layer.
+function applyBiasCorrection(crossingId, direction, wait) {
+  if (!BIAS_CORRECTION_ENABLED || !Number.isFinite(Number(wait))) return { wait, applied: false };
+  const corr = biasModel.correctionFor(crossingId, direction, new Date().getHours());
+  if (!corr || corr.basis === 'insufficient' || corr.n < BIAS_MIN_SAMPLE || !corr.correctionMin) return { wait, applied: false };
+  const adjust = clampWait(Math.max(-BIAS_MAX_ADJUST_MIN, Math.min(BIAS_MAX_ADJUST_MIN, corr.correctionMin)));
+  return { wait: clampWait(Number(wait) + adjust), applied: true, adjustMin: adjust, basis: corr.basis, n: corr.n };
+}
+
+// ── POSTGRES PERSISTENCE (spec V5 §5) ─────────────────────────────────────────
+// The in-memory buffers above are the runtime read source in BOTH modes; in postgres
+// mode we additionally write-through to the borderflow_* tables (durability across
+// restarts) and load recent rows back on startup. Write-through is best-effort and never
+// blocks the request path. json-file mode is unchanged (no-op persistence).
+async function persistPredictionAccuracy(record) {
+  if (datastoreMode !== 'postgres') return;
+  await dbQuery(
+    `INSERT INTO borderflow_prediction_accuracy
+       (id, crossing_id, direction, predicted_wait, actual_wait, confidence_level, confidence_score, source_mix, predicted_at, resolved_at, source)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     ON CONFLICT (id) DO UPDATE SET actual_wait=EXCLUDED.actual_wait, resolved_at=EXCLUDED.resolved_at`,
+    [record.id, record.crossingId, record.direction, record.predictedWait, record.actualWait, record.confidenceLevel, record.confidenceScore, record.sourceMix || {}, record.predictedAt, record.resolvedAt, record.source]
+  );
+}
+
+async function persistMeasuredSession(session) {
+  if (datastoreMode !== 'postgres') return;
+  await dbQuery(
+    `INSERT INTO borderflow_measured_sessions
+       (id, crossing_id, direction, user_id, anonymous, predicted_wait_at_start, actual_wait, gps_verified, start_gps, end_gps, status, started_at, finished_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (id) DO UPDATE SET actual_wait=EXCLUDED.actual_wait, gps_verified=EXCLUDED.gps_verified,
+       end_gps=EXCLUDED.end_gps, status=EXCLUDED.status, finished_at=EXCLUDED.finished_at`,
+    [session.id, session.crossingId, session.direction, session.userId, session.anonymous, session.predictedWaitAtStart, session.actualWait, session.gpsVerified, session.startGps || null, session.endGps || null, session.status, session.startedAt, session.finishedAt]
+  );
+}
+
+async function persistAlertSubscription(sub) {
+  if (datastoreMode !== 'postgres') return;
+  await dbQuery(
+    `INSERT INTO borderflow_alert_subscriptions
+       (id, user_id, crossing_id, direction, drop_below, rise_above, push_token, active, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     ON CONFLICT (id) DO UPDATE SET active=EXCLUDED.active`,
+    [sub.id, sub.userId, sub.crossingId, sub.direction, sub.dropBelow, sub.riseAbove, sub.pushToken, sub.active, sub.createdAt]
+  );
+}
+
+// Load recent rows into the in-memory buffers on startup so bias correction / accuracy /
+// telemetry have history immediately after a restart.
+async function loadPersistedIntelligenceState() {
+  if (datastoreMode !== 'postgres') return;
+  try {
+    const acc = await dbQuery('SELECT * FROM borderflow_prediction_accuracy ORDER BY predicted_at DESC LIMIT 20000');
+    predictionAccuracyBuffer.splice(0, predictionAccuracyBuffer.length, ...acc.rows.map((r) => ({
+      id: r.id, crossingId: r.crossing_id, direction: r.direction, predictedWait: r.predicted_wait, actualWait: r.actual_wait,
+      confidenceLevel: r.confidence_level, confidenceScore: r.confidence_score, sourceMix: r.source_mix || {},
+      predictedAt: isoDate(r.predicted_at), resolvedAt: r.resolved_at ? isoDate(r.resolved_at) : null, source: r.source,
+    })));
+    const ses = await dbQuery("SELECT * FROM borderflow_measured_sessions ORDER BY started_at DESC LIMIT 5000");
+    measuredSessionBuffer.splice(0, measuredSessionBuffer.length, ...ses.rows.map((r) => ({
+      id: r.id, crossingId: r.crossing_id, direction: r.direction, userId: r.user_id, anonymous: r.anonymous,
+      predictedWaitAtStart: r.predicted_wait_at_start, actualWait: r.actual_wait, gpsVerified: r.gps_verified,
+      startGps: r.start_gps, endGps: r.end_gps, status: r.status, startedAt: isoDate(r.started_at), finishedAt: r.finished_at ? isoDate(r.finished_at) : null,
+    })));
+    const subs = await dbQuery('SELECT * FROM borderflow_alert_subscriptions WHERE active = TRUE ORDER BY created_at DESC LIMIT 10000');
+    alertSubscriptionBuffer.splice(0, alertSubscriptionBuffer.length, ...subs.rows.map((r) => ({
+      id: r.id, userId: r.user_id, crossingId: r.crossing_id, direction: r.direction, dropBelow: r.drop_below,
+      riseAbove: r.rise_above, pushToken: r.push_token, active: r.active, createdAt: isoDate(r.created_at),
+    })));
+    console.log(`[intelligence-state] loaded ${predictionAccuracyBuffer.length} accuracy / ${measuredSessionBuffer.length} sessions / ${alertSubscriptionBuffer.length} subs`);
+  } catch (error) {
+    console.warn('[intelligence-state] load failed:', error.message);
+  }
 }
 
 const SOURCE_FETCH_ENABLED = process.env.SOURCE_FETCH_ENABLED !== 'false';
@@ -2501,7 +2634,10 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
   const blendedWait = weightedWait(candidates);
   if (blendedWait !== null) {
     const sanity = applyTrafficSanityCaps(blendedWait, { googleSignal, cameraSignal, publicSignals, reportAvg });
-    const finalWait = sanity.wait;
+    // Learned bias correction (V5 §2): nudge the fused value toward what measured waits
+    // historically showed for this crossing/direction/hour. OFF until enough data + operator opt-in.
+    const biasResult = applyBiasCorrection(crossing.id, direction, sanity.wait);
+    const finalWait = biasResult.wait;
     const signalNames = uniqueSignalNames(candidates);
     const hasMultipleOfficialSources = uniqueSignalNames(candidates.filter((item) => item.sourceType === 'public-text-status')).length > 1;
     const combined = signalNames.length > 1 || hasMultipleOfficialSources;
@@ -2558,6 +2694,8 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       precision: profile.precision,
       confidenceFactors: profile.factors,
       independentSources: profile.independentSources,
+      biasApplied: biasResult.applied,
+      biasAdjustMin: biasResult.adjustMin,
       explanation,
       label: combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
       className: combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
@@ -3183,6 +3321,7 @@ app.post('/api/measured/start', publicWriteLimiter, optionalAuth, async (req, re
   };
   measuredSessionBuffer.unshift(session);
   while (measuredSessionBuffer.length > 5000) measuredSessionBuffer.pop();
+  persistMeasuredSession(session).catch((e) => console.warn('[measured-persist]', e.message));
   res.status(201).json({ ok: true, sessionId: session.id, crossingId, direction, predictedWaitAtStart });
 });
 
@@ -3192,18 +3331,37 @@ app.post('/api/measured/finish', publicWriteLimiter, optionalAuth, async (req, r
   if (!session) return res.status(404).json({ ok: false, error: 'Sesija nije pronađena ili je istekla.' });
   if (session.status !== 'open') return res.status(409).json({ ok: false, error: 'Sesija je već zatvorena.' });
   const endGps = sanitizeGps(req.body?.gps);
+  const finished = await finalizeMeasuredSession(session, endGps);
+  if (!finished.ok) return res.status(400).json({ ok: false, error: finished.error });
+  res.json({ ok: true, wait: finished.wait, gpsVerified: finished.gpsVerified, gpsSuspicious: finished.gpsSuspicious, predictedWaitAtStart: session.predictedWaitAtStart });
+});
+
+// Shared finalize: compute the measured wait (geofence-verified), feed it back as a
+// high-trust report, and close the accuracy loop. Used by both the explicit /finish
+// endpoint and the auto-stop branch of /ping. A GPS-suspicious track (gaming) is stored
+// but does NOT become a report or accuracy record.
+async function finalizeMeasuredSession(session, endGps) {
   session.finishedAt = new Date().toISOString();
-  const measured = computeMeasuredWait({ startedAt: session.startedAt, finishedAt: session.finishedAt, startGps: session.startGps, endGps, userId: session.userId });
+  const geofence = geofenceForCrossing(BORDER_CROSSINGS[session.crossingId], session.direction);
+  const measured = computeMeasuredWait({ startedAt: session.startedAt, finishedAt: session.finishedAt, startGps: session.startGps, endGps, userId: session.userId }, geofence);
   if (!measured) {
     session.status = 'cancelled';
-    return res.status(400).json({ ok: false, error: 'Mjerenje nije valjano (premalo ili predugo trajanje).' });
+    persistMeasuredSession(session).catch((e) => console.warn('[measured-persist]', e.message));
+    return { ok: false, error: 'Mjerenje nije valjano (premalo ili predugo trajanje).' };
   }
   session.actualWait = measured.wait;
   session.gpsVerified = measured.gpsVerified;
+  session.gpsSuspicious = measured.gpsSuspicious;
   session.endGps = endGps;
   session.status = 'finished';
+  persistMeasuredSession(session).catch((e) => console.warn('[measured-persist]', e.message));
 
-  // Feed the measured wait back as a HIGH-TRUST report so the fusion picks it up.
+  // A suspicious track (no movement for a long wait, or points far from the crossing) is
+  // recorded for audit but kept out of the fusion and accuracy KPI (anti-gaming, spec §12).
+  if (measured.gpsSuspicious) {
+    return { ok: true, wait: measured.wait, gpsVerified: false, gpsSuspicious: true, discarded: true };
+  }
+
   const store = await readAppStore();
   const report = {
     id: crypto.randomUUID(),
@@ -3221,7 +3379,6 @@ app.post('/api/measured/finish', publicWriteLimiter, optionalAuth, async (req, r
   store.reports = store.reports.slice(0, 1000);
   await writeAppStore(store);
 
-  // Close the accuracy loop against the prediction captured at queue-join time.
   recordResolvedAccuracy({
     crossingId: session.crossingId,
     direction: session.direction,
@@ -3230,7 +3387,91 @@ app.post('/api/measured/finish', publicWriteLimiter, optionalAuth, async (req, r
     confidenceLevel: session.predictedConfidence,
     source: 'measured-session',
   });
-  res.json({ ok: true, wait: measured.wait, gpsVerified: measured.gpsVerified, predictedWaitAtStart: session.predictedWaitAtStart });
+  return { ok: true, wait: measured.wait, gpsVerified: measured.gpsVerified, gpsSuspicious: false };
+}
+
+// ── AUTO START/STOP via GPS pings (spec V5 §1) ────────────────────────────────
+// The client streams GPS pings; the server decides — purely from the geofence — when a
+// session starts (entering an approach zone) and finishes (reaching the booth/exit). This
+// removes the need for the driver to tap anything. Sessions are keyed by deviceId.
+const MEASURED_SESSION_MAX_AGE_MS = 4 * 60 * 60 * 1000;
+app.post('/api/measured/ping', publicWriteLimiter, optionalAuth, async (req, res) => {
+  const deviceId = String(req.body?.deviceId || '').trim().slice(0, 80);
+  const gps = sanitizeGps(req.body?.gps);
+  if (!deviceId || !gps) return res.status(400).json({ ok: false, error: 'deviceId i gps su potrebni.' });
+
+  // Expire stale open sessions for this device first.
+  const now = Date.now();
+  for (const s of measuredSessionBuffer) {
+    if (s.deviceId === deviceId && s.status === 'open' && now - new Date(s.startedAt).getTime() > MEASURED_SESSION_MAX_AGE_MS) {
+      s.status = 'cancelled';
+      persistMeasuredSession(s).catch(() => {});
+    }
+  }
+  const open = measuredSessionBuffer.find((s) => s.deviceId === deviceId && s.status === 'open');
+  const located = locateCrossingForPoint(gps);
+
+  if (open) {
+    open.lastGps = gps;
+    const fence = geofenceForCrossing(BORDER_CROSSINGS[open.crossingId], open.direction);
+    const zone = locateInGeofence(gps, fence);
+    // Auto-finish once the device reaches the booth or the exit side.
+    if (zone === 'border' || zone === 'exit') {
+      const finished = await finalizeMeasuredSession(open, gps);
+      return res.json({ ok: true, state: 'finished', sessionId: open.id, wait: finished.wait, gpsVerified: finished.gpsVerified, gpsSuspicious: finished.gpsSuspicious });
+    }
+    return res.json({ ok: true, state: 'tracking', sessionId: open.id, crossingId: open.crossingId, direction: open.direction, elapsedMin: Math.round((now - new Date(open.startedAt).getTime()) / 60000) });
+  }
+
+  // No open session: auto-start when the device enters an approach zone.
+  if (located && located.zone === 'approach') {
+    let predictedWaitAtStart = null;
+    let predictedConfidence = null;
+    try {
+      const signal = await effectiveBorderSignal(located.crossing, located.direction, 'car');
+      if (signal.displayReady !== false && Number.isFinite(Number(signal.wait))) {
+        predictedWaitAtStart = Number(signal.wait);
+        predictedConfidence = signal.confidenceLevel || null;
+      }
+    } catch { /* optional */ }
+    const session = {
+      id: crypto.randomUUID(),
+      crossingId: located.crossing.id,
+      direction: located.direction,
+      deviceId,
+      userId: req.user?.id || null,
+      anonymous: !req.user,
+      predictedWaitAtStart,
+      predictedConfidence,
+      actualWait: null,
+      gpsVerified: false,
+      startGps: gps,
+      lastGps: gps,
+      endGps: null,
+      status: 'open',
+      autoStarted: true,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+    };
+    measuredSessionBuffer.unshift(session);
+    while (measuredSessionBuffer.length > 5000) measuredSessionBuffer.pop();
+    persistMeasuredSession(session).catch((e) => console.warn('[measured-persist]', e.message));
+    return res.status(201).json({ ok: true, state: 'started', sessionId: session.id, crossingId: session.crossingId, direction: session.direction, predictedWaitAtStart });
+  }
+
+  return res.json({ ok: true, state: 'idle', near: located ? { crossingId: located.crossing.id, direction: located.direction, zone: located.zone } : null });
+});
+
+// Expose geofence definitions so a client can do its own approach detection / map overlay.
+app.get('/api/measured/geofences', async (_req, res) => {
+  const geofences = [];
+  for (const crossing of Object.values(BORDER_CROSSINGS)) {
+    for (const direction of ['toBih', 'toHr']) {
+      const fence = geofenceForCrossing(crossing, direction);
+      if (fence) geofences.push({ crossingId: crossing.id, crossingName: crossing.shortName || crossing.name, ...fence });
+    }
+  }
+  res.json({ ok: true, geofences });
 });
 
 // ── BEST CROSSING ENGINE (spec §10) ───────────────────────────────────────────
@@ -3270,6 +3511,7 @@ app.post('/api/alerts/subscribe', publicWriteLimiter, optionalAuth, async (req, 
   const sub = { id: crypto.randomUUID(), userId: req.user?.id || null, crossingId, direction, dropBelow, riseAbove, pushToken, active: true, createdAt: new Date().toISOString() };
   alertSubscriptionBuffer.unshift(sub);
   while (alertSubscriptionBuffer.length > 10000) alertSubscriptionBuffer.pop();
+  persistAlertSubscription(sub).catch((e) => console.warn('[alert-persist]', e.message));
   res.status(201).json({ ok: true, subscription: sub });
 });
 
@@ -3290,6 +3532,24 @@ app.get('/api/admin/accuracy', authRequired, adminRequired, async (req, res) => 
     windowHours: hours,
     ...stats,
     recent: records.slice(0, 100).map((r) => ({ crossingId: r.crossingId, direction: r.direction, predictedWait: r.predictedWait, actualWait: r.actualWait, confidenceLevel: r.confidenceLevel, predictedAt: r.predictedAt, source: r.source })),
+  });
+});
+
+// ── BIAS CORRECTION MODEL (spec V5 §2) ────────────────────────────────────────
+// Surfaces the learned per-crossing/hour correction so operators can inspect it before
+// (and after) enabling live application via BIAS_CORRECTION_ENABLED.
+app.get('/api/admin/bias', authRequired, adminRequired, async (req, res) => {
+  const hours = Math.max(1, Math.min(24 * 90, Number(req.query.hours || 24 * 30)));
+  const model = computeBiasCorrection(recentResolvedAccuracy(hours), { minSample: BIAS_MIN_SAMPLE });
+  res.json({
+    ok: true,
+    enabled: BIAS_CORRECTION_ENABLED,
+    minSample: BIAS_MIN_SAMPLE,
+    maxAdjustMin: BIAS_MAX_ADJUST_MIN,
+    windowHours: hours,
+    sampleSize: model.sampleSize,
+    globalBias: model.globalBias,
+    perCrossing: model.perCrossing,
   });
 });
 

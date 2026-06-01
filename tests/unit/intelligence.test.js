@@ -18,7 +18,20 @@ import {
   evaluateWaitAlerts,
   rankBestCrossings,
   computeMeasuredWait,
+  haversineMeters,
+  locateInGeofence,
+  computeBiasCorrection,
 } from '../../server/intelligence.js';
+
+// A synthetic crossing geofence (~Gradiška), approach ~1.1 km north of the booth.
+const GEOFENCE = {
+  approach: { lat: 45.1500, lng: 17.2510 },
+  border: { lat: 45.1453, lng: 17.2521 },
+  exit: { lat: 45.1380, lng: 17.2575 },
+  approachRadiusM: 1300,
+  borderRadiusM: 350,
+  exitRadiusM: 500,
+};
 
 describe('confidence engine', () => {
   it('says NEDOVOLJNO when there is no signal', () => {
@@ -279,8 +292,76 @@ describe('measured wait', () => {
   it('rejects negative or absurd durations', () => {
     expect(computeMeasuredWait({ startedAt: new Date().toISOString(), finishedAt: new Date(Date.now() - 1000).toISOString() })).toBeNull();
   });
-  it('flags gps verification when coordinates present', () => {
+  it('weakly verifies gps (no geofence) when there is sane movement', () => {
     const m = computeMeasuredWait({ startedAt: new Date(Date.now() - 600000).toISOString(), finishedAt: new Date().toISOString(), startGps: { lat: 45.1, lng: 16.0 }, endGps: { lat: 45.11, lng: 16.01 } });
     expect(m.gpsVerified).toBe(true);
+  });
+});
+
+describe('geofence + GPS-verified measured wait (V5 §1)', () => {
+  it('haversine distance is roughly correct', () => {
+    // ~1.11 km per 0.01° latitude.
+    const d = haversineMeters({ lat: 45.0, lng: 17.0 }, { lat: 45.01, lng: 17.0 });
+    expect(d).toBeGreaterThan(1050);
+    expect(d).toBeLessThan(1180);
+  });
+
+  it('locates a point in approach / border / far zones', () => {
+    expect(locateInGeofence(GEOFENCE.border, GEOFENCE)).toBe('border');
+    expect(locateInGeofence(GEOFENCE.approach, GEOFENCE)).toBe('approach');
+    expect(locateInGeofence({ lat: 46.0, lng: 18.0 }, GEOFENCE)).toBe('far');
+  });
+
+  it('GPS-verifies a real track: start at approach, end at booth, moved', () => {
+    const m = computeMeasuredWait({
+      startedAt: new Date(Date.now() - 1800000).toISOString(),
+      finishedAt: new Date().toISOString(),
+      startGps: GEOFENCE.approach,
+      endGps: GEOFENCE.border,
+    }, GEOFENCE);
+    expect(m.gpsVerified).toBe(true);
+    expect(m.gpsSuspicious).toBe(false);
+  });
+
+  it('flags a suspicious track: long wait but no movement (gaming)', () => {
+    const m = computeMeasuredWait({
+      startedAt: new Date(Date.now() - 1800000).toISOString(),
+      finishedAt: new Date().toISOString(),
+      startGps: GEOFENCE.border,
+      endGps: GEOFENCE.border,
+    }, GEOFENCE);
+    expect(m.gpsVerified).toBe(false);
+    expect(m.gpsSuspicious).toBe(true);
+  });
+
+  it('does not verify when both points are far from the crossing', () => {
+    const m = computeMeasuredWait({
+      startedAt: new Date(Date.now() - 1800000).toISOString(),
+      finishedAt: new Date().toISOString(),
+      startGps: { lat: 48.0, lng: 16.0 },
+      endGps: { lat: 48.05, lng: 16.0 },
+    }, GEOFENCE);
+    expect(m.gpsVerified).toBe(false);
+    expect(m.gpsSuspicious).toBe(true);
+  });
+});
+
+describe('bias correction (V5 §2)', () => {
+  const at = (hour) => { const d = new Date(); d.setHours(hour, 0, 0, 0); return d.toISOString(); };
+  it('learns a per-crossing correction once min sample is met, else stays neutral', () => {
+    const records = [];
+    // 6 records at the same crossing/direction/hour where we under-predicted by ~10 min.
+    for (let i = 0; i < 6; i += 1) records.push({ crossingId: 'gradiska', direction: 'toBih', predictedWait: 30, actualWait: 40, predictedAt: at(9) });
+    const bias = computeBiasCorrection(records, { minSample: 5 });
+    const corr = bias.correctionFor('gradiska', 'toBih', 9);
+    expect(corr.correctionMin).toBe(10); // actual - predicted
+    expect(corr.n).toBeGreaterThanOrEqual(5);
+  });
+
+  it('returns a neutral correction when there are too few samples (no overfitting)', () => {
+    const records = [{ crossingId: 'x', direction: 'toBih', predictedWait: 20, actualWait: 80, predictedAt: at(10) }];
+    const bias = computeBiasCorrection(records, { minSample: 5 });
+    expect(bias.correctionFor('x', 'toBih', 10).correctionMin).toBe(0);
+    expect(bias.correctionFor('x', 'toBih', 10).basis).toBe('insufficient');
   });
 });
