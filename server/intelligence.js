@@ -1,0 +1,524 @@
+// PrijelazRadar — Intelligence layer (V4).
+//
+// This module is intentionally PURE: no network, no DB, no globals. Everything it
+// needs is passed in. That makes the accuracy-critical logic (confidence, ranges,
+// explanations, trust, camera queue bands, stale detection, accuracy stats, alerts,
+// best-crossing) unit-testable in isolation and keeps the 5,900-line server file's
+// blast radius small.
+//
+// The single most important product KPI is: "how close is the estimate to the real
+// wait." Every function here optimises for that — primarily by being HONEST about
+// uncertainty (ranges + confidence levels + "ne znam") instead of emitting a single
+// falsely-precise number.
+
+export const CONFIDENCE_LEVELS = Object.freeze({ HIGH: 'visoka', MEDIUM: 'srednja', LOW: 'niska', NONE: 'nedovoljno' });
+
+export function clamp(value, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+function round(n) {
+  return Math.round(Number(n) || 0);
+}
+
+// True only for an actual finite numeric value — null/undefined/'' are NOT numbers
+// (Number(null) === 0 is finite, which would silently corrupt accuracy/alert logic).
+function isNum(v) {
+  return v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
+}
+
+function median(values = []) {
+  const sorted = [...values].filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function percentile(values = [], p = 0.9) {
+  const sorted = [...values].filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const idx = clamp(Math.ceil(p * sorted.length) - 1, 0, sorted.length - 1);
+  return sorted[idx];
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 1. CONFIDENCE ENGINE
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Combines, transparently and additively, every factor that should move our
+// trust in a wait estimate: how many INDEPENDENT sources back it, how fresh
+// they are, whether they agree, camera quality/freshness, and report quality.
+//
+// `signals` is an array of normalised descriptors:
+//   { kind: 'official'|'camera'|'google'|'report'|'measured', wait, ageMinutes,
+//     confidence (0-100), soft (bool), stale (bool), trust (0-1, reports only),
+//     queue (camera) }
+//
+// Returns { score (0-100), level, precision, factors[], independentSources }.
+// `factors` is a human-readable breakdown so the UI/admin can show WHY.
+export function computeConfidenceProfile(input = {}) {
+  const signals = Array.isArray(input.signals) ? input.signals.filter(Boolean) : [];
+  const agreementSpread = input.agreementSpread; // minutes spread among hard sources
+  const factors = [];
+
+  if (!signals.length) {
+    return {
+      score: 0,
+      level: CONFIDENCE_LEVELS.NONE,
+      precision: 'unknown',
+      independentSources: 0,
+      factors: [{ key: 'no-source', label: 'Nema živog izvora', impact: 0 }],
+    };
+  }
+
+  let score = 18; // floor for "we have at least one signal"
+  const kinds = new Set();
+  let freshHardCount = 0;
+  let hasMeasured = false;
+  let cameraStaleOnly = false;
+
+  for (const s of signals) {
+    const age = Number(s.ageMinutes ?? 0);
+    const baseConf = clamp(s.confidence ?? 50, 0, 100);
+    const ageDecay = age <= 10 ? 1 : age <= 25 ? 0.75 : age <= 45 ? 0.5 : 0.25;
+    const kindWeight = s.kind === 'measured' ? 26
+      : s.kind === 'official' ? (s.soft ? 9 : 20)
+      : s.kind === 'camera' ? (s.stale ? 4 : 14)
+      : s.kind === 'report' ? clamp(8 + (s.trust ?? 0.4) * 14, 6, 22)
+      : s.kind === 'google' ? 7
+      : 6;
+    const contribution = kindWeight * ageDecay * (0.5 + baseConf / 200);
+    score += contribution;
+    kinds.add(s.kind);
+    if (s.kind === 'measured') hasMeasured = true;
+    if ((s.kind === 'official' && !s.soft) || s.kind === 'measured' || (s.kind === 'camera' && !s.stale)) {
+      if (age <= 45) freshHardCount += 1;
+    }
+    factors.push({
+      key: `${s.kind}${s.soft ? '-soft' : ''}${s.stale ? '-stale' : ''}`,
+      label: kindLabel(s.kind, s),
+      impact: round(contribution),
+      ageMinutes: round(age),
+    });
+  }
+
+  const independentSources = kinds.size;
+
+  // Cross-source AGREEMENT bonus / DISAGREEMENT penalty (the spec's core example).
+  if (Number.isFinite(agreementSpread) && freshHardCount >= 2) {
+    if (agreementSpread <= 6) { score += 22; factors.push({ key: 'agreement-strong', label: 'Izvori se snažno slažu', impact: 22 }); }
+    else if (agreementSpread <= 14) { score += 10; factors.push({ key: 'agreement-moderate', label: 'Izvori se uglavnom slažu', impact: 10 }); }
+    else if (agreementSpread > 28) { score -= 16; factors.push({ key: 'disagreement', label: 'Izvori se ne slažu', impact: -16 }); }
+  }
+
+  // Multiple independent KINDS is itself evidence.
+  if (independentSources >= 3) { score += 12; factors.push({ key: 'multi-source', label: '3+ neovisna izvora', impact: 12 }); }
+  else if (independentSources === 1) { score -= 10; factors.push({ key: 'single-source', label: 'Samo jedan izvor', impact: -10 }); }
+
+  // Penalise the dangerous case: only a stale camera or only Google.
+  if (signals.length === 1) {
+    const only = signals[0];
+    if (only.kind === 'camera' && only.stale) { score -= 18; cameraStaleOnly = true; factors.push({ key: 'stale-camera-only', label: 'Samo zastarjela kamera', impact: -18 }); }
+    if (only.kind === 'google') { score -= 14; factors.push({ key: 'google-only', label: 'Samo Google promet (prilazna cesta)', impact: -14 }); }
+    if (only.kind === 'official' && only.soft) { score -= 8; factors.push({ key: 'soft-only', label: 'Samo okvirna (soft) procjena', impact: -8 }); }
+  }
+
+  score = round(clamp(score, 0, 99));
+  let level;
+  if (score >= 70) level = CONFIDENCE_LEVELS.HIGH;
+  else if (score >= 45) level = CONFIDENCE_LEVELS.MEDIUM;
+  else level = CONFIDENCE_LEVELS.LOW;
+
+  // Precision decides exact-number vs range vs "ne znam".
+  let precision;
+  if (level === CONFIDENCE_LEVELS.HIGH && !cameraStaleOnly) precision = 'exact';
+  else if (level === CONFIDENCE_LEVELS.LOW) precision = 'range';
+  else precision = 'range';
+
+  return { score, level, precision, independentSources, hasMeasured, factors };
+}
+
+function kindLabel(kind, s = {}) {
+  switch (kind) {
+    case 'official': return s.soft ? 'Službeni izvor (okvirno)' : 'Službeni izvor';
+    case 'camera': return s.stale ? 'Kamera (zastarjela slika)' : 'Kamera';
+    case 'google': return 'Google promet';
+    case 'report': return 'Dojava vozača';
+    case 'measured': return 'Izmjereno čekanje';
+    default: return 'Izvor';
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 2. SMART RANGES
+// ───────────────────────────────────────────────────────────────────────────
+//
+// False precision kills trust. When confidence is not HIGH we widen into a band.
+// The band scales with confidence level AND disagreement spread.
+export function computeSmartRange(wait, profile = {}, opts = {}) {
+  if (!isNum(wait)) return { rangeMin: null, rangeMax: null, precision: 'unknown' };
+  const n = Number(wait);
+  const level = profile.level || CONFIDENCE_LEVELS.MEDIUM;
+  const spread = Number(opts.agreementSpread);
+  const heavyGoogle = Boolean(opts.heavyGoogle);
+
+  // Base half-width by confidence level, as a fraction of the wait + a floor.
+  let frac;
+  let floor;
+  if (level === CONFIDENCE_LEVELS.HIGH) { frac = 0.12; floor = 4; }
+  else if (level === CONFIDENCE_LEVELS.MEDIUM) { frac = 0.22; floor = 7; }
+  else { frac = 0.38; floor = 10; }
+
+  let half = Math.max(floor, Math.round(n * frac));
+  if (Number.isFinite(spread) && spread > 20) half += Math.round(Math.min(20, spread * 0.4));
+  if (heavyGoogle) half += 6;
+
+  const rangeMin = Math.max(0, n - half);
+  const rangeMax = Math.min(360, n + half + (heavyGoogle ? 4 : 0));
+  return {
+    rangeMin,
+    rangeMax,
+    precision: profile.precision || (level === CONFIDENCE_LEVELS.HIGH ? 'exact' : 'range'),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 3. SOURCE EXPLANATION ENGINE
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Every estimate must say WHY. `parts` describes what fed it.
+//   { official, officialSoft, cameraQueue, cameraClear, cameraStale, googleClear,
+//     googleHeavy, reportCount, measuredCount, googleClearWhileQueue,
+//     disagreement, cameraVisualOnly }
+export function buildSourceExplanation(parts = {}) {
+  const used = [];
+  if (parts.measuredCount > 0) used.push(parts.measuredCount === 1 ? 'jednom izmjerenom prolasku' : `${parts.measuredCount} izmjerena prolaska`);
+  if (parts.official) used.push(parts.officialSoft ? 'okvirnom službenom izvoru' : 'službenom izvoru');
+  if (parts.cameraQueue || parts.cameraClear) used.push(parts.cameraStale ? 'kameri (zastarjela slika)' : 'kameri');
+  if (parts.reportCount > 0) used.push(parts.reportCount === 1 ? '1 korisničkoj dojavi' : `${parts.reportCount} korisničke dojave`);
+
+  let sentence;
+  if (!used.length && parts.googleClear) {
+    sentence = 'Procjena se temelji uglavnom na Google prometu na prilaznoj cesti. Nema svježih službenih podataka ni kamere — pouzdanost je niska.';
+  } else if (!used.length) {
+    sentence = 'Trenutno nema dovoljno podataka za pouzdanu procjenu.';
+  } else if (used.length === 1) {
+    sentence = `Procjena se temelji na ${used[0]}.`;
+  } else {
+    const last = used[used.length - 1];
+    sentence = `Procjena se temelji na ${used.slice(0, -1).join(', ')} i ${last}.`;
+  }
+
+  // The signature conflict the spec calls out explicitly.
+  if (parts.googleClearWhileQueue) {
+    sentence += ' Google promet izgleda protočno, ali službeni izvor ili kamera pokazuje kolonu na samoj graničnoj kontroli.';
+  } else if (parts.googleClear && used.length) {
+    sentence += ' Google promet je normalan na prilaznoj cesti, no to ne znači nulto čekanje na granici.';
+  }
+  if (parts.googleHeavy) sentence += ' Google pokazuje gust promet na prilazu.';
+  if (parts.disagreement) sentence += ' Izvori se međusobno ne slažu pa je raspon procjene širi.';
+  if (parts.cameraVisualOnly) sentence += ' Kamera ovog smjera služi samo za vizualnu provjeru i ne ulazi u izračun čekanja.';
+  return sentence;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 4. CAMERA — QUEUE BANDS, IMAGE HASH, STALE & MOTION
+// ───────────────────────────────────────────────────────────────────────────
+//
+// A camera must be able to say "nema kolone / mala / srednja / velika / ekstremna"
+// even when it cannot count vehicles exactly. The band is driven by lane fullness
+// and occupancy (area evidence) — robust to bumper-to-bumper undercounting — and
+// degrades gracefully (caps at "srednja") when the frame is stale or low-confidence.
+export const QUEUE_BANDS = Object.freeze(['nema', 'mala', 'srednja', 'velika', 'ekstremna']);
+
+export function classifyQueueBand({ occupancyPct = 0, laneFullnessPct = 0, queueVehicles = 0, confidence = 60, stale = false } = {}) {
+  const fullness = Math.max(Number(occupancyPct) || 0, Number(laneFullnessPct) || 0);
+  const q = Number(queueVehicles) || 0;
+  let band;
+  if (fullness < 14 && q <= 1) band = 'nema';
+  else if (fullness < 30 && q <= 5) band = 'mala';
+  else if (fullness < 50 && q <= 12) band = 'srednja';
+  else if (fullness < 70 && q <= 22) band = 'velika';
+  else band = 'ekstremna';
+
+  // An unreliable frame must not scream "ekstremna". Cap the claim.
+  if ((stale || confidence < 45) && QUEUE_BANDS.indexOf(band) > 2) band = 'srednja';
+
+  const labels = {
+    nema: 'Nema kolone',
+    mala: 'Mala kolona',
+    srednja: 'Srednja kolona',
+    velika: 'Velika kolona',
+    ekstremna: 'Ekstremna kolona',
+  };
+  return { band, label: labels[band], fullnessPct: round(fullness) };
+}
+
+// Average-hash (aHash): downscale luma to 8x8, threshold by the mean. Returns a
+// 16-char hex string (64 bits). `sampleGray(x,y)` returns 0-255 for normalised
+// coordinates 0..(w-1)/0..(h-1) — passed in so this stays decode-agnostic.
+export function computeAverageHash(sampleGray, width, height, size = 8) {
+  if (typeof sampleGray !== 'function' || !width || !height) return null;
+  const vals = [];
+  for (let gy = 0; gy < size; gy += 1) {
+    for (let gx = 0; gx < size; gx += 1) {
+      const px = Math.min(width - 1, Math.floor(((gx + 0.5) / size) * width));
+      const py = Math.min(height - 1, Math.floor(((gy + 0.5) / size) * height));
+      vals.push(clamp(sampleGray(px, py), 0, 255));
+    }
+  }
+  const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+  let bits = '';
+  for (const v of vals) bits += v >= mean ? '1' : '0';
+  let hex = '';
+  for (let i = 0; i < bits.length; i += 4) hex += parseInt(bits.slice(i, i + 4), 2).toString(16);
+  return hex;
+}
+
+export function hammingDistanceHex(a, b) {
+  if (!a || !b || a.length !== b.length) return null;
+  let dist = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    let x = parseInt(a[i], 16) ^ parseInt(b[i], 16);
+    while (x) { dist += x & 1; x >>= 1; }
+  }
+  return dist;
+}
+
+// Stale = the camera is serving the same frame repeatedly (frozen feed / cached
+// placeholder). We treat ≥3 consecutive near-identical frames as stale. `hashes`
+// is newest-first. Also returns a motion score (0-1) from the latest transition.
+export function detectStaleFrames(hashes = [], { minRepeats = 3, threshold = 2 } = {}) {
+  const valid = hashes.filter(Boolean);
+  if (valid.length < 2) return { stale: false, repeats: valid.length ? 1 : 0, motion: null };
+  let repeats = 1;
+  for (let i = 1; i < valid.length; i += 1) {
+    const d = hammingDistanceHex(valid[0], valid[i]);
+    if (d !== null && d <= threshold) repeats += 1; else break;
+  }
+  const latestDist = hammingDistanceHex(valid[0], valid[1]);
+  const motion = latestDist === null ? null : clamp(latestDist / 32, 0, 1);
+  return { stale: repeats >= minRepeats, repeats, motion };
+}
+
+// Build the full structured per-camera analysis object the spec asks for.
+export function buildCameraAnalysis(raw = {}) {
+  const occupancyPct = round(raw.occupancyPct ?? 0);
+  const laneFullnessPct = round(raw.laneFullnessPct ?? raw.occupancyPct ?? 0);
+  const queueVehicles = round(raw.queueVehicles ?? 0);
+  const stale = Boolean(raw.stale);
+  const confidence = round(clamp(raw.confidence ?? 55, 0, 100));
+  const bandInfo = classifyQueueBand({ occupancyPct, laneFullnessPct, queueVehicles, confidence, stale });
+  // A camera that is stale or low-confidence must NOT emit an aggressive minute
+  // estimate — it can still report a qualitative band. visualOnly never emits wait.
+  const reliable = !stale && confidence >= 45 && !raw.visualOnly;
+  return {
+    visibleVehicles: round(raw.visibleVehicles ?? raw.visibleTotal ?? 0),
+    queueVehicles,
+    occupancyPct,
+    laneFullnessPct,
+    flowVehicles15: round(raw.flowVehicles15 ?? 0),
+    trend: raw.trend || raw.queueTrend || 'unknown',
+    confidence,
+    stale,
+    snapshotAgeSec: raw.snapshotAgeSec === null || raw.snapshotAgeSec === undefined ? null : round(raw.snapshotAgeSec),
+    method: raw.method || 'snapshot-flow',
+    queueBand: bandInfo.band,
+    queueBandLabel: bandInfo.label,
+    motion: raw.motion === null || raw.motion === undefined ? null : Math.round(Number(raw.motion) * 100) / 100,
+    visualOnly: Boolean(raw.visualOnly),
+    // The wait this camera is allowed to contribute to hard fusion (null = none).
+    contributesWait: reliable ? round(raw.wait ?? 0) : null,
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 5. CAMERA DIRECTION SAFETY
+// ───────────────────────────────────────────────────────────────────────────
+//
+// A camera frame physically shows ONE side of the border. Feeding the same frame
+// into both directions (the previous behaviour) contaminates the opposite
+// direction. Each camera declares `validForDirections` and optionally `visualOnly`.
+// Returns 'hard' (drives wait), 'visual' (display only), or 'none'.
+export function cameraContributionMode(camera = {}, direction = 'toBih') {
+  const valid = Array.isArray(camera.validForDirections) ? camera.validForDirections : null;
+  if (camera.visualOnly === true) return 'visual';
+  // If a camera does not declare its direction we CANNOT prove which side it shows,
+  // so it is visual-only and must not enter the hard wait calculation (spec §2).
+  if (!valid || !valid.length) return 'visual';
+  if (!valid.includes(direction)) return 'none';
+  return 'hard';
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 6. TRUST ENGINE (driver reports & measured sessions)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Each report gets a trust score in [0,1]. Measured GPS-verified sessions are the
+// gold standard; anonymous manual reports start low and decay with age.
+export function computeReportTrust(report = {}, ctx = {}) {
+  let trust = report.measured ? 0.7 : 0.4;
+  const factors = [];
+  if (report.measured) { trust += 0.15; factors.push('izmjereno'); }
+  if (report.gpsVerified) { trust += 0.12; factors.push('GPS potvrđeno'); }
+  if (report.userId && !report.anonymous) { trust += 0.05; factors.push('prijavljeni korisnik'); }
+  const history = Number(ctx.userReportCount || 0);
+  if (history >= 10) { trust += 0.08; factors.push('iskusan korisnik'); }
+  else if (history >= 3) trust += 0.04;
+
+  // Agreement with the rest of the picture (other reports / fused wait).
+  if (Number.isFinite(ctx.referenceWait) && Number.isFinite(report.wait)) {
+    const diff = Math.abs(Number(report.wait) - Number(ctx.referenceWait));
+    if (diff <= 8) { trust += 0.08; factors.push('slaže se s ostalim izvorima'); }
+    else if (diff >= 40) { trust -= 0.18; factors.push('odstupa od ostalih izvora'); }
+  }
+
+  // Age decay: a 90-min-old report is much weaker than a fresh one.
+  const age = Number(report.ageMinutes ?? 0);
+  const ageMult = age <= 15 ? 1 : age <= 30 ? 0.85 : age <= 60 ? 0.6 : age <= 120 ? 0.35 : 0.15;
+  trust *= ageMult;
+  factors.push(`starost ${round(age)} min`);
+  return { trust: Math.round(clamp(trust, 0, 1) * 100) / 100, factors };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 7. ANTI-FAKE: dedupe + anomaly detection
+// ───────────────────────────────────────────────────────────────────────────
+//
+// One person must not be able to swing the wait by spamming. Collapse near-duplicate
+// reports from the same user, and flag outliers far from the cohort consensus.
+export function dedupeReports(reports = [], { windowMinutes = 20, waitDelta = 10 } = {}) {
+  const kept = [];
+  const seen = [];
+  for (const r of [...reports].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))) {
+    const dup = seen.find((s) => s.userKey === (r.userId || r.deviceId || 'anon')
+      && s.crossingId === r.crossingId && s.direction === r.direction
+      && Math.abs(new Date(s.createdAt) - new Date(r.createdAt)) <= windowMinutes * 60000
+      && Math.abs(Number(s.wait) - Number(r.wait)) <= waitDelta);
+    if (dup) continue;
+    seen.push({ userKey: r.userId || r.deviceId || 'anon', crossingId: r.crossingId, direction: r.direction, createdAt: r.createdAt, wait: r.wait });
+    kept.push(r);
+  }
+  return kept;
+}
+
+export function detectReportAnomalies(reports = [], referenceWait = null) {
+  if (reports.length < 2) return { anomalies: [], median: reports[0]?.wait ?? null };
+  const waits = reports.map((r) => Number(r.wait)).filter(Number.isFinite);
+  const med = median(waits);
+  const ref = Number.isFinite(referenceWait) ? referenceWait : med;
+  const anomalies = reports.filter((r) => Number.isFinite(Number(r.wait)) && Math.abs(Number(r.wait) - ref) >= Math.max(35, ref * 0.8));
+  return { anomalies, median: med };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 8. ACCURACY STATS (the KPI itself)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// `records` = [{ crossingId, direction, predictedWait, actualWait, confidenceLevel }]
+// Returns overall + per-crossing MAE / median error / p90 error / bias.
+export function computeAccuracyStats(records = []) {
+  const matched = records.filter((r) => isNum(r.predictedWait) && isNum(r.actualWait));
+  const groupStats = (rows) => {
+    if (!rows.length) return null;
+    const errs = rows.map((r) => Math.abs(Number(r.predictedWait) - Number(r.actualWait)));
+    const signed = rows.map((r) => Number(r.predictedWait) - Number(r.actualWait));
+    return {
+      n: rows.length,
+      mae: Math.round((errs.reduce((a, b) => a + b, 0) / errs.length) * 10) / 10,
+      medianError: median(errs),
+      p90Error: percentile(errs, 0.9),
+      bias: Math.round((signed.reduce((a, b) => a + b, 0) / signed.length) * 10) / 10,
+    };
+  };
+
+  const byCrossing = {};
+  for (const r of matched) {
+    const key = `${r.crossingId}:${r.direction}`;
+    (byCrossing[key] = byCrossing[key] || []).push(r);
+  }
+  const perCrossing = Object.fromEntries(Object.entries(byCrossing).map(([k, rows]) => [k, groupStats(rows)]));
+  return { overall: groupStats(matched), perCrossing, sampleSize: matched.length };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 9. ALERTS
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Produce push-ready alert events from a wait transition. Delivery (FCM/APNs/
+// web-push) is a separate transport; this decides WHAT to send and dedupes by rule.
+export function evaluateWaitAlerts(prev, next, opts = {}) {
+  const events = [];
+  const { crossingId, crossingName = crossingId, direction = 'toBih' } = opts;
+  const p = isNum(prev) ? Number(prev) : null;
+  const n = isNum(next) ? Number(next) : null;
+  if (n === null) return events;
+  const dropBelow = opts.dropBelow ?? 30;
+  const riseAbove = opts.riseAbove ?? 60;
+  const suddenDelta = opts.suddenDelta ?? 25;
+
+  if (p !== null) {
+    if (p >= dropBelow && n < dropBelow) events.push({ type: 'drop-below', crossingId, crossingName, direction, prev: p, next: n, title: `${crossingName}: čekanje palo ispod ${dropBelow} min`, body: `Sada ~${n} min.` });
+    if (p <= riseAbove && n > riseAbove) events.push({ type: 'rise-above', crossingId, crossingName, direction, prev: p, next: n, title: `${crossingName}: čekanje preraslo ${riseAbove} min`, body: `Sada ~${n} min.` });
+    if (Math.abs(n - p) >= suddenDelta) events.push({ type: 'sudden-change', crossingId, crossingName, direction, prev: p, next: n, title: `${crossingName}: nagla promjena čekanja`, body: `${p} → ${n} min.` });
+  }
+  return events;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 10. BEST CROSSING ENGINE
+// ───────────────────────────────────────────────────────────────────────────
+//
+// `crossings` = [{ id, name, wait, extraDriveMinutes, displayReady }]. Ranks by
+// total cost (wait + extra drive) and produces the savings sentence the spec wants.
+export function rankBestCrossings(crossings = [], opts = {}) {
+  const usable = crossings
+    .filter((c) => c.displayReady !== false && Number.isFinite(Number(c.wait)))
+    .map((c) => ({ ...c, extraDriveMinutes: Number(c.extraDriveMinutes || 0), totalMinutes: Number(c.wait) + Number(c.extraDriveMinutes || 0) }))
+    .sort((a, b) => a.totalMinutes - b.totalMinutes);
+  if (!usable.length) return { best: null, ranked: [], recommendation: null };
+
+  const best = usable[0];
+  const referenceId = opts.referenceId;
+  const reference = referenceId ? usable.find((c) => c.id === referenceId) : usable[usable.length - 1];
+  let recommendation = null;
+  if (reference && reference.id !== best.id) {
+    const saving = Math.round(reference.totalMinutes - best.totalMinutes);
+    if (saving >= 10) {
+      recommendation = {
+        bestId: best.id,
+        bestName: best.name,
+        comparedToId: reference.id,
+        comparedToName: reference.name,
+        savingMinutes: saving,
+        message: `Ušteda ${saving} min ako ideš preko ${best.name}.`,
+      };
+    }
+  }
+  return { best, ranked: usable, recommendation };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 11. MEASURED WAIT
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Compute the real wait from a session: time from joining the queue to crossing.
+// GPS verification is best-effort: if start/end coordinates are near the booth and
+// the path looks like an approach, mark gpsVerified.
+export function computeMeasuredWait(session = {}) {
+  const start = new Date(session.startedAt).getTime();
+  const end = new Date(session.finishedAt).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  const minutes = Math.round((end - start) / 60000);
+  if (minutes < 0 || minutes > 600) return null;
+  const gpsVerified = Boolean(session.startGps && session.endGps
+    && Number.isFinite(session.startGps.lat) && Number.isFinite(session.endGps.lat));
+  return {
+    wait: minutes,
+    gpsVerified,
+    durationMinutes: minutes,
+    anonymous: !session.userId,
+  };
+}

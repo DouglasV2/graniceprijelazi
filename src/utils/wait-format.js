@@ -36,9 +36,16 @@ export function formatWaitDisplay(wait, sourceMeta = {}) {
   if (!hasKnownWait(wait)) return 'čeka izvor';
   const n = Number(wait);
   const hint = sourceMeta.confidenceHint || '';
+  // The confidence engine's level/precision is the source of truth for honesty: we only
+  // show a single exact number at HIGH confidence. Anything below shows a range (when one
+  // is available) or a "~" approximation, so we never present false precision (spec §8, §13).
+  const level = sourceMeta.confidenceLevel || '';
+  const precision = sourceMeta.precision || '';
   const isSoftBound = sourceMeta.hasSoftUpperBoundPublic === true;
-  const isLowConf = hint === 'low' || hint === 'low-medium';
-  if ((isSoftBound || isLowConf) && hasKnownWait(sourceMeta.rangeMin) && hasKnownWait(sourceMeta.rangeMax)) {
+  const isLowConf = hint === 'low' || hint === 'low-medium' || level === 'niska';
+  const isMediumConf = hint === 'medium' || level === 'srednja';
+  const wantRange = isSoftBound || isLowConf || isMediumConf || precision === 'range';
+  if (wantRange && hasKnownWait(sourceMeta.rangeMin) && hasKnownWait(sourceMeta.rangeMax)) {
     const rMin = Math.max(0, Number(sourceMeta.rangeMin));
     const rMax = Number(sourceMeta.rangeMax);
     if (rMax - rMin >= 5) {

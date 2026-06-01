@@ -158,3 +158,57 @@ CREATE INDEX IF NOT EXISTS idx_borderflow_camera_snapshots_lookup
 
 CREATE INDEX IF NOT EXISTS idx_borderflow_camera_snapshots_camera
   ON borderflow_camera_snapshots (camera_id, fetched_at DESC);
+
+-- ── Accuracy tracking (the core KPI: predicted vs actual wait) ────────────────
+CREATE TABLE IF NOT EXISTS borderflow_prediction_accuracy (
+  id TEXT PRIMARY KEY,
+  crossing_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('toBih', 'toHr')),
+  predicted_wait INTEGER,
+  actual_wait INTEGER,
+  confidence_level TEXT,
+  confidence_score INTEGER,
+  source_mix JSONB NOT NULL DEFAULT '{}'::jsonb,
+  predicted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at TIMESTAMPTZ,
+  source TEXT NOT NULL DEFAULT 'measured-session'
+);
+
+CREATE INDEX IF NOT EXISTS idx_borderflow_prediction_accuracy_lookup
+  ON borderflow_prediction_accuracy (crossing_id, direction, predicted_at DESC);
+
+-- ── Measured wait sessions (driver joins queue → crosses; truest ground truth) ─
+CREATE TABLE IF NOT EXISTS borderflow_measured_sessions (
+  id TEXT PRIMARY KEY,
+  crossing_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('toBih', 'toHr')),
+  user_id TEXT REFERENCES borderflow_users(id) ON DELETE SET NULL,
+  anonymous BOOLEAN NOT NULL DEFAULT TRUE,
+  predicted_wait_at_start INTEGER,
+  actual_wait INTEGER,
+  gps_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  start_gps JSONB,
+  end_gps JSONB,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'finished', 'cancelled')),
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_borderflow_measured_sessions_lookup
+  ON borderflow_measured_sessions (crossing_id, direction, started_at DESC);
+
+-- ── Alert subscriptions (push-ready; transport configured separately) ─────────
+CREATE TABLE IF NOT EXISTS borderflow_alert_subscriptions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES borderflow_users(id) ON DELETE SET NULL,
+  crossing_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('toBih', 'toHr')),
+  drop_below INTEGER,
+  rise_above INTEGER,
+  push_token TEXT,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_borderflow_alert_subscriptions_lookup
+  ON borderflow_alert_subscriptions (crossing_id, direction, active);

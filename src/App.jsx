@@ -1432,6 +1432,17 @@ function confidenceLabel(confidence) {
   return 'Niska pouzdanost';
 }
 
+// Prefer the backend confidence engine's explicit level (visoka/srednja/niska/nedovoljno)
+// over the raw numeric score, so the UI is honest about how much to trust the number.
+function confidenceMetaLabel(sourceMeta = {}) {
+  const level = sourceMeta.confidenceLevel;
+  if (level === 'visoka') return { label: 'Visoka pouzdanost', tone: 'green' };
+  if (level === 'srednja') return { label: 'Srednja pouzdanost', tone: 'amber' };
+  if (level === 'niska') return { label: 'Niska pouzdanost', tone: 'red' };
+  if (level === 'nedovoljno') return { label: 'Nedovoljno podataka', tone: 'grey' };
+  return { label: confidenceLabel(sourceMeta.confidence), tone: Number(sourceMeta.confidence || 0) >= 75 ? 'green' : Number(sourceMeta.confidence || 0) >= 55 ? 'amber' : 'red' };
+}
+
 function trafficClassFromWait(wait) {
   if (!hasKnownWait(wait)) return 'unknown';
   const n = Number(wait);
@@ -1513,8 +1524,14 @@ function getBaseWaitSourceMeta(crossing, directionKey, overrides = {}) {
       hasSoftUpperBoundPublic: source.hasSoftUpperBoundPublic,
       googleClearWhileQueue: source.googleClearWhileQueue,
       note: source.note || 'Vrijednost je izračunata iz javnih izvora, kamera i dojava.',
+      explanation: source.explanation,
       confidence: source.confidence,
       confidenceHint: source.confidenceHint,
+      confidenceLevel: source.confidenceLevel,
+      confidenceScore: source.confidenceScore,
+      precision: source.precision,
+      independentSources: source.independentSources,
+      hasMeasuredSession: source.hasMeasuredSession,
       rangeMin: source.rangeMin,
       rangeMax: source.rangeMax,
       updatedAt: source.updatedAt,
@@ -1652,16 +1669,16 @@ function getAlternativeDeltaMeta(netBenefit) {
   }
   if (value >= 15) {
     return {
-      label: 'Alternativa se isplati',
+      label: `Ušteda ~${formatMinutes(value)}`,
       className: 'better',
-      note: `Može biti oko ${formatMinutes(value)} brža od planiranog prijelaza.`,
+      note: `Ušteda oko ${formatMinutes(value)} ako ideš preko ove alternative (uključuje dodatnu vožnju).`,
     };
   }
   if (value > 0) {
     return {
       label: 'Alternativa može biti brža',
       className: 'better',
-      note: `Mala prednost — razlika je oko ${formatMinutes(value)}.`,
+      note: `Mala prednost — ušteda je oko ${formatMinutes(value)}.`,
     };
   }
   if (value >= -10) {
@@ -1976,6 +1993,7 @@ function DetailModal({ crossing, selectedDirection, overrides, onClose, onTrack,
   const bestAltMeta = bestAlt ? getWaitSourceMeta(bestAlt, selectedDirection, overrides) : null;
   const altDeltaMeta = getAlternativeDeltaMeta(bestAlt?.netBenefit);
   const dataKnown = sourceMeta?.displayReady !== false && hasKnownWait(wait);
+  const confMeta = confidenceMetaLabel(sourceMeta);
   const headline = dataKnown
     ? `${waitLabel} · ${direction.label}`
     : `Stanje za ${direction.label} još nije stiglo iz live izvora`;
@@ -1993,6 +2011,7 @@ function DetailModal({ crossing, selectedDirection, overrides, onClose, onTrack,
             <div className="overview-head-pills">
               <span className={`operational-pill ${operational.className}`}>{operational.label}</span>
               <span className={`freshness-pill ${freshness.className}`}>{freshness.label}</span>
+              {dataKnown && <span className={`confidence-pill conf-${confMeta.tone}`} title="Koliko je procjena pouzdana">{confMeta.label}</span>}
             </div>
           </div>
           <button type="button" onClick={onClose} className="icon-button" aria-label="Zatvori">×</button>
@@ -2031,7 +2050,8 @@ function DetailModal({ crossing, selectedDirection, overrides, onClose, onTrack,
           <article className="overview-card">
             <span>Izvor procjene</span>
             <h3>{sourceMeta.label || 'Čeka izvor'}</h3>
-            <p>{sourceMeta.note || 'Procjena se osvježava čim stigne svjež signal.'}</p>
+            <p>{sourceMeta.explanation || sourceMeta.note || 'Procjena se osvježava čim stigne svjež signal.'}</p>
+            {dataKnown && <small className={`alternative-delta ${confMeta.tone === 'green' ? 'better' : confMeta.tone === 'red' ? 'critical' : confMeta.tone === 'amber' ? 'warning' : 'neutral'}`}>{confMeta.label}{sourceMeta.independentSources ? ` · ${sourceMeta.independentSources} izvor(a)` : ''}</small>}
           </article>
           <article className="overview-card">
             <span>Što napraviti sada</span>

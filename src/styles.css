@@ -771,6 +771,13 @@
 .alternative-delta.warning{background:#fff4ce;color:#a15c00}
 .alternative-delta.critical{background:#ffe9e7;color:#b42318}
 .alternative-delta.unknown{background:#f3f6fb;color:#667085}
+
+/* V4: confidence pill — honest about how much to trust the number (spec §3, §13) */
+.confidence-pill{display:inline-flex;align-items:center;border-radius:999px;padding:7px 9px;font-size:11px;font-weight:950}
+.confidence-pill.conf-green{background:var(--greenSoft);color:var(--green)}
+.confidence-pill.conf-amber{background:#fff4ce;color:#925d00}
+.confidence-pill.conf-red{background:var(--redSoft);color:var(--red)}
+.confidence-pill.conf-grey{background:#eef5ff;color:#64748b}
 .alt-verdict-center{display:flex;align-items:center;justify-content:center}
 .trip-direction-hint{grid-column:1/-1;margin:0;border:1px solid rgba(23,103,232,.16);border-radius:16px;padding:10px 12px;background:#f3f8ff;color:#31506f;font-size:13px;font-weight:820;line-height:1.35}
 

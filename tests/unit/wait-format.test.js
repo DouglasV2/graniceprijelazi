@@ -100,6 +100,19 @@ describe('formatWaitDisplay', () => {
     expect(formatWaitDisplay(22, { confidenceHint: 'high' })).toBe('22 min');
   });
 
+  it('shows a range at HIGH-engine confidence only when no range, else exact', () => {
+    // confidenceLevel "visoka" with no range → exact number (no false precision needed).
+    expect(formatWaitDisplay(40, { confidenceLevel: 'visoka' })).toBe('40 min');
+  });
+
+  it('medium confidence (srednja) surfaces a range instead of a single number', () => {
+    expect(formatWaitDisplay(45, { confidenceLevel: 'srednja', rangeMin: 35, rangeMax: 55 })).toBe('35–55 min');
+  });
+
+  it('low confidence (niska) with a range shows the band', () => {
+    expect(formatWaitDisplay(50, { confidenceLevel: 'niska', precision: 'range', rangeMin: 40, rangeMax: 58 })).toBe('40–58 min');
+  });
+
   it('never returns the literal strings "null", "undefined", or "NaN"', () => {
     for (const candidate of [null, undefined, NaN, '', 'foo', 0, 15, 30, 45, 80]) {
       const out = formatWaitDisplay(candidate);
