@@ -778,6 +778,27 @@
 .confidence-pill.conf-amber{background:#fff4ce;color:#925d00}
 .confidence-pill.conf-red{background:var(--redSoft);color:var(--red)}
 .confidence-pill.conf-grey{background:#eef5ff;color:#64748b}
+
+/* V5: "Zašto ova procjena?" transparency view (spec §3/§4) */
+.why-estimate{margin:0 0 12px;border:1px solid rgba(214,227,244,.92);border-radius:18px;background:#fbfdff;overflow:hidden}
+.why-estimate-toggle{display:flex;width:100%;align-items:center;justify-content:space-between;gap:10px;border:0;background:transparent;padding:13px 15px;cursor:pointer;font-weight:950;color:#244365}
+.why-estimate-toggle small{font-weight:800;color:#64748b}
+.why-estimate-body{padding:0 15px 14px;display:grid;gap:10px}
+.why-estimate-conflict{margin:0;border-radius:12px;padding:9px 11px;background:#fff4ce;color:#925d00;font-size:12.5px;font-weight:800}
+.why-estimate-note{margin:0;border-radius:12px;padding:9px 11px;background:#eef5ff;color:#1767e8;font-size:12.5px;font-weight:780}
+.why-estimate-sources{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.why-source{border:1px solid rgba(214,227,244,.9);border-radius:12px;padding:10px 11px;background:#fff}
+.why-source.role-excluded{opacity:.7;background:#f7f8fa}
+.why-source.role-lead{border-color:rgba(15,138,95,.35)}
+.why-source-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.why-source-head strong{font-size:14px;letter-spacing:-.02em}
+.why-role-badge{border-radius:999px;padding:3px 8px;font-size:10.5px;font-weight:950;background:#eef5ff;color:#1767e8}
+.why-role-badge.role-lead{background:var(--greenSoft);color:var(--green)}
+.why-role-badge.role-helper{background:#f3f6fb;color:#667085}
+.why-role-badge.role-excluded{background:var(--redSoft);color:var(--red)}
+.why-source-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:5px;color:#64748b;font-size:11.5px;font-weight:800}
+.why-source-flags{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.why-source-flags em{font-style:normal;border-radius:8px;padding:3px 7px;font-size:10.5px;font-weight:850;background:#fff7e8;color:#925d00}
 .alt-verdict-center{display:flex;align-items:center;justify-content:center}
 .trip-direction-hint{grid-column:1/-1;margin:0;border:1px solid rgba(23,103,232,.16);border-radius:16px;padding:10px 12px;background:#f3f8ff;color:#31506f;font-size:13px;font-weight:820;line-height:1.35}
 

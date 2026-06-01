@@ -152,6 +152,78 @@ function kindLabel(kind, s = {}) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// 1b. SOURCE PRIORITY LADDER + TRUST + STRUCTURED EXPLANATION (spec V5 §3/§4)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Formal hierarchy: a clear/blue Google road never outranks a real booth signal — it
+// only describes approach traffic. Higher tiers, when present, are the wait authority.
+export const SOURCE_PRIORITY = Object.freeze(['admin', 'measured', 'official', 'camera', 'report', 'historical', 'google']);
+
+// Trust score in [0,1] per source. Reports pass their own engine trust; the rest derive
+// it from kind, freshness and quality flags (soft/stale). This is the weight's "why".
+export function sourceTrustScore(kind, { ageMinutes = 0, confidence = 50, soft = false, stale = false, trust = null } = {}) {
+  if (trust !== null && trust !== undefined) return Math.round(clamp(trust, 0, 1) * 100) / 100;
+  const ageMult = ageMinutes <= 10 ? 1 : ageMinutes <= 25 ? 0.8 : ageMinutes <= 45 ? 0.55 : 0.3;
+  const base = kind === 'admin' ? 1
+    : kind === 'measured' ? 0.9
+    : kind === 'official' ? (soft ? 0.55 : 0.85)
+    : kind === 'camera' ? (stale ? 0.25 : 0.65)
+    : kind === 'report' ? 0.5
+    : kind === 'google' ? 0.4
+    : 0.5;
+  return Math.round(clamp(base * ageMult * (0.6 + confidence / 250), 0, 1) * 100) / 100;
+}
+
+// Build the structured "why this estimate?" payload the UI renders. `descriptors` is
+// one entry per source that the fusion saw:
+//   { kind, tier, label, value (wait), weight, ageMinutes, confidence, soft, stale,
+//     directionVerified, heuristic, excluded, excludeReason, trust }
+// Returns per-source contribution %, role, honest flags, conflict detection, and whether
+// Google acted as the wait authority.
+export function buildEstimateExplanation(descriptors = [], ctx = {}) {
+  const used = descriptors.filter((d) => !d.excluded && Number(d.weight) > 0);
+  const totalWeight = used.reduce((sum, d) => sum + Number(d.weight || 0), 0) || 1;
+  const present = new Set(used.map((d) => d.tier || d.kind));
+  if (ctx.admin) present.add('admin');
+  const authorityTier = SOURCE_PRIORITY.find((t) => present.has(t)) || null;
+  const googleAsAuthority = authorityTier === 'google';
+  const leadId = used.length ? [...used].sort((a, b) => b.weight - a.weight)[0] : null;
+
+  const flagsFor = (d) => {
+    const f = [];
+    if (d.kind === 'official' && d.soft) f.push('okvirno (soft)');
+    if (d.kind === 'camera') {
+      if (d.heuristic) f.push('heuristika (bez CV modela)');
+      if (d.stale) f.push('zastarjela slika');
+      if (d.directionVerified) f.push('smjer potvrđen'); else f.push('smjer nepotvrđen');
+      if (Number(d.confidence) < 50) f.push('niska pouzdanost kamere');
+    }
+    if (d.kind === 'google') f.push(googleAsAuthority ? 'jedini signal' : 'samo prilazni promet (ne diktira čekanje)');
+    if (d.kind === 'measured') f.push(d.flags?.includes('gps') ? 'GPS potvrđeno' : 'izmjereno');
+    if (d.excluded && d.excludeReason) f.push(d.excludeReason);
+    return f;
+  };
+
+  const sources = descriptors.map((d) => {
+    const trust = sourceTrustScore(d.kind, d);
+    const usedThis = !d.excluded && Number(d.weight) > 0;
+    const contributionPct = usedThis ? Math.round((Number(d.weight) / totalWeight) * 100) : 0;
+    const role = d.excluded ? 'excluded'
+      : (d.kind === 'google' && !googleAsAuthority) ? 'helper'
+      : (leadId && d === leadId) ? 'lead'
+      : 'support';
+    return { kind: d.kind, label: d.label, value: Number.isFinite(Number(d.value)) ? Number(d.value) : null, contributionPct, trust, role, used: usedThis, ageMinutes: Math.round(Number(d.ageMinutes || 0)), flags: flagsFor(d) };
+  });
+
+  // Conflict: disagreement among the BOOTH-truthful sources (everyone except Google).
+  const hardValues = used.filter((d) => d.kind !== 'google' && Number.isFinite(Number(d.value))).map((d) => Number(d.value));
+  const spread = hardValues.length >= 2 ? Math.max(...hardValues) - Math.min(...hardValues) : 0;
+  const conflict = { detected: spread > 25, spreadMinutes: spread, kinds: hardValues.length >= 2 ? [...new Set(used.filter((d) => d.kind !== 'google').map((d) => d.kind))] : [] };
+
+  return { authorityTier, googleAsAuthority, conflict, sources, summary: ctx.summary || '' };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // 2. SMART RANGES
 // ───────────────────────────────────────────────────────────────────────────
 //

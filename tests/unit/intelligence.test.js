@@ -21,6 +21,9 @@ import {
   haversineMeters,
   locateInGeofence,
   computeBiasCorrection,
+  SOURCE_PRIORITY,
+  sourceTrustScore,
+  buildEstimateExplanation,
 } from '../../server/intelligence.js';
 
 // A synthetic crossing geofence (~Gradiška), approach ~1.1 km north of the booth.
@@ -343,6 +346,72 @@ describe('geofence + GPS-verified measured wait (V5 §1)', () => {
     }, GEOFENCE);
     expect(m.gpsVerified).toBe(false);
     expect(m.gpsSuspicious).toBe(true);
+  });
+});
+
+describe('source priority ladder + trust (V5 §3)', () => {
+  it('measured outranks official, official outranks google', () => {
+    expect(SOURCE_PRIORITY.indexOf('measured')).toBeLessThan(SOURCE_PRIORITY.indexOf('official'));
+    expect(SOURCE_PRIORITY.indexOf('official')).toBeLessThan(SOURCE_PRIORITY.indexOf('google'));
+  });
+  it('trust: measured/fresh-official high, stale camera and google low', () => {
+    const measured = sourceTrustScore('measured', { ageMinutes: 5, confidence: 90 });
+    const official = sourceTrustScore('official', { ageMinutes: 5, confidence: 80 });
+    const staleCam = sourceTrustScore('camera', { ageMinutes: 5, confidence: 60, stale: true });
+    const google = sourceTrustScore('google', { ageMinutes: 5, confidence: 60 });
+    expect(measured).toBeGreaterThan(official);
+    expect(official).toBeGreaterThan(staleCam);
+    expect(staleCam).toBeLessThan(0.4);
+    expect(google).toBeLessThan(official);
+  });
+  it('reports pass through their own engine trust', () => {
+    expect(sourceTrustScore('report', { trust: 0.83 })).toBe(0.83);
+  });
+});
+
+describe('structured explanation payload (V5 §4)', () => {
+  it('marks Google as helper (not authority) when an official source is present', () => {
+    const payload = buildEstimateExplanation([
+      { kind: 'official', tier: 'official', label: 'HAK', value: 90, weight: 100, confidence: 80, ageMinutes: 5 },
+      { kind: 'google', tier: 'google', label: 'Google', value: 15, weight: 12, confidence: 60, ageMinutes: 3 },
+    ]);
+    expect(payload.authorityTier).toBe('official');
+    expect(payload.googleAsAuthority).toBe(false);
+    const google = payload.sources.find((s) => s.kind === 'google');
+    expect(google.role).toBe('helper');
+    expect(google.flags.join(' ')).toContain('prilazni');
+  });
+
+  it('flags camera as heuristic + direction status + computes contribution %', () => {
+    const payload = buildEstimateExplanation([
+      { kind: 'camera', tier: 'camera', label: 'Kamera', value: 40, weight: 60, confidence: 70, ageMinutes: 5, heuristic: true, directionVerified: true },
+      { kind: 'google', tier: 'google', label: 'Google', value: 12, weight: 20, confidence: 60, ageMinutes: 3 },
+    ]);
+    const cam = payload.sources.find((s) => s.kind === 'camera');
+    expect(cam.flags.join(' ')).toContain('heuristika');
+    expect(cam.flags.join(' ')).toContain('smjer potvrđen');
+    expect(cam.contributionPct).toBe(75); // 60 / 80
+    expect(cam.role).toBe('lead');
+  });
+
+  it('detects conflict when booth-truthful sources disagree', () => {
+    const payload = buildEstimateExplanation([
+      { kind: 'official', tier: 'official', label: 'HAK', value: 90, weight: 100, confidence: 80, ageMinutes: 5 },
+      { kind: 'camera', tier: 'camera', label: 'Kamera', value: 30, weight: 50, confidence: 70, ageMinutes: 5, directionVerified: true },
+    ]);
+    expect(payload.conflict.detected).toBe(true);
+    expect(payload.conflict.spreadMinutes).toBe(60);
+  });
+
+  it('excluded sources contribute 0 and are flagged', () => {
+    const payload = buildEstimateExplanation([
+      { kind: 'measured', tier: 'measured', label: 'Izmjereno', value: 50, weight: 0, excluded: true, excludeReason: 'odbačeno (sumnjiv GPS trag)' },
+      { kind: 'official', tier: 'official', label: 'HAK', value: 55, weight: 100, confidence: 80, ageMinutes: 5 },
+    ]);
+    const measured = payload.sources.find((s) => s.kind === 'measured');
+    expect(measured.role).toBe('excluded');
+    expect(measured.contributionPct).toBe(0);
+    expect(measured.flags.join(' ')).toContain('sumnjiv');
   });
 });
 

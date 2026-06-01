@@ -27,6 +27,7 @@ import {
   haversineMeters,
   locateInGeofence,
   computeBiasCorrection,
+  buildEstimateExplanation,
 } from './intelligence.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2588,6 +2589,9 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       softUpperBound,
       updatedAt: item.fetchedAt,
       ageMultiplier: ageMult,
+      kind: 'official',
+      tier: 'official',
+      confidence: Number(item.confidence || 70),
     });
   });
   if (cameraSignal) {
@@ -2599,6 +2603,12 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       sourceType: cameraSignal.sourceType,
       updatedAt: cameraSignal.fetchedAt,
       ageMultiplier: ageMult,
+      kind: 'camera',
+      tier: 'camera',
+      confidence: Number(cameraSignal.confidence || 58),
+      stale: Boolean(cameraSignal.metadata?.stale),
+      directionVerified: true,
+      heuristic: !cvEndpoint,
     });
   }
   if (googleSignal) {
@@ -2613,6 +2623,9 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       sourceType: googleSignal.sourceType,
       updatedAt: googleSignal.fetchedAt,
       ageMultiplier: ageMult,
+      kind: 'google',
+      tier: 'google',
+      confidence: Number(googleSignal.confidence || 62),
     });
   }
   if (reportAvg !== null && acceptReports) {
@@ -2628,6 +2641,11 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       label: measuredCount > 0 ? 'Izmjereno' : 'Dojave',
       sourceType: measuredCount > 0 ? 'measured-wait' : 'driver-reports',
       updatedAt: reports[0]?.createdAt || new Date().toISOString(),
+      kind: measuredCount > 0 ? 'measured' : 'report',
+      tier: measuredCount > 0 ? 'measured' : 'report',
+      confidence: measuredCount > 0 ? 88 : 60,
+      trust: avgReportTrust,
+      flags: (measuredCount > 0 && reports.some((r) => r.measured && r.gpsVerified)) ? ['gps'] : [],
     });
   }
 
@@ -2684,6 +2702,27 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     // google-vs-official caveat the explanation engine added itself.
     const capReason = sanity.googleVsOfficial ? '' : (sanity.reason || '');
 
+    // ── STRUCTURED EXPLANATION PAYLOAD (spec V5 §3/§4) ───────────────────────
+    // Project each fusion candidate into a descriptor and build the "why this estimate?"
+    // payload: per-source contribution %, trust, role, honest flags, conflict detection,
+    // and whether Google acted as the wait authority (it must not when a booth signal exists).
+    const explanationDescriptors = candidates.map((c) => ({
+      kind: c.kind,
+      tier: c.tier,
+      label: c.label,
+      value: c.wait,
+      weight: c.weight,
+      ageMinutes: ageMinutesOf(c.updatedAt),
+      confidence: c.confidence,
+      soft: c.softUpperBound,
+      stale: c.stale,
+      directionVerified: c.directionVerified,
+      heuristic: c.heuristic,
+      trust: c.trust,
+      flags: c.flags,
+    }));
+    const explanationPayload = buildEstimateExplanation(explanationDescriptors, { summary: explanation });
+
     return {
       wait: finalWait,
       rangeMin: range.rangeMin,
@@ -2697,6 +2736,7 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       biasApplied: biasResult.applied,
       biasAdjustMin: biasResult.adjustMin,
       explanation,
+      explanationPayload,
       label: combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
       className: combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
       sourceType: combined ? 'combined-estimate' : bestCandidate.sourceType,
@@ -2823,6 +2863,7 @@ async function buildEffectiveWaitMaps(store) {
         className: signal.className,
         note: signal.note,
         explanation: signal.explanation,
+        explanationPayload: signal.explanationPayload,
         confidence: signal.confidence,
         confidenceHint: signal.confidenceHint,
         confidenceLevel: signal.confidenceLevel,

@@ -1525,6 +1525,7 @@ function getBaseWaitSourceMeta(crossing, directionKey, overrides = {}) {
       googleClearWhileQueue: source.googleClearWhileQueue,
       note: source.note || 'Vrijednost je izračunata iz javnih izvora, kamera i dojava.',
       explanation: source.explanation,
+      explanationPayload: source.explanationPayload,
       confidence: source.confidence,
       confidenceHint: source.confidenceHint,
       confidenceLevel: source.confidenceLevel,
@@ -2060,6 +2061,8 @@ function DetailModal({ crossing, selectedDirection, overrides, onClose, onTrack,
           </article>
         </div>
 
+        {dataKnown && <WhyThisEstimate payload={sourceMeta.explanationPayload} confMeta={confMeta} />}
+
         <div className="modal-actions">
           <button type="button" className={tracked ? 'ghost-button active' : 'ghost-button'} onClick={() => onTrack(crossing.id)}>{tracked ? '★ Favorit' : '+ Favorit'}</button>
           {addNotificationRule && <button type="button" className="ghost-button" onClick={() => addNotificationRule({ crossingId: crossing.id, direction: selectedDirection, type: 'below_wait', threshold: 15 })}>Javi kad padne ispod 15 min</button>}
@@ -2069,6 +2072,55 @@ function DetailModal({ crossing, selectedDirection, overrides, onClose, onTrack,
   );
 }
 
+
+// "Zašto ova procjena?" — the transparency view (spec V5 §3/§4). Shows every source the
+// fusion saw: its value, contribution %, trust, role and honest flags, whether sources
+// conflict, and explicitly that Google never dictates the booth wait.
+const ROLE_LABELS = { lead: 'glavni izvor', support: 'podrška', helper: 'pomoćni (prilaz)', excluded: 'isključeno' };
+const KIND_LABELS = { official: 'Službeni izvor', camera: 'Kamera', google: 'Google promet', report: 'Dojave vozača', measured: 'Izmjereno čekanje' };
+
+function WhyThisEstimate({ payload, confMeta }) {
+  const [open, setOpen] = useState(false);
+  if (!payload || !Array.isArray(payload.sources) || !payload.sources.length) return null;
+  const hasGoogle = payload.sources.some((s) => s.kind === 'google');
+  return (
+    <section className="why-estimate">
+      <button type="button" className="why-estimate-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span>Zašto ova procjena?</span>
+        <small>{confMeta?.label || ''} · {open ? 'sakrij' : 'prikaži izvore'}</small>
+      </button>
+      {open && (
+        <div className="why-estimate-body">
+          {payload.conflict?.detected && (
+            <p className="why-estimate-conflict">⚠️ Izvori se ne slažu (raspon {payload.conflict.spreadMinutes} min) pa je procjena prikazana kao širi raspon i s nižom pouzdanošću.</p>
+          )}
+          {hasGoogle && !payload.googleAsAuthority && (
+            <p className="why-estimate-note">Google promet ovdje opisuje samo prilaznu cestu i <strong>ne određuje čekanje na granici</strong> — mjerodavni su službeni izvor, kamera ili dojave.</p>
+          )}
+          <ul className="why-estimate-sources">
+            {payload.sources.map((s, i) => (
+              <li key={`${s.kind}-${i}`} className={`why-source role-${s.role}`}>
+                <div className="why-source-head">
+                  <strong>{KIND_LABELS[s.kind] || s.label}</strong>
+                  <span className={`why-role-badge role-${s.role}`}>{ROLE_LABELS[s.role] || s.role}</span>
+                </div>
+                <div className="why-source-meta">
+                  {hasKnownWait(s.value) && <span>{formatMinutes(s.value)}</span>}
+                  {s.used ? <span>{s.contributionPct}% težine</span> : <span>0%</span>}
+                  <span>pouzdanost {Math.round((s.trust || 0) * 100)}%</span>
+                  {Number.isFinite(s.ageMinutes) && s.ageMinutes > 0 && <span>otprije {s.ageMinutes} min</span>}
+                </div>
+                {s.flags?.length > 0 && (
+                  <div className="why-source-flags">{s.flags.map((f, fi) => <em key={fi}>{f}</em>)}</div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
 
 function ShareRouteButton({ crossing, selectedDirection, tab = 'Mapa', label = 'Podijeli' }) {
   const [copied, setCopied] = useState(false);
