@@ -89,6 +89,26 @@ describe('geofence + auto start/stop (V5 §1)', () => {
   });
 });
 
+describe('camera debug + no-false-wait (V5 P0)', () => {
+  it('rejects anonymous and returns per-camera evidence for admin', async () => {
+    expect([401, 403]).toContain((await request(app).get('/api/admin/camera/debug').query({ crossingId: 'maljevac', direction: 'toBih' })).status);
+    const res = await request(app).get('/api/admin/camera/debug').query({ crossingId: 'maljevac', direction: 'toBih' }).set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('waitIsCameraDriven');
+    expect(res.body).toHaveProperty('cameraEstimateReliable');
+    expect(Array.isArray(res.body.cameras)).toBe(true);
+    expect(findIllegalJsonValue(res.body, '$')).toBeNull();
+  });
+
+  it('a baseline/fallback (no live snapshot) is NOT a reliable camera estimate', async () => {
+    // With camera counting disabled in tests there is no live snapshot, so the camera
+    // estimate must report itself as not reliable rather than masquerading as a live wait.
+    const res = await request(app).get('/api/admin/camera/debug').query({ crossingId: 'svilaj', direction: 'toBih' }).set('Authorization', `Bearer ${adminToken}`);
+    expect(res.body.cameraEstimateReliable).toBe(false);
+    expect(res.body.waitIsCameraDriven).toBe(false);
+  });
+});
+
 describe('bias correction model (V5 §2)', () => {
   it('rejects anonymous and returns the model (disabled by default) for admin', async () => {
     expect([401, 403]).toContain((await request(app).get('/api/admin/bias')).status);
@@ -97,6 +117,50 @@ describe('bias correction model (V5 §2)', () => {
     expect(res.body.enabled).toBe(false);
     expect(res.body).toHaveProperty('perCrossing');
     expect(findIllegalJsonValue(res.body, '$')).toBeNull();
+  });
+});
+
+describe('confidence calibration admin endpoints (V5 §7 G)', () => {
+  const routes = [
+    '/api/admin/confidence/calibration/status',
+    '/api/admin/confidence/accuracy',
+    '/api/admin/confidence/histogram',
+    '/api/admin/confidence/reliability',
+  ];
+  it('reject anonymous callers', async () => {
+    for (const r of routes) expect([401, 403]).toContain((await request(app).get(r)).status);
+  });
+  it('return calibration status for admin (no fabricated HIGH thresholds)', async () => {
+    const res = await request(app).get('/api/admin/confidence/calibration/status').set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.minSamplesHigh).toBeGreaterThanOrEqual(30);
+    expect(res.body).toHaveProperty('totalResolvedSamples');
+    expect(res.body).toHaveProperty('bucketsAvailable');
+    expect(findIllegalJsonValue(res.body, '$')).toBeNull();
+  });
+  it('return per-bucket accuracy, histogram and reliability for admin', async () => {
+    for (const r of routes.slice(1)) {
+      const res = await request(app).get(r).set('Authorization', `Bearer ${adminToken}`);
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(findIllegalJsonValue(res.body, '$')).toBeNull();
+    }
+  });
+});
+
+describe('confidence calibration: HIGH is impossible without measured proof (V5 §7 A)', () => {
+  it('three agreeing booth sources are still capped to srednja with no calibration data', async () => {
+    const mod = await import('../../server/index.js');
+    const crossing = mod.BORDER_CROSSINGS.maljevac;
+    const now = new Date().toISOString();
+    const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', { reports: [], overrides: {} }, [
+      { sourceType: 'public-text-status', sourceName: 'HAK', normalizedWaitMin: 50, rawStatus: 'Eksplicitno čekanje 50 min', confidence: 90, weight: 1.35, fetchedAt: now, metadata: {} },
+      { sourceType: 'public-text-status', sourceName: 'BIHAMK', normalizedWaitMin: 52, rawStatus: 'Eksplicitno čekanje 52 min', confidence: 88, weight: 1.3, fetchedAt: now, metadata: {} },
+      { sourceType: 'camera-snapshot-model', sourceName: 'Kamera', normalizedWaitMin: 48, confidence: 70, weight: 0.72, fetchedAt: now, metadata: { queueVehicles: 24, flowVehicles15: 5 } },
+    ]);
+    // The heuristic may consider this high agreement, but calibration must not grant visoka.
+    expect(sig.confidenceLevel).not.toBe('visoka');
+    expect(sig.calibration.hasData).toBe(false);
   });
 });
 

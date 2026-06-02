@@ -29,6 +29,16 @@ import {
   computeBiasCorrection,
   buildEstimateExplanation,
 } from './intelligence.js';
+import {
+  CALIBRATION_VERSION,
+  CALIBRATION_THRESHOLDS,
+  computeCalibrationModel,
+  applyConfidenceDowngrades,
+  computeConfidenceCalibrationStats,
+  computeErrorHistogram,
+  computeReliabilityReport,
+  sourceMixClass,
+} from './confidence-calibration.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1350,6 +1360,24 @@ async function optionalAuth(req, _res, next) {
   return next();
 }
 
+// Full prediction metadata (spec V5 §7 B) — enough to later PROVE which kinds of estimates,
+// which sources and which confidence buckets were actually accurate.
+function signalSourceMix(signal = {}) {
+  return {
+    sourceType: signal.sourceType,
+    sourceAuthorityTier: signal.explanationPayload?.authorityTier || null,
+    hasCamera: Boolean(signal.hasCameraSignal),
+    hasGoogle: Boolean(signal.hasGoogleSignal),
+    hasHardPublic: Boolean(signal.hasHardPublicSignal),
+    hasMeasured: Boolean(signal.hasMeasuredSession),
+    hasConflict: Boolean(signal.explanationPayload?.conflict?.detected),
+    cameraStale: Boolean(signal.explanationPayload?.sources?.some((s) => s.kind === 'camera' && (s.flags || []).some((f) => /zastarjel/.test(f)))),
+    googleOnly: signal.explanationPayload?.googleAsAuthority === true,
+    sourceCount: signal.independentSources ?? null,
+    calibrationVersion: CALIBRATION_VERSION,
+  };
+}
+
 // Record a sampled prediction (predicted wait + confidence + which sources fed it).
 // Sampling avoids flooding: at most once per (crossing,direction) per interval.
 function recordPredictionSample(crossingId, direction, signal) {
@@ -1366,7 +1394,7 @@ function recordPredictionSample(crossingId, direction, signal) {
     actualWait: null,
     confidenceLevel: signal.confidenceLevel || null,
     confidenceScore: signal.confidenceScore ?? signal.confidence ?? null,
-    sourceMix: { sourceType: signal.sourceType, hasCamera: signal.hasCameraSignal, hasGoogle: signal.hasGoogleSignal, hasHardPublic: signal.hasHardPublicSignal, hasMeasured: signal.hasMeasuredSession },
+    sourceMix: signalSourceMix(signal),
     predictedAt: new Date().toISOString(),
     resolvedAt: null,
     source: 'state-sample',
@@ -1378,7 +1406,7 @@ function recordPredictionSample(crossingId, direction, signal) {
 // Close the loop: when a real (measured) wait arrives, store a resolved accuracy record.
 // We compare the actual against the prediction captured when the driver JOINED the queue
 // (the truest measure of "was our estimate right when it mattered").
-function recordResolvedAccuracy({ crossingId, direction, predictedWait, actualWait, confidenceLevel = null, confidenceScore = null, source = 'measured-session' }) {
+function recordResolvedAccuracy({ crossingId, direction, predictedWait, actualWait, confidenceLevel = null, confidenceScore = null, sourceMix = {}, source = 'measured-session' }) {
   predictionAccuracyBuffer.unshift({
     id: crypto.randomUUID(),
     crossingId,
@@ -1387,7 +1415,7 @@ function recordResolvedAccuracy({ crossingId, direction, predictedWait, actualWa
     actualWait: Number.isFinite(Number(actualWait)) ? Number(actualWait) : null,
     confidenceLevel,
     confidenceScore,
-    sourceMix: {},
+    sourceMix: sourceMix || {},
     predictedAt: new Date().toISOString(),
     resolvedAt: new Date().toISOString(),
     source,
@@ -1395,6 +1423,7 @@ function recordResolvedAccuracy({ crossingId, direction, predictedWait, actualWa
   persistPredictionAccuracy(predictionAccuracyBuffer[0]).catch(() => {});
   while (predictionAccuracyBuffer.length > 20000) predictionAccuracyBuffer.pop();
   refreshBiasModel();
+  refreshCalibrationModel();
 }
 
 function recentResolvedAccuracy(hours = 24 * 14) {
@@ -1411,6 +1440,42 @@ const BIAS_MAX_ADJUST_MIN = Math.max(5, Number(process.env.BIAS_MAX_ADJUST_MIN |
 let biasModel = computeBiasCorrection([], { minSample: BIAS_MIN_SAMPLE });
 function refreshBiasModel() {
   biasModel = computeBiasCorrection(recentResolvedAccuracy(), { minSample: BIAS_MIN_SAMPLE });
+}
+
+// Empirical confidence calibration model (spec V5 §7). Recomputed from resolved accuracy.
+// Always "on": with no data it degrades gracefully (can never grant HIGH without proof).
+let calibrationModel = computeCalibrationModel([]);
+function refreshCalibrationModel() {
+  calibrationModel = computeCalibrationModel(recentResolvedAccuracy());
+}
+
+// Resolve the FINAL confidence: start from the heuristic profile level, apply structural
+// downgrade rules (§7 D), then let the empirical calibration model have the last word — it
+// may only lower, never raise, and HIGH is impossible without proven historical accuracy.
+const CONF_ORDER = ['nedovoljno', 'niska', 'srednja', 'visoka'];
+function resolveCalibratedConfidence(profile, ctx) {
+  const downgraded = applyConfidenceDowngrades(profile.level, ctx);
+  const calibrated = calibrationModel.calibratedConfidence(downgraded.level, { crossingId: ctx.crossingId, direction: ctx.direction, sourceMix: ctx.sourceMix });
+  const level = CONF_ORDER[Math.min(CONF_ORDER.indexOf(downgraded.level), CONF_ORDER.indexOf(calibrated.level))];
+  const precision = level === 'visoka' ? 'exact' : 'range';
+  // Score: empirical when calibration has data; otherwise reflect the heuristic profile
+  // score (so finer signal differences — e.g. stale vs fresh camera — still show) but cap
+  // it by the resolved level so a no-data confidence can never imply HIGH.
+  let score = Math.round((calibrated.score ?? 0.5) * 100);
+  if (!calibrated.hasData) {
+    const levelCap = level === 'visoka' ? 95 : level === 'srednja' ? 69 : level === 'niska' ? 44 : 20;
+    score = Math.min(levelCap, Math.round(Number(profile.score) || 0));
+  }
+  return {
+    level,
+    score,
+    precision,
+    basis: calibrated.basis,
+    sampleSize: calibrated.sampleSize,
+    bucketMetrics: calibrated.bucketMetrics,
+    hasData: calibrated.hasData,
+    reasons: [...downgraded.reasons, ...calibrated.reasons],
+  };
 }
 // Apply a clamped, sufficient-sample correction to a live wait. Returns the (possibly
 // unchanged) wait plus metadata for the explanation layer.
@@ -1484,6 +1549,8 @@ async function loadPersistedIntelligenceState() {
       riseAbove: r.rise_above, pushToken: r.push_token, active: r.active, createdAt: isoDate(r.created_at),
     })));
     console.log(`[intelligence-state] loaded ${predictionAccuracyBuffer.length} accuracy / ${measuredSessionBuffer.length} sessions / ${alertSubscriptionBuffer.length} subs`);
+    refreshBiasModel();
+    refreshCalibrationModel();
   } catch (error) {
     console.warn('[intelligence-state] load failed:', error.message);
   }
@@ -2037,6 +2104,7 @@ async function buildCameraSourceSnapshots() {
         passed15: analytics.passed15,
         flowVehicles15: analytics.flowVehicles15 ?? analytics.passed15,
         queueTrend: analytics.queueTrend,
+        queueBand: analytics.queueBand,
         waitRangeMin: analytics.waitRangeMin,
         waitRangeMax: analytics.waitRangeMax,
         vehicleMix15: analytics.vehicleMix15,
@@ -2679,10 +2747,29 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     reports.filter((r) => r.measured).forEach((r) => hardWaits.push(Number(r.wait)));
     const agreementSpread = hardWaits.length >= 2 ? Math.max(...hardWaits) - Math.min(...hardWaits) : undefined;
     const profile = computeConfidenceProfile({ signals: confidenceSignals, agreementSpread });
-    const confidenceHint = profile.level === CONFIDENCE_LEVELS.HIGH ? 'high' : profile.level === CONFIDENCE_LEVELS.MEDIUM ? 'medium' : 'low';
+
+    // ── CONFIDENCE CALIBRATION (spec V5 §7) ──────────────────────────────────
+    // Structural downgrades + empirical calibration have the LAST word. HIGH is granted
+    // only when proven by historical measured accuracy; otherwise it is capped at MEDIUM.
+    const cameraHeuristicOnly = Boolean(cameraSignal) && !cvEndpoint && !hasHardPublicSignal && !hasMeasuredSession;
+    const googleOnly = Boolean(googleSignal) && !cameraSignal && publicSignals.length === 0 && !hasMeasuredSession;
+    const calibrated = resolveCalibratedConfidence(profile, {
+      crossingId: crossing.id,
+      direction,
+      sourceMix: { hasCamera: Boolean(cameraSignal), hasGoogle: Boolean(googleSignal), hasHardPublic: hasHardPublicSignal, hasMeasured: hasMeasuredSession },
+      conflictSpread: Number.isFinite(agreementSpread) ? agreementSpread : 0,
+      cameraStale,
+      cameraHeuristicOnly,
+      queueBand: cameraSignal?.metadata?.queueBand,
+      googleOnly,
+      singleSource: profile.independentSources <= 1,
+      hasRecentMeasured: hasMeasuredSession,
+    });
+    const calibratedProfile = { level: calibrated.level, precision: calibrated.precision, score: calibrated.score };
+    const confidenceHint = calibrated.level === 'visoka' ? 'high' : calibrated.level === 'srednja' ? 'medium' : 'low';
 
     // ── SMART RANGE (spec §8) ── never show false precision below high confidence.
-    const range = computeSmartRange(finalWait, profile, { agreementSpread, heavyGoogle: googleLooksHeavy(googleSignal) });
+    const range = computeSmartRange(finalWait, calibratedProfile, { agreementSpread, heavyGoogle: googleLooksHeavy(googleSignal) });
 
     // ── SOURCE EXPLANATION (spec §4) ── always say WHY.
     const explanation = buildSourceExplanation({
@@ -2728,10 +2815,13 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       rangeMin: range.rangeMin,
       rangeMax: range.rangeMax,
       confidenceHint,
-      confidenceLevel: profile.level,
-      confidenceScore: profile.score,
-      precision: profile.precision,
+      confidenceLevel: calibrated.level,
+      confidenceScore: calibrated.score,
+      heuristicConfidenceLevel: profile.level,
+      precision: calibrated.precision,
       confidenceFactors: profile.factors,
+      confidenceDowngradeReasons: calibrated.reasons,
+      calibration: { basis: calibrated.basis, sampleSize: calibrated.sampleSize, hasData: calibrated.hasData, version: CALIBRATION_VERSION, bucketMae: calibrated.bucketMetrics?.mae ?? null, bucketP90: calibrated.bucketMetrics?.p90Error ?? null, bucketWithin15: calibrated.bucketMetrics?.within15 ?? null },
       independentSources: profile.independentSources,
       biasApplied: biasResult.applied,
       biasAdjustMin: biasResult.adjustMin,
@@ -2740,7 +2830,7 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       label: combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
       className: combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
       sourceType: combined ? 'combined-estimate' : bestCandidate.sourceType,
-      confidence: profile.score,
+      confidence: calibrated.score,
       hasGoogleSignal: Boolean(googleSignal),
       hasCameraSignal: Boolean(cameraSignal),
       hasStrongCameraQueue: cameraShowsQueue(cameraSignal),
@@ -2828,7 +2918,11 @@ function emaSmoothWait(key, rawWait) {
     emaWaitCache.set(key, { wait: rawWait, updatedAt: now });
     return rawWait;
   }
-  const smoothed = Math.round(EMA_ALPHA * rawWait + (1 - EMA_ALPHA) * prev.wait);
+  // Asymmetric smoothing: a FALLING wait converges fast (a clearing queue must be reflected
+  // quickly so we never keep showing a stale-high camera estimate), while a RISING wait is
+  // smoothed more to suppress single-frame spikes (spec P0 / refresh UX).
+  const alpha = rawWait < prev.wait ? 0.88 : EMA_ALPHA;
+  const smoothed = Math.round(alpha * rawWait + (1 - alpha) * prev.wait);
   emaWaitCache.set(key, { wait: smoothed, updatedAt: now });
   return smoothed;
 }
@@ -2870,6 +2964,8 @@ async function buildEffectiveWaitMaps(store) {
         confidenceScore: signal.confidenceScore,
         precision: signal.precision,
         confidenceFactors: signal.confidenceFactors,
+        confidenceDowngradeReasons: signal.confidenceDowngradeReasons,
+        calibration: signal.calibration,
         independentSources: signal.independentSources,
         rangeMin: signal.rangeMin,
         rangeMax: signal.rangeMax,
@@ -2885,6 +2981,9 @@ async function buildEffectiveWaitMaps(store) {
         sourceSpreadMinutes: signal.sourceSpreadMinutes,
         displayReady: signal.displayReady !== false,
         updatedAt: signal.updatedAt,
+        // Freshness (spec §7 I): how old the underlying signal is, and whether it is stale.
+        ageSeconds: signal.updatedAt ? Math.max(0, Math.round((Date.now() - new Date(signal.updatedAt).getTime()) / 1000)) : null,
+        stale: signal.updatedAt ? (Date.now() - new Date(signal.updatedAt).getTime()) > 15 * 60 * 1000 : false,
       };
 
       // Accuracy KPI: sample this prediction so a later measured wait can score it.
@@ -3334,14 +3433,19 @@ app.post('/api/measured/start', publicWriteLimiter, optionalAuth, async (req, re
   const direction = req.body?.direction === 'toHr' ? 'toHr' : 'toBih';
   if (!BORDER_CROSSINGS[crossingId]) return res.status(400).json({ ok: false, error: 'Nepoznat prijelaz.' });
   const startGps = sanitizeGps(req.body?.gps);
-  // Capture the live prediction at the moment the driver joins the queue.
+  // Capture the FULL live prediction at the moment the driver joins the queue (spec §7 B),
+  // so the later resolved-accuracy record can be bucketed by source mix + confidence.
   let predictedWaitAtStart = null;
   let predictedConfidence = null;
+  let predictedConfidenceScore = null;
+  let predictedSourceMix = {};
   try {
     const signal = await effectiveBorderSignal(BORDER_CROSSINGS[crossingId], direction, 'car');
     if (signal.displayReady !== false && Number.isFinite(Number(signal.wait))) {
       predictedWaitAtStart = Number(signal.wait);
       predictedConfidence = signal.confidenceLevel || null;
+      predictedConfidenceScore = signal.confidenceScore ?? null;
+      predictedSourceMix = signalSourceMix(signal);
     }
   } catch { /* prediction optional */ }
   const session = {
@@ -3352,6 +3456,8 @@ app.post('/api/measured/start', publicWriteLimiter, optionalAuth, async (req, re
     anonymous: !req.user,
     predictedWaitAtStart,
     predictedConfidence,
+    predictedConfidenceScore,
+    predictedSourceMix,
     actualWait: null,
     gpsVerified: false,
     startGps,
@@ -3426,6 +3532,8 @@ async function finalizeMeasuredSession(session, endGps) {
     predictedWait: session.predictedWaitAtStart,
     actualWait: measured.wait,
     confidenceLevel: session.predictedConfidence,
+    confidenceScore: session.predictedConfidenceScore,
+    sourceMix: session.predictedSourceMix || {},
     source: 'measured-session',
   });
   return { ok: true, wait: measured.wait, gpsVerified: measured.gpsVerified, gpsSuspicious: false };
@@ -3468,11 +3576,15 @@ app.post('/api/measured/ping', publicWriteLimiter, optionalAuth, async (req, res
   if (located && located.zone === 'approach') {
     let predictedWaitAtStart = null;
     let predictedConfidence = null;
+    let predictedConfidenceScore = null;
+    let predictedSourceMix = {};
     try {
       const signal = await effectiveBorderSignal(located.crossing, located.direction, 'car');
       if (signal.displayReady !== false && Number.isFinite(Number(signal.wait))) {
         predictedWaitAtStart = Number(signal.wait);
         predictedConfidence = signal.confidenceLevel || null;
+        predictedConfidenceScore = signal.confidenceScore ?? null;
+        predictedSourceMix = signalSourceMix(signal);
       }
     } catch { /* optional */ }
     const session = {
@@ -3484,6 +3596,8 @@ app.post('/api/measured/ping', publicWriteLimiter, optionalAuth, async (req, res
       anonymous: !req.user,
       predictedWaitAtStart,
       predictedConfidence,
+      predictedConfidenceScore,
+      predictedSourceMix,
       actualWait: null,
       gpsVerified: false,
       startGps: gps,
@@ -3591,6 +3705,100 @@ app.get('/api/admin/bias', authRequired, adminRequired, async (req, res) => {
     sampleSize: model.sampleSize,
     globalBias: model.globalBias,
     perCrossing: model.perCrossing,
+  });
+});
+
+// ── CONFIDENCE CALIBRATION ADMIN (spec V5 §7 G) ───────────────────────────────
+function filterAccuracyRecords({ hours, crossingId, direction }) {
+  let recs = recentResolvedAccuracy(hours || 24 * 30);
+  if (crossingId) recs = recs.filter((r) => r.crossingId === crossingId);
+  if (direction) recs = recs.filter((r) => r.direction === direction);
+  return recs;
+}
+
+app.get('/api/admin/confidence/calibration/status', authRequired, adminRequired, (req, res) => {
+  const resolved = recentResolvedAccuracy();
+  const stats = computeConfidenceCalibrationStats(resolved);
+  const buckets = ['visoka', 'srednja', 'niska'];
+  const bucketsAvailable = buckets.filter((b) => stats.perBucket[b] && stats.perBucket[b].n >= CALIBRATION_THRESHOLDS.medium.minN);
+  res.json({
+    ok: true,
+    enabled: true,
+    calibrationVersion: CALIBRATION_VERSION,
+    totalResolvedSamples: resolved.length,
+    resolvedSamplesLast7d: recentResolvedAccuracy(24 * 7).length,
+    resolvedSamplesLast30d: recentResolvedAccuracy(24 * 30).length,
+    minSamplesHigh: CALIBRATION_THRESHOLDS.high.minN,
+    minSamplesMedium: CALIBRATION_THRESHOLDS.medium.minN,
+    globalBaseline: calibrationModel.globalBaseline,
+    bucketsAvailable,
+    bucketsInsufficient: buckets.filter((b) => !bucketsAvailable.includes(b)),
+    lastUpdatedAt: new Date().toISOString(),
+  });
+});
+
+app.get('/api/admin/confidence/accuracy', authRequired, adminRequired, (req, res) => {
+  const hours = Math.max(1, Math.min(24 * 90, Number(req.query.hours || 24 * 30)));
+  const crossingId = String(req.query.crossingId || '').trim() || null;
+  const direction = req.query.direction === 'toHr' ? 'toHr' : req.query.direction === 'toBih' ? 'toBih' : null;
+  const recs = filterAccuracyRecords({ hours, crossingId, direction });
+  res.json({ ok: true, windowHours: hours, crossingId, direction, ...computeConfidenceCalibrationStats(recs) });
+});
+
+app.get('/api/admin/confidence/histogram', authRequired, adminRequired, (req, res) => {
+  const hours = Math.max(1, Math.min(24 * 90, Number(req.query.hours || 24 * 30)));
+  const recs = filterAccuracyRecords({ hours, crossingId: String(req.query.crossingId || '').trim() || null, direction: req.query.direction === 'toHr' ? 'toHr' : req.query.direction === 'toBih' ? 'toBih' : null });
+  res.json({ ok: true, windowHours: hours, histogram: computeErrorHistogram(recs) });
+});
+
+app.get('/api/admin/confidence/reliability', authRequired, adminRequired, (req, res) => {
+  const hours = Math.max(1, Math.min(24 * 90, Number(req.query.hours || 24 * 30)));
+  res.json({ ok: true, windowHours: hours, ...computeReliabilityReport(recentResolvedAccuracy(hours)) });
+});
+
+// ── CAMERA DEBUG (spec V5 P0) ─────────────────────────────────────────────────
+// Per-camera raw evidence so we can prove WHY a camera wait is (or is not) shown:
+// real detections vs area estimate, occupancy, lane fullness, band, staleness, direction
+// contribution, and whether it actually drove the wait.
+app.get('/api/admin/camera/debug', authRequired, adminRequired, async (req, res) => {
+  const crossingId = String(req.query.crossingId || '').trim();
+  const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
+  if (!BORDER_CROSSINGS[crossingId]) return res.status(404).json({ ok: false, error: 'Nepoznat prijelaz.' });
+  let payload;
+  try {
+    payload = await buildCameraAnalyticsPayload(crossingId, direction, { forceSnapshot: req.query.force === 'true' });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: safeError(error) });
+  }
+  const a = payload.analytics || {};
+  res.json({
+    ok: true,
+    crossingId,
+    direction,
+    waitIsCameraDriven: Boolean(a.waitIsCameraDriven),
+    cameraEstimateReliable: Boolean(a.cameraEstimateReliable),
+    wait: a.wait,
+    queueBand: a.queueBand,
+    queueBandLabel: a.queueBandLabel,
+    source: a.source,
+    confidence: a.confidence,
+    cameras: (a.cameraSnapshots || []).map((c) => ({
+      cameraId: c.cameraId,
+      cameraLabel: c.cameraLabel,
+      validForDirections: c.validForDirections,
+      contributionMode: c.contributionMode,
+      visibleVehicles: c.visibleVehicles,
+      queueVehicles: c.queueVehicles,
+      occupancyPct: c.occupancyPct,
+      laneFullnessPct: c.laneFullnessPct,
+      queueBand: c.queueBand,
+      stale: c.stale,
+      visualOnly: c.visualOnly,
+      snapshotAgeSec: c.snapshotAgeSec,
+      wait: c.wait,
+      contributesWait: c.contributesWait,
+      method: c.method,
+    })),
   });
 });
 
@@ -3811,18 +4019,32 @@ async function upsertHistoryFromSourceSnapshot(snapshot) {
       if (String(existing?.source || '').includes('camera')) return null;
     }
   }
-  const seed = deterministicSeed(`${snapshot.id}-${wait}`);
+  const isCameraSource = snapshot.sourceType === 'camera-snapshot-model';
   const cameraMeta = snapshot.metadata || {};
   const throughputFromMeta = Number(cameraMeta.throughputPerHour || 0);
-  const baseThroughput = throughputFromMeta || Math.max(10, Math.round(170 * Math.max(0.22, 0.88 - wait / 180)));
-  const cars = Math.max(0, Math.round(baseThroughput * (0.68 + (seed % 7) / 100)));
-  const vans = Math.max(0, Math.round(baseThroughput * (0.09 + (seed % 4) / 100)));
-  const trucks = Math.max(0, Math.round(baseThroughput * (0.17 + (seed % 5) / 100)));
-  const buses = Math.max(0, Math.round(baseThroughput * 0.025));
+  // CRITICAL (spec §7 H): only camera snapshots actually OBSERVE vehicles. A public text
+  // source reports a wait, not counted vehicles, so we must NEVER fabricate a
+  // cars/vans/trucks/buses breakdown from the wait — that would present invented numbers as
+  // fact. Public-source history stores the wait + source only; the vehicle breakdown is 0
+  // and the source label ("source-…") tells the UI the counts are not real observations.
+  let cars = 0;
+  let vans = 0;
+  let trucks = 0;
+  let buses = 0;
+  let passed = 0;
+  let queueVehicles = 0;
+  if (isCameraSource) {
+    const seed = deterministicSeed(`${snapshot.id}-${wait}`);
+    const baseThroughput = throughputFromMeta || Math.max(10, Math.round(170 * Math.max(0.22, 0.88 - wait / 180)));
+    cars = Math.max(0, Math.round(baseThroughput * (0.68 + (seed % 7) / 100)));
+    vans = Math.max(0, Math.round(baseThroughput * (0.09 + (seed % 4) / 100)));
+    trucks = Math.max(0, Math.round(baseThroughput * (0.17 + (seed % 5) / 100)));
+    buses = Math.max(0, Math.round(baseThroughput * 0.025));
+    passed = Math.max(1, baseThroughput);
+    queueVehicles = Math.max(0, Math.round((wait / 60) * passed * 0.72));
+  }
   const totalDemand = cars + vans + trucks + buses;
-  const passed = Math.max(1, baseThroughput);
-  const queueVehicles = Math.max(0, Math.round((wait / 60) * passed * 0.72));
-  const source = snapshot.sourceType === 'camera-snapshot-model'
+  const source = isCameraSource
     ? 'camera-snapshot-counter'
     : `source-${normalizeAscii(snapshot.sourceName || 'public').replace(/[^a-z0-9]+/g, '-')}`;
   const slot = {
@@ -3834,10 +4056,12 @@ async function upsertHistoryFromSourceSnapshot(snapshot) {
     totalDemand,
     passed,
     throughput: passed,
-    rhythmSeconds: Math.round(3600 / Math.max(passed, 1)),
+    rhythmSeconds: passed > 0 ? Math.round(3600 / Math.max(passed, 1)) : 0,
     queueVehicles,
     wait,
     source,
+    // Vehicle counts are real observations only for camera sources.
+    vehicleCountsObserved: isCameraSource,
   };
   await upsertHistorySnapshots(crossing, snapshot.direction, dateIso, [slot]);
   return slot;
@@ -3959,6 +4183,25 @@ app.get('/api/history/:crossingId', async (req, res) => {
   const history = existing.filter((row) => row.date === selectedDate).sort((a, b) => String(a.hour).localeCompare(String(b.hour)));
   const calendar = aggregateHistoryCalendar(existing, dates);
 
+  // Honest coverage (spec §7 H): how much of the shown history is real camera observation vs
+  // public-source (wait only, no real vehicle counts) vs model backfill. The UI must not
+  // present fabricated precise vehicle counts as fact.
+  const slotSourceClass = (s) => (String(s || '').includes('camera') ? 'camera' : String(s || '').includes('historical-model') ? 'model' : 'public');
+  const cameraSlots = history.filter((r) => slotSourceClass(r.source) === 'camera').length;
+  const modelSlots = history.filter((r) => slotSourceClass(r.source) === 'model').length;
+  const publicSlots = history.length - cameraSlots - modelSlots;
+  const hasRealVehicleCounts = cameraSlots > 0;
+  const enoughForPatterns = cameraSlots + publicSlots >= 6; // need a meaningful number of real slots
+  const coverage = {
+    totalSlots: history.length,
+    cameraSlots,
+    publicSlots,
+    modelSlots,
+    hasRealVehicleCounts,
+    enoughForPatterns,
+    modelBackfillEnabled: process.env.HISTORY_ALLOW_MODEL_BACKFILL === 'true',
+  };
+
   res.json({
     ok: true,
     live: true,
@@ -3970,10 +4213,17 @@ app.get('/api/history/:crossingId', async (req, res) => {
     source: datastoreMode === 'postgres' ? 'postgres-source-snapshots' : 'json-source-snapshots',
     calendar,
     history,
-    totals: sumCounts(history),
-    note: history.length
-      ? 'Povijest je građena iz source snapshotova spremljenih u bazu.'
-      : 'Za odabrani dan još nema spremljenih source snapshotova. Povijest se puni kako scheduler/refresh dohvaća izvore.',
+    coverage,
+    // Vehicle totals are honest only when real camera observations exist; otherwise null.
+    totals: hasRealVehicleCounts ? sumCounts(history) : null,
+    vehicleCountsAreReal: hasRealVehicleCounts,
+    note: !history.length
+      ? 'Za odabrani dan još nema spremljenih podataka. Povijest se puni kako scheduler/refresh dohvaća izvore.'
+      : !enoughForPatterns
+        ? 'Još nemamo dovoljno stvarnih povijesnih podataka za pouzdane obrasce gužvi za ovaj dan.'
+        : hasRealVehicleCounts
+          ? 'Povijest je građena iz spremljenih source snapshotova; broj vozila dolazi iz kamera.'
+          : 'Povijest prikazuje čekanja iz javnih izvora. Broj vozila nije stvarno brojan pa se ne prikazuje kao činjenica.',
   });
 });
 app.get('/api/admin/daily-report', authRequired, adminRequired, async (req, res) => {
@@ -4780,9 +5030,35 @@ function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
-function estimateCameraFlowFromSnapshot({ visibleTotal = 0, occupancyPct = 0, laneFullnessPct = 0, componentDensity = 0, direction = 'toBih', previousSnapshot = null } = {}) {
-  const queueVehicles = Math.max(0, Math.round(Number(visibleTotal || 0)));
-  const occupancyLoad = clampNumber(Number(occupancyPct || 0) / 45, 0, 1.6);
+// Camera flow → wait estimator (V5 P0 — no false camera wait).
+//
+// `visibleVehicles` = REAL typed vehicle detections (connected components classified as
+// vehicles). `queueVehicles`/`visibleTotal` = the area-corroborated estimate. The decisive
+// fix: occupancy/area is NOT evidence of a queue on its own — dark frames, shadows, foliage
+// and structures fill cells too. We only trust the area-inflated queue when real detections
+// corroborate it, and we HARD-CAP the wait by the qualitative band so the camera can never
+// fabricate 20–60 min with no visible cars (the Svilaj/Maljevac trust bug).
+function estimateCameraFlowFromSnapshot({ visibleTotal = 0, visibleVehicles = null, queueVehicles: queueParam = null, occupancyPct = 0, laneFullnessPct = 0, componentDensity = 0, direction = 'toBih', previousSnapshot = null } = {}) {
+  const queueAreaEstimate = Math.max(0, Math.round(Number(queueParam ?? visibleTotal ?? 0)));
+  const realVehicles = Math.max(0, Math.round(Number(visibleVehicles ?? visibleTotal ?? queueAreaEstimate)));
+  const fullness = Math.max(Number(occupancyPct || 0), Number(laneFullnessPct || 0));
+
+  // Trust the area-inflated queue (which fixes bumper-to-bumper undercount) only when real
+  // detections back it; otherwise the queue is the typed detection count. ≤2 real vehicles
+  // means "no queue" no matter how occupied the frame looks.
+  const queueVehicles = realVehicles <= 2 ? realVehicles : Math.min(queueAreaEstimate, Math.max(realVehicles, realVehicles * 3));
+
+  // Qualitative band — escalates only when BOTH real detections AND area fullness agree.
+  let queueBand;
+  if (realVehicles <= 2 && fullness < 14) queueBand = 'nema';
+  else if (realVehicles <= 5 && fullness < 30) queueBand = 'mala';
+  else if (realVehicles <= 12 && fullness < 55) queueBand = 'srednja';
+  else if (realVehicles <= 22 || fullness < 78) queueBand = 'velika';
+  else queueBand = 'ekstremna';
+  // Hard ceiling: a camera wait may never exceed what its visual evidence supports.
+  const evidenceCap = queueBand === 'nema' ? 6 : queueBand === 'mala' ? 14 : queueBand === 'srednja' ? 35 : queueBand === 'velika' ? 75 : 240;
+
+  const occupancyLoad = clampNumber(fullness / 45, 0, 1.6);
   const densityLoad = clampNumber(Number(componentDensity || 0) / 2.2, 0, 1.4);
   const queueLoad = clampNumber(Math.max(0, queueVehicles - 10) / 18, 0, 1.5);
   let flowVehicles15 = 19 - occupancyLoad * 5.5 - densityLoad * 2.5 - queueLoad * 4;
@@ -4807,34 +5083,35 @@ function estimateCameraFlowFromSnapshot({ visibleTotal = 0, occupancyPct = 0, la
 
   flowVehicles15 = Math.max(4, Math.min(26, Math.round(flowVehicles15)));
   const servicePerMinute = Math.max(0.25, flowVehicles15 / 15);
+  // Wait is derived from QUEUE LENGTH, not from low throughput. Low flow on an empty road
+  // means nobody is crossing, not that there is a 20-min queue.
   let wait = queueVehicles <= 0 ? 0 : Math.round(queueVehicles / servicePerMinute + (queueVehicles <= 2 ? 1 : 2));
-  if (queueVehicles > 14 && flowVehicles15 <= 10) wait += 4;
-  // Occupancy-gated trust floor. Bumper-to-bumper queues merge adjacent cars
-  // into a few large connected components, so the component-derived queue count
-  // under-reports a visibly full lane — which previously let a packed Maljevac
-  // lane read as "4 min". A high occupied-area fraction is independent evidence
-  // of a real queue, so floor the wait by how full the monitored band is. The
-  // gate (occupancy >= 42 AND at least a few detected vehicles) keeps empty or
-  // lane-striped asphalt and single-frame misreads from ever triggering it.
-  // Use the fullest lane band when available so a single packed lane still
-  // counts as "full" even though whole-frame occupancy is diluted by the empty
-  // side of the frame.
-  const fullnessForFloor = Math.max(Number(occupancyPct || 0), Number(laneFullnessPct || 0));
-  if (fullnessForFloor >= 45 && queueVehicles >= 3) {
-    const occupancyFloor = Math.round(clampNumber((fullnessForFloor - 38) * 0.7, 0, 42));
+  // Occupancy floor for bumper-to-bumper undercount — but ONLY when ≥4 REAL vehicles
+  // corroborate the full band (never from raw occupied area / shadows alone).
+  if (fullness >= 45 && realVehicles >= 4) {
+    const occupancyFloor = Math.round(clampNumber((fullness - 38) * 0.7, 0, 42));
     wait = Math.max(wait, occupancyFloor);
   }
-  const confidence = Math.max(44, Math.min(86, Math.round(58 + Math.min(16, queueVehicles * 1.1) - Math.max(0, occupancyPct - 34) * 0.35 + (queueTrend === 'unknown' ? -4 : 4))));
+  // Apply the evidence ceiling LAST — the negative-evidence veto.
+  wait = Math.min(wait, evidenceCap);
+
+  let confidence = Math.round(54 + Math.min(16, realVehicles * 1.4) - Math.max(0, fullness - 40) * 0.3 + (queueTrend === 'unknown' ? -4 : 4));
+  if (queueBand === 'nema' || queueBand === 'mala') confidence = Math.min(confidence, 52);
+  if (realVehicles <= 2) confidence = Math.min(confidence, 48);
+  confidence = Math.max(38, Math.min(86, confidence));
 
   return {
     queueVehicles,
+    visibleVehicles: realVehicles,
+    queueBand,
+    evidenceCap,
     flowVehicles15,
     throughputPerHour: Math.max(8, flowVehicles15 * 4),
     wait: clampWait(wait),
     queueTrend,
     trendDelta,
     confidence,
-    method: previousSnapshot ? 'snapshot-flow-v2' : 'snapshot-flow-v2-single-frame',
+    method: previousSnapshot ? 'snapshot-flow-v3' : 'snapshot-flow-v3-single-frame',
   };
 }
 
@@ -4994,7 +5271,9 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null)
     };
   });
 
-  const flowEstimate = estimateCameraFlowFromSnapshot({ visibleTotal: queueEstimate, occupancyPct, laneFullnessPct, componentDensity, direction, previousSnapshot });
+  // Pass REAL typed detections (visibleTotal) AND the area-corroborated estimate
+  // (queueEstimate) separately so the flow estimator can veto occupancy-only false waits.
+  const flowEstimate = estimateCameraFlowFromSnapshot({ visibleVehicles: visibleTotal, queueVehicles: queueEstimate, occupancyPct, laneFullnessPct, componentDensity, direction, previousSnapshot });
   const cameraWait = flowEstimate.wait;
   const blendedConfidence = Math.max(CAMERA_SNAPSHOT_MIN_CONFIDENCE, Math.min(90, Math.round(confidence * 0.62 + flowEstimate.confidence * 0.38)));
 
@@ -5002,7 +5281,10 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null)
     counts: blendedCounts,
     rawCounts: counts,
     visibleTotal,
+    visibleVehicles: visibleTotal,
     queueVehicles: flowEstimate.queueVehicles,
+    queueBand: flowEstimate.queueBand,
+    evidenceCap: flowEstimate.evidenceCap,
     passed15: flowEstimate.flowVehicles15,
     flowVehicles15: flowEstimate.flowVehicles15,
     throughputPerHour: flowEstimate.throughputPerHour,
@@ -5389,6 +5671,10 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
       // Whether the wait is genuinely camera-driven for THIS direction (false ⇒ all
       // cameras here are visual-only/stale/wrong-direction, so it must not be a signal).
       waitIsCameraDriven: cameraWaitDriven,
+      // Reliable ⇔ a real, fresh, direction-verified camera drove the wait. When false the
+      // shown wait is a model/baseline fallback and must NOT be presented as a live camera
+      // estimate (spec P0): the UI shows the qualitative band / "model" instead of a number.
+      cameraEstimateReliable: cameraWaitDriven,
       queueBand: displayBand?.band || null,
       queueBandLabel: displayBand?.label || null,
       vehicleMix15: liveVehicleMix15,

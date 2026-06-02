@@ -1530,6 +1530,8 @@ function getBaseWaitSourceMeta(crossing, directionKey, overrides = {}) {
       confidenceHint: source.confidenceHint,
       confidenceLevel: source.confidenceLevel,
       confidenceScore: source.confidenceScore,
+      confidenceDowngradeReasons: source.confidenceDowngradeReasons,
+      calibration: source.calibration,
       precision: source.precision,
       independentSources: source.independentSources,
       hasMeasuredSession: source.hasMeasuredSession,
@@ -2061,7 +2063,7 @@ function DetailModal({ crossing, selectedDirection, overrides, onClose, onTrack,
           </article>
         </div>
 
-        {dataKnown && <WhyThisEstimate payload={sourceMeta.explanationPayload} confMeta={confMeta} />}
+        {dataKnown && <WhyThisEstimate payload={sourceMeta.explanationPayload} confMeta={confMeta} meta={sourceMeta} />}
 
         <div className="modal-actions">
           <button type="button" className={tracked ? 'ghost-button active' : 'ghost-button'} onClick={() => onTrack(crossing.id)}>{tracked ? '★ Favorit' : '+ Favorit'}</button>
@@ -2079,10 +2081,12 @@ function DetailModal({ crossing, selectedDirection, overrides, onClose, onTrack,
 const ROLE_LABELS = { lead: 'glavni izvor', support: 'podrška', helper: 'pomoćni (prilaz)', excluded: 'isključeno' };
 const KIND_LABELS = { official: 'Službeni izvor', camera: 'Kamera', google: 'Google promet', report: 'Dojave vozača', measured: 'Izmjereno čekanje' };
 
-function WhyThisEstimate({ payload, confMeta }) {
+function WhyThisEstimate({ payload, confMeta, meta = {} }) {
   const [open, setOpen] = useState(false);
   if (!payload || !Array.isArray(payload.sources) || !payload.sources.length) return null;
   const hasGoogle = payload.sources.some((s) => s.kind === 'google');
+  const cal = meta.calibration || {};
+  const downgrades = Array.isArray(meta.confidenceDowngradeReasons) ? meta.confidenceDowngradeReasons : [];
   return (
     <section className="why-estimate">
       <button type="button" className="why-estimate-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
@@ -2091,6 +2095,15 @@ function WhyThisEstimate({ payload, confMeta }) {
       </button>
       {open && (
         <div className="why-estimate-body">
+          <p className="why-estimate-calibration">
+            <strong>Pouzdanost: {confMeta?.label || '—'}.</strong>{' '}
+            {cal.hasData
+              ? `Temeljeno na ${cal.sampleSize} izmjerenih prolazaka (povijesna pogreška ~${cal.bucketMae} min, P90 ${cal.bucketP90} min).`
+              : 'Još nemamo dovoljno izmjerenih prolazaka da empirijski potvrdimo visoku pouzdanost za ovu vrstu procjene.'}
+          </p>
+          {downgrades.length > 0 && (
+            <p className="why-estimate-note">Snižena pouzdanost: {downgrades.join('; ')}.</p>
+          )}
           {payload.conflict?.detected && (
             <p className="why-estimate-conflict">⚠️ Izvori se ne slažu (raspon {payload.conflict.spreadMinutes} min) pa je procjena prikazana kao širi raspon i s nižom pouzdanošću.</p>
           )}

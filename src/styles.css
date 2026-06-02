@@ -786,6 +786,7 @@
 .why-estimate-body{padding:0 15px 14px;display:grid;gap:10px}
 .why-estimate-conflict{margin:0;border-radius:12px;padding:9px 11px;background:#fff4ce;color:#925d00;font-size:12.5px;font-weight:800}
 .why-estimate-note{margin:0;border-radius:12px;padding:9px 11px;background:#eef5ff;color:#1767e8;font-size:12.5px;font-weight:780}
+.why-estimate-calibration{margin:0;border-radius:12px;padding:9px 11px;background:#f3f6fb;color:#334155;font-size:12.5px;font-weight:760;line-height:1.45}
 .why-estimate-sources{list-style:none;margin:0;padding:0;display:grid;gap:8px}
 .why-source{border:1px solid rgba(214,227,244,.9);border-radius:12px;padding:10px 11px;background:#fff}
 .why-source.role-excluded{opacity:.7;background:#f7f8fa}
