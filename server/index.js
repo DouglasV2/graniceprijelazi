@@ -14,6 +14,8 @@ import {
   classifyQueueBand,
   QUEUE_BANDS,
   applyRoiToDetections,
+  detectVisualCongestionConflict,
+  worstQueueBand,
   computeAverageHash,
   detectStaleFrames,
   buildCameraAnalysis,
@@ -1119,12 +1121,15 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     id: 'svilaj', name: 'GP Svilaj', shortName: 'Svilaj', lat: 45.10810, lng: 18.31310, hrLabel: 'Svilaj', bihLabel: 'Odžak',
     waits: { toBih: { car: 20, truck: 50, bus: 25 }, toHr: { car: 26, truck: 58, bus: 30 } },
     // Corridor Vc bridge calibration: Svilaj HR checkpoint ≈ 45.11475,18.32206; Svilaj/Odžak BiH checkpoint ≈ 45.10147,18.30414.
+    // Route extended further along the (straight) Corridor Vc / Sava-bridge axis on BOTH sides so
+    // Google draws a route that actually crosses the border instead of stopping at the checkpoint.
+    // Endpoints are kept COLLINEAR with the booth so the route guard's pass-distance check holds.
     anchors: calibratedAnchors({
       hrLabel: 'Svilaj', bihLabel: 'Odžak',
-      approachHr: { lat: 45.11475, lng: 18.32206 },
+      approachHr: { lat: 45.12273, lng: 18.33281 },
       borderPoint: { lat: 45.10810, lng: 18.31310 },
-      exitBih: { lat: 45.10147, lng: 18.30414 },
-      guard: { maxCrossingDistanceKm: 12, hardMaxCrossingDistanceKm: 28, passDistanceMeters: 1000, displayBeforeMeters: 1000, displayAfterMeters: 1300 },
+      exitBih: { lat: 45.09351, lng: 18.29339 },
+      guard: { maxCrossingDistanceKm: 16, hardMaxCrossingDistanceKm: 34, passDistanceMeters: 1200, displayBeforeMeters: 1600, displayAfterMeters: 1900 },
     }),
     cameras: [{
       id: 'svi-hak', label: 'Svilaj',
@@ -2101,41 +2106,67 @@ async function buildCameraSourceSnapshots() {
     const actualSnapshots = analytics.cameraSnapshots || [];
     const hasActualSnapshot = actualSnapshots.some((item) => item?.method && String(item.method).includes('snapshot-counter'));
     const hasIngestOrCv = ['camera-ingest', 'cv-detector'].includes(String(analytics.source || ''));
-    // Direction safety: a camera signal is only emitted when the wait was actually driven
-    // by a provably-correct-direction, non-stale camera. Otherwise the camera is shown to
-    // the user but does NOT enter the hard wait calculation (spec §1, §2).
-    if ((!hasActualSnapshot || !analytics.waitIsCameraDriven) && !hasIngestOrCv) return null;
-    return {
-      crossingId,
-      direction,
-      sourceName: 'Kamera snapshot model',
-      sourceType: 'camera-snapshot-model',
-      sourceUrl: (CAMERA_FEEDS[crossingId] || [])[0]?.url || '',
-      rawStatus: `${analytics.queueVehicles || 0} vidljivih/izvedenih vozila u zoni; protok ${analytics.flowVehicles15 ?? analytics.passed15 ?? 0} voz/15min (${analytics.throughputPerHour || 0} voz/h)`,
-      rawText: analytics.message || '',
-      rawWaitMin: analytics.wait,
-      normalizedWaitMin: analytics.wait,
-      confidence: Math.max(52, Math.min(78, Number(analytics.confidence || 60) - 10)),
-      weight: 0.72,
-      metadata: {
-        adapter: 'calibrated-camera-snapshot',
-        throughputPerHour: analytics.throughputPerHour,
-        queueVehicles: analytics.queueVehicles,
-        passed15: analytics.passed15,
-        flowVehicles15: analytics.flowVehicles15 ?? analytics.passed15,
-        queueTrend: analytics.queueTrend,
-        queueBand: analytics.queueBand,
-        waitRangeMin: analytics.waitRangeMin,
-        waitRangeMax: analytics.waitRangeMax,
-        vehicleMix15: analytics.vehicleMix15,
-        source: analytics.source,
-        snapshots: actualSnapshots.map((item) => ({ cameraId: item.cameraId, method: item.method, confidence: item.confidence, fetchedAt: item.fetchedAt })),
-      },
-      fetchedAt: new Date().toISOString(),
-    };
+    const out = [];
+
+    // (1) Wait-driving camera signal — only when a provably-correct-direction, non-stale,
+    // ROI-calibrated camera actually drove it (spec §1, §2, §6).
+    if ((hasActualSnapshot && analytics.waitIsCameraDriven) || hasIngestOrCv) {
+      out.push({
+        crossingId,
+        direction,
+        sourceName: 'Kamera snapshot model',
+        sourceType: 'camera-snapshot-model',
+        sourceUrl: (CAMERA_FEEDS[crossingId] || [])[0]?.url || '',
+        rawStatus: `${analytics.queueVehicles || 0} vidljivih/izvedenih vozila u zoni; protok ${analytics.flowVehicles15 ?? analytics.passed15 ?? 0} voz/15min (${analytics.throughputPerHour || 0} voz/h)`,
+        rawText: analytics.message || '',
+        rawWaitMin: analytics.wait,
+        normalizedWaitMin: analytics.wait,
+        confidence: Math.max(52, Math.min(78, Number(analytics.confidence || 60) - 10)),
+        weight: 0.72,
+        metadata: {
+          adapter: 'calibrated-camera-snapshot',
+          throughputPerHour: analytics.throughputPerHour,
+          queueVehicles: analytics.queueVehicles,
+          passed15: analytics.passed15,
+          flowVehicles15: analytics.flowVehicles15 ?? analytics.passed15,
+          queueTrend: analytics.queueTrend,
+          queueBand: analytics.queueBand,
+          waitRangeMin: analytics.waitRangeMin,
+          waitRangeMax: analytics.waitRangeMax,
+          vehicleMix15: analytics.vehicleMix15,
+          source: analytics.source,
+          snapshots: actualSnapshots.map((item) => ({ cameraId: item.cameraId, method: item.method, confidence: item.confidence, fetchedAt: item.fetchedAt })),
+        },
+        fetchedAt: new Date().toISOString(),
+      });
+    }
+
+    // (2) VISUAL CONGESTION signal — emitted even for visual-only cameras when the camera
+    // VISUALLY shows a big queue (velika/ekstremna). Carries NO wait (does not drive the
+    // number), only the band — so the fusion can flag a conflict when the official/Google
+    // wait is low while the camera clearly shows congestion (the Maljevac case).
+    const band = analytics.queueBand;
+    if ((band === 'velika' || band === 'ekstremna') && (hasActualSnapshot || hasIngestOrCv)) {
+      out.push({
+        crossingId,
+        direction,
+        sourceName: 'Kamera vizualna provjera',
+        sourceType: 'camera-visual',
+        sourceUrl: (CAMERA_FEEDS[crossingId] || [])[0]?.url || '',
+        rawStatus: `Kamera vizualno pokazuje ${analytics.queueBandLabel || band}`,
+        rawText: '',
+        rawWaitMin: null,
+        normalizedWaitMin: null,
+        confidence: 60,
+        weight: 0,
+        metadata: { queueBand: band, queueBandLabel: analytics.queueBandLabel, waitIsCameraDriven: Boolean(analytics.waitIsCameraDriven) },
+        fetchedAt: new Date().toISOString(),
+      });
+    }
+    return out;
   }));
   return results
-    .map((result) => result.status === 'fulfilled' ? result.value : null)
+    .flatMap((result) => result.status === 'fulfilled' ? (result.value || []) : [])
     .filter(Boolean);
 }
 
@@ -2622,6 +2653,15 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     .filter((item) => item.sourceType === 'camera-snapshot-model')
     .filter(isFreshCameraSourceSnapshot);
   const cameraSignal = trimmedMeanCameraSignal(cameraSnapshots) || choosePublicSourceSignal(cameraSnapshots);
+  // Visual congestion: the worst queue band any camera VISUALLY shows for this direction —
+  // even visual-only cameras (no wait). Used to flag a conflict when the wait is low but the
+  // camera clearly shows a big queue (the Maljevac case). Carries no wait, never a candidate.
+  const visualBand = worstQueueBand(
+    latestSources
+      .filter((item) => item.sourceType === 'camera-visual')
+      .filter(isFreshCameraSourceSnapshot)
+      .map((item) => item.metadata?.queueBand)
+  );
   const googleSignal = choosePublicSourceSignal(latestSources.filter((item) => item.sourceType === 'google-traffic-estimate'));
   const rawReports = reportSignals(store, crossing.id, direction, 2);
   // ── TRUST ENGINE + ANTI-FAKE (spec §6, §12) ────────────────────────────────
@@ -2830,15 +2870,37 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     }));
     const explanationPayload = buildEstimateExplanation(explanationDescriptors, { summary: explanation });
 
+    // ── VISUAL CONGESTION CONFLICT (Maljevac/Brod core fix) ──────────────────
+    // The camera VISUALLY shows a big queue but the fused (official/Google) wait is low —
+    // the low number is unreliable (often a lagging text source). We do NOT fabricate a
+    // number; we drop confidence to niska, force a range, and tell the user to verify.
+    const congestion = detectVisualCongestionConflict({ visualBand, fusedWait: finalWait });
+    let outLevel = calibrated.level;
+    let outPrecision = calibrated.precision;
+    let outHint = confidenceHint;
+    let outScore = calibrated.score;
+    let outRangeMin = range.rangeMin;
+    let outRangeMax = range.rangeMax;
+    let note = capReason ? `${explanation} ${capReason}` : explanation;
+    if (congestion.conflict) {
+      outLevel = 'niska';
+      outPrecision = 'range';
+      outHint = 'low';
+      outScore = Math.min(outScore, 30);
+      outRangeMin = Math.max(0, Math.min(finalWait, range.rangeMin ?? finalWait));
+      outRangeMax = Math.max(range.rangeMax ?? finalWait, congestion.suggestedRangeMax);
+      note = `${note} Na kameri se vidi ${visualBand === 'ekstremna' ? 'ekstremna' : 'velika'} kolona, ali čekanje nije pouzdano izračunato — provjeri službene izvore.`;
+    }
+
     return {
       wait: finalWait,
-      rangeMin: range.rangeMin,
-      rangeMax: range.rangeMax,
-      confidenceHint,
-      confidenceLevel: calibrated.level,
-      confidenceScore: calibrated.score,
+      rangeMin: outRangeMin,
+      rangeMax: outRangeMax,
+      confidenceHint: outHint,
+      confidenceLevel: outLevel,
+      confidenceScore: outScore,
       heuristicConfidenceLevel: profile.level,
-      precision: calibrated.precision,
+      precision: outPrecision,
       confidenceFactors: profile.factors,
       confidenceDowngradeReasons: calibrated.reasons,
       calibration: { basis: calibrated.basis, sampleSize: calibrated.sampleSize, hasData: calibrated.hasData, version: CALIBRATION_VERSION, bucketMae: calibrated.bucketMetrics?.mae ?? null, bucketP90: calibrated.bucketMetrics?.p90Error ?? null, bucketWithin15: calibrated.bucketMetrics?.within15 ?? null },
@@ -2847,10 +2909,13 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       biasAdjustMin: biasResult.adjustMin,
       explanation,
       explanationPayload,
-      label: combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
+      // Visual congestion conflict (camera shows a big queue but the wait is low/uncertain).
+      visualBand: visualBand || null,
+      visualCongestionConflict: congestion.conflict,
+      label: congestion.conflict ? 'Moguća gužva — provjeri' : combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
       className: combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
       sourceType: combined ? 'combined-estimate' : bestCandidate.sourceType,
-      confidence: calibrated.score,
+      confidence: outScore,
       hasGoogleSignal: Boolean(googleSignal),
       hasCameraSignal: Boolean(cameraSignal),
       hasStrongCameraQueue: cameraShowsQueue(cameraSignal),
@@ -2862,7 +2927,7 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       googleClearWhileQueue: Boolean(sanity.googleVsOfficial),
       sourceAgreement: agreement.agreement,
       sourceSpreadMinutes: Number.isFinite(agreementSpread) ? agreementSpread : agreement.spread,
-      note: capReason ? `${explanation} ${capReason}` : explanation,
+      note,
       signals: latestSources,
       updatedAt: candidates.map((item) => item.updatedAt).filter(Boolean).sort().at(-1) || new Date().toISOString(),
     };
@@ -2986,6 +3051,8 @@ async function buildEffectiveWaitMaps(store) {
         confidenceFactors: signal.confidenceFactors,
         confidenceDowngradeReasons: signal.confidenceDowngradeReasons,
         calibration: signal.calibration,
+        visualBand: signal.visualBand,
+        visualCongestionConflict: signal.visualCongestionConflict,
         independentSources: signal.independentSources,
         rangeMin: signal.rangeMin,
         rangeMax: signal.rangeMax,

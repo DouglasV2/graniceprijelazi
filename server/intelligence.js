@@ -414,6 +414,37 @@ export function classifyQueueBand({ occupancyPct = 0, laneFullnessPct = 0, queue
   return { band, label: labels[band], fullnessPct: round(fullness) };
 }
 
+// Rank of a queue band (higher = more congested). -1 for unknown.
+export function queueBandRank(band) {
+  return QUEUE_BANDS.indexOf(band);
+}
+
+// VISUAL CONGESTION CONFLICT (the Maljevac/Brod core fix). A camera can VISUALLY show a big
+// queue (band velika/ekstremna) even when it is not wait-capable (no ROI) and therefore does
+// not drive the wait. If the displayed wait is nonetheless low, that is a CONFLICT: the camera
+// frame is fresher than a lagging official text source, so we must NOT present a confident low
+// number — we flag it, drop confidence, and show a range / "provjeri službene izvore".
+export function detectVisualCongestionConflict({ visualBand = null, fusedWait = null, lowThreshold = 30 } = {}) {
+  const rank = queueBandRank(visualBand);
+  const strong = rank >= queueBandRank('velika'); // velika or ekstremna
+  if (!strong || !isNum(fusedWait)) return { conflict: false, visualBand, suggestedRangeMax: null };
+  if (Number(fusedWait) >= lowThreshold) return { conflict: false, visualBand, suggestedRangeMax: null };
+  // The visual evidence says congested but the number is low → unreliable low number.
+  const suggestedRangeMax = visualBand === 'ekstremna' ? 120 : 60;
+  return { conflict: true, visualBand, suggestedRangeMax };
+}
+
+// Pick the worst (most congested) band from a list.
+export function worstQueueBand(bands = []) {
+  let worst = null;
+  let worstRank = -1;
+  for (const b of bands) {
+    const r = queueBandRank(b);
+    if (r > worstRank) { worstRank = r; worst = b; }
+  }
+  return worst;
+}
+
 // Average-hash (aHash): downscale luma to 8x8, threshold by the mean. Returns a
 // 16-char hex string (64 bits). `sampleGray(x,y)` returns 0-255 for normalised
 // coordinates 0..(w-1)/0..(h-1) — passed in so this stays decode-agnostic.

@@ -3497,23 +3497,35 @@ function CameraPanel({ crossing, selectedDirection }) {
             : cameraContradictsOfficial
               ? `Kamera pokazuje ~${formatMinutes(analytics.wait)}, ali službeni izvor pokazuje ${formatMinutes(cameraHeadlineWait)} — prikazujemo službenu procjenu, a kamera služi za vizualnu provjeru.`
               : 'Za ovaj smjer kamera trenutno služi samo za vizualnu provjeru — čekanje nije izvedeno iz kamere.'}</p>
-          <div className="camera-stat-grid">
-            <div><span>Zadnjih 15 min</span><strong>{analytics.passed15}</strong><small>vozila</small></div>
-            <div><span>Protok</span><strong>{analytics.throughputPerHour}</strong><small>vozila/h</small></div>
-            <div><span>Ritam</span><strong>{formatRhythm(analytics.rhythmSeconds)}</strong><small>prosjek</small></div>
-            <div><span>U koloni</span><strong>{analytics.queueVehicles}</strong><small>procjena</small></div>
-          </div>
-          <div className="vehicle-mix-row">
-            <span style={{ width: `${Math.max(8, (analytics.vehicleMix15.cars / Math.max(analytics.passed15, 1)) * 100)}%` }} className="cars" />
-            <span style={{ width: `${Math.max(7, ((analytics.vehicleMix15.vans || 0) / Math.max(analytics.passed15, 1)) * 100)}%` }} className="vans" />
-            <span style={{ width: `${Math.max(8, (analytics.vehicleMix15.trucks / Math.max(analytics.passed15, 1)) * 100)}%` }} className="trucks" />
-            <span style={{ width: `${Math.max(6, (analytics.vehicleMix15.buses / Math.max(analytics.passed15, 1)) * 100)}%` }} className="buses" />
-          </div>
+          {cameraEstimateUsable ? (
+            <div className="camera-stat-grid">
+              <div><span>Zadnjih 15 min</span><strong>{analytics.passed15}</strong><small>vozila</small></div>
+              <div><span>Protok</span><strong>{analytics.throughputPerHour}</strong><small>vozila/h</small></div>
+              <div><span>Ritam</span><strong>{formatRhythm(analytics.rhythmSeconds)}</strong><small>prosjek</small></div>
+              <div><span>U koloni</span><strong>{analytics.queueVehicles}</strong><small>vozila</small></div>
+            </div>
+          ) : (
+            // Visual-only / not-camera-driven: never present pseudo-precise counts as fact.
+            <div className="camera-visual-summary">
+              <strong>{analytics.queueBandLabel || 'Vizualna provjera'}</strong>
+              <span>Broj vozila i protok nisu pouzdano izmjereni za ovaj smjer — vrijednosti se ne prikazuju kao točan broj. Koristi sliku za vizualnu provjeru, a čekanje s glavne kartice.</span>
+            </div>
+          )}
+          {cameraEstimateUsable && (
+            <div className="vehicle-mix-row">
+              <span style={{ width: `${Math.max(8, (analytics.vehicleMix15.cars / Math.max(analytics.passed15, 1)) * 100)}%` }} className="cars" />
+              <span style={{ width: `${Math.max(7, ((analytics.vehicleMix15.vans || 0) / Math.max(analytics.passed15, 1)) * 100)}%` }} className="vans" />
+              <span style={{ width: `${Math.max(8, (analytics.vehicleMix15.trucks / Math.max(analytics.passed15, 1)) * 100)}%` }} className="trucks" />
+              <span style={{ width: `${Math.max(6, (analytics.vehicleMix15.buses / Math.max(analytics.passed15, 1)) * 100)}%` }} className="buses" />
+            </div>
+          )}
           <div className="vehicle-pill-row">
-            <span>🚗 {analytics.vehicleMix15.cars}</span>
-            <span>🚐 {analytics.vehicleMix15.vans || 0}</span>
-            <span>🚛 {analytics.vehicleMix15.trucks}</span>
-            <span>🚌 {analytics.vehicleMix15.buses}</span>
+            {cameraEstimateUsable && <>
+              <span>🚗 {analytics.vehicleMix15.cars}</span>
+              <span>🚐 {analytics.vehicleMix15.vans || 0}</span>
+              <span>🚛 {analytics.vehicleMix15.trucks}</span>
+              <span>🚌 {analytics.vehicleMix15.buses}</span>
+            </>}
             <span>{cameraEstimateUsable ? confidenceLabel(analytics.confidence) : 'Vizualna provjera'}</span>
             <span>{cameraEstimateUsable ? 'Prema kameri' : 'Procjena nije iz kamere'}</span>
           </div>

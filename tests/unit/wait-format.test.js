@@ -113,6 +113,11 @@ describe('formatWaitDisplay', () => {
     expect(formatWaitDisplay(50, { confidenceLevel: 'niska', precision: 'range', rangeMin: 40, rangeMax: 58 })).toBe('40–58 min');
   });
 
+  it('visual congestion conflict shows a floor ("od X min"), never a confident low number', () => {
+    // Maljevac case: camera visibly shows a big queue but the computed wait is low.
+    expect(formatWaitDisplay(11, { visualCongestionConflict: true })).toBe('od 11 min');
+  });
+
   it('never returns the literal strings "null", "undefined", or "NaN"', () => {
     for (const candidate of [null, undefined, NaN, '', 'foo', 0, 15, 30, 45, 80]) {
       const out = formatWaitDisplay(candidate);

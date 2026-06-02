@@ -26,6 +26,9 @@ function googleClear(wait = 8) {
 function camera(wait, queueVehicles, { stale = false } = {}) {
   return { sourceType: 'camera-snapshot-model', sourceName: 'Kamera', normalizedWaitMin: wait, confidence: 65, weight: 0.72, fetchedAt: now(), metadata: { queueVehicles, flowVehicles15: 5, passed15: 5, stale } };
 }
+function cameraVisual(band) {
+  return { sourceType: 'camera-visual', sourceName: 'Kamera vizualna provjera', normalizedWaitMin: null, confidence: 60, weight: 0, fetchedAt: now(), metadata: { queueBand: band } };
+}
 
 describe('Scenario 1: Google 15 vs official 90 → estimate must NOT drop', () => {
   it('keeps the official wait and marks Google as a non-authority helper', async () => {
@@ -79,6 +82,32 @@ describe('Scenario 6 (V5 §6): camera cannot override official, and YOLO cannot 
     const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [camera(35, 24)]);
     // Even a strong camera queue is camera-heuristic only → calibration caps it below visoka.
     expect(sig.confidenceLevel).not.toBe('visoka');
+  });
+});
+
+describe('Scenario 7 (core fix): visual congestion conflict — camera shows a big queue but wait is low', () => {
+  it('Maljevac: visual-only camera shows ekstremna kolona + low Google → conflict, niska, range, no confident low number', async () => {
+    const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [googleClear(8), cameraVisual('ekstremna')]);
+    expect(sig.visualCongestionConflict).toBe(true);
+    expect(sig.visualBand).toBe('ekstremna');
+    expect(sig.confidenceLevel).toBe('niska');
+    expect(sig.precision).toBe('range');
+    expect(sig.rangeMax).toBeGreaterThanOrEqual(60);
+    expect(sig.label).toMatch(/gužva|provjeri/i);
+    expect(sig.note).toMatch(/kolona|provjeri/i);
+  });
+
+  it('no conflict when the wait already reflects congestion (official high)', async () => {
+    const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [hardPublic(80), cameraVisual('ekstremna')]);
+    expect(sig.visualCongestionConflict).toBe(false);
+    expect(sig.wait).toBeGreaterThanOrEqual(75);
+  });
+
+  it('Šamac: official wait with no camera congestion is NOT flagged as a camera estimate', async () => {
+    const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [hardPublic(120)]);
+    expect(sig.visualCongestionConflict).toBe(false);
+    expect(sig.explanationPayload.authorityTier).toBe('official');
+    expect(sig.explanationPayload.sources.some((s) => s.kind === 'camera')).toBe(false);
   });
 });
 
