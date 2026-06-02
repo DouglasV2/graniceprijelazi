@@ -793,6 +793,13 @@
 .camera-visual-summary span{color:#64748b;font-size:12px;font-weight:740;line-height:1.45}
 .camera-conflict-banner{margin:0 0 12px;border:1px solid rgba(183,121,31,.35);border-radius:14px;padding:12px 14px;background:#fff7e8;color:#925d00;font-size:13px;font-weight:820;line-height:1.45}
 .road-sign-conflict{outline:2px solid rgba(183,121,31,.5);outline-offset:1px}
+/* Google traffic legend on the map */
+.map-traffic-legend{position:absolute;left:12px;bottom:12px;z-index:5;display:flex;gap:12px;align-items:center;border:1px solid rgba(214,227,244,.95);border-radius:12px;padding:8px 11px;background:rgba(255,255,255,.94);box-shadow:0 8px 22px rgba(15,55,110,.14);font-size:12px;font-weight:820;color:#334155;backdrop-filter:blur(8px)}
+.map-traffic-legend span{display:inline-flex;align-items:center;gap:5px}
+.legend-dot{width:12px;height:4px;border-radius:3px;display:inline-block}
+.legend-dot.normal{background:#1a73e8}
+.legend-dot.slow{background:#f9ab00}
+.legend-dot.jam{background:#d93025}
 .why-estimate-sources{list-style:none;margin:0;padding:0;display:grid;gap:8px}
 .why-source{border:1px solid rgba(214,227,244,.9);border-radius:12px;padding:10px 11px;background:#fff}
 .why-source.role-excluded{opacity:.7;background:#f7f8fa}

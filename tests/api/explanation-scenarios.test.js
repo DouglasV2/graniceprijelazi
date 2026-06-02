@@ -29,6 +29,13 @@ function camera(wait, queueVehicles, { stale = false } = {}) {
 function cameraVisual(band) {
   return { sourceType: 'camera-visual', sourceName: 'Kamera vizualna provjera', normalizedWaitMin: null, confidence: 60, weight: 0, fetchedAt: now(), metadata: { queueBand: band } };
 }
+function googleJam(wait = 8) {
+  // Low computed wait (short control zone) but Google shows a jam near the border.
+  return { sourceType: 'google-traffic-estimate', sourceName: 'Google Routes', normalizedWaitMin: wait, confidence: 70, weight: 0.84, fetchedAt: now(), metadata: { delayMinutes: 1, ratio: 1.04, level: 'normal', googleTrafficSeverity: 'jam', worstTrafficLevel: 'TRAFFIC_JAM', jamMeters: 420, affectedRatio: 0.6 } };
+}
+function googleClearTraffic(wait = 8) {
+  return { sourceType: 'google-traffic-estimate', sourceName: 'Google Routes', normalizedWaitMin: wait, confidence: 70, weight: 0.84, fetchedAt: now(), metadata: { delayMinutes: 1, ratio: 1.02, level: 'normal', googleTrafficSeverity: 'clear', worstTrafficLevel: 'NORMAL', jamMeters: 0, affectedRatio: 0 } };
+}
 
 describe('Scenario 1: Google 15 vs official 90 → estimate must NOT drop', () => {
   it('keeps the official wait and marks Google as a non-authority helper', async () => {
@@ -117,6 +124,38 @@ describe('Scenario 7 (core fix): visual congestion conflict — camera shows a b
     expect(sig.confidenceLevel).toBe('niska');
     expect(sig.label).toMatch(/provjeri/i);
     expect(sig.note).toMatch(/kamera ne pokazuje/i);
+  });
+});
+
+describe('Scenario 8 (Google traffic): helper signal, never authority', () => {
+  it('low wait + Google TRAFFIC_JAM near border → conflict / "od X", not a confident low number', async () => {
+    const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [googleJam(8)]);
+    expect(sig.conflictKind).toBe('google-jam');
+    expect(sig.googleTrafficConflict).toBe(true);
+    expect(sig.confidenceLevel).toBe('niska');
+    expect(sig.explanationPayload.googleTraffic.usedAsFusionSignal).toBe(true);
+    expect(sig.explanationPayload.googleTraffic.usedAsAuthority).toBe(false);
+    expect(sig.note).toMatch(/Google promet pokazuje gužvu/i);
+  });
+
+  it('Google clear must NOT lower an official high wait (official stays primary)', async () => {
+    const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [hardPublic(80), googleClearTraffic(8)]);
+    expect(sig.wait).toBeGreaterThanOrEqual(75);
+    expect(sig.googleTrafficConflict).toBe(false);
+    expect(sig.explanationPayload.googleTraffic.note).toMatch(/prilaznu cestu/i);
+  });
+
+  it('camera congestion + Google jam → supporting explanation (camera conflict still leads)', async () => {
+    const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [googleJam(8), cameraVisual('ekstremna')]);
+    expect(sig.visualCongestionConflict).toBe(true); // camera congestion takes precedence
+    expect(sig.explanationPayload.googleTraffic.note).toMatch(/zajedno upućuju|gužvu/i);
+  });
+
+  it('Google traffic unavailable does not change the wait', async () => {
+    const withGoogle = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [hardPublic(40), googleClearTraffic(8)]);
+    const withoutGoogle = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [hardPublic(40)]);
+    expect(withoutGoogle.wait).toBe(withGoogle.wait);
+    expect(withoutGoogle.explanationPayload.googleTraffic.available).toBe(false);
   });
 });
 

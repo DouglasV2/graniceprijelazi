@@ -2474,6 +2474,10 @@ function buildGoogleSnapshotFromRoute(crossing, direction, payload) {
   const ratio = Math.max(0.1, Number(route.ratio || 1) || 1);
   const estimate = estimateWaitFromGoogleRoute(route);
   const estimatedWait = clampWait(estimate.wait);
+  // Near-border traffic from the (control-zone-sliced) route's preserved speedReadingIntervals.
+  const ts = route.trafficSummary || null;
+  const worst = ts?.worstTrafficLevel || 'UNKNOWN';
+  const googleTrafficSeverity = worst === 'TRAFFIC_JAM' ? 'jam' : worst === 'SLOW' ? 'slow' : worst === 'NORMAL' ? 'clear' : 'unknown';
   return {
     crossingId: crossing.id,
     direction,
@@ -2498,6 +2502,13 @@ function buildGoogleSnapshotFromRoute(crossing, direction, payload) {
       rangeMax: estimate.rangeMax,
       reason: estimate.reason,
       routeGuard: route.routeGuard || null,
+      // Structured near-border traffic signal (helper only — never a booth-wait authority).
+      googleTrafficSeverity,
+      trafficSummary: ts,
+      worstTrafficLevel: worst,
+      slowMeters: ts?.slowMeters ?? 0,
+      jamMeters: ts?.jamMeters ?? 0,
+      affectedRatio: ts?.affectedRatio ?? 0,
     },
     fetchedAt: new Date().toISOString(),
   };
@@ -2927,7 +2938,51 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       outScore = Math.min(outScore, 30);
       note = `${note} Kamera ne pokazuje kolonu koja bi opravdala ovako visoko čekanje — provjeri službene izvore.`;
     }
+
+    // ── GOOGLE TRAFFIC helper signal (never authority; spec Google task §7) ──
+    // Google measures the APPROACH road, not the booth. It may RAISE a conflict when the wait
+    // looks low but Google shows a jam near the border, widen the range, lower confidence and
+    // add an explanation — but it must never override admin/measured/official/camera.
+    const googleTrafficSeverity = googleSignal?.metadata?.googleTrafficSeverity || 'unknown';
+    const googleJamNearBorder = googleTrafficSeverity === 'jam';
+    const googleSlowNearBorder = googleTrafficSeverity === 'slow';
+    const googleJamConflict = !congestion.conflict && !clearConflict && googleJamNearBorder && Number.isFinite(Number(finalWait)) && Number(finalWait) < 20;
+    if (googleJamConflict) {
+      conflictKind = 'google-jam';
+      outLevel = 'niska';
+      outPrecision = 'range';
+      outHint = 'low';
+      outScore = Math.min(outScore, 32);
+      outRangeMin = Math.max(0, Math.min(finalWait, range.rangeMin ?? finalWait));
+      outRangeMax = Math.max(range.rangeMax ?? finalWait, 45);
+      note = `${note} Google promet pokazuje gužvu na prilazu — čekanje može biti veće.`;
+    }
     const visualConflict = congestion.conflict || clearConflict;
+
+    // Structured Google-traffic explanation (helper signal, never authority).
+    const cameraQueuePresent = cameraShowsQueue(cameraSignal) || congestion.conflict;
+    const googleTraffic = {
+      available: Boolean(googleSignal) && googleTrafficSeverity !== 'unknown',
+      severity: googleTrafficSeverity,
+      worstTrafficLevel: googleSignal?.metadata?.worstTrafficLevel || 'UNKNOWN',
+      slowMeters: googleSignal?.metadata?.slowMeters ?? 0,
+      jamMeters: googleSignal?.metadata?.jamMeters ?? 0,
+      affectedRatio: googleSignal?.metadata?.affectedRatio ?? 0,
+      usedAsFusionSignal: googleJamConflict,
+      usedAsAuthority: false,
+      note: !googleSignal
+        ? 'Google promet nije dostupan za ovu rutu.'
+        : googleJamNearBorder && cameraQueuePresent
+          ? 'Kamera i Google promet zajedno upućuju na gužvu na prilazu.'
+          : googleJamNearBorder
+            ? 'Google promet pokazuje gužvu na prilazu (mjeri prilaznu cestu, ne nužno čekanje na kućici).'
+            : googleSlowNearBorder
+              ? 'Google promet pokazuje usporenje na prilazu.'
+              : googleTrafficSeverity === 'clear'
+                ? 'Google promet mjeri prilaznu cestu, ne nužno čekanje na samoj graničnoj kućici.'
+                : 'Google promet nije dostupan za ovu rutu.',
+    };
+    explanationPayload.googleTraffic = googleTraffic;
 
     return {
       wait: finalWait,
@@ -2951,7 +3006,10 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       visualCongestionConflict: congestion.conflict,
       visualConflict,
       conflictKind,
-      label: congestion.conflict ? 'Moguća gužva — provjeri' : clearConflict ? 'Provjeri — kamera se ne slaže' : combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
+      googleTraffic,
+      googleTrafficSeverity,
+      googleTrafficConflict: googleJamConflict,
+      label: (congestion.conflict || googleJamConflict) ? 'Moguća gužva — provjeri' : clearConflict ? 'Provjeri — kamera se ne slaže' : combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
       className: combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
       sourceType: combined ? 'combined-estimate' : bestCandidate.sourceType,
       confidence: outScore,
@@ -3094,6 +3152,9 @@ async function buildEffectiveWaitMaps(store) {
         visualCongestionConflict: signal.visualCongestionConflict,
         visualConflict: signal.visualConflict,
         conflictKind: signal.conflictKind,
+        googleTraffic: signal.googleTraffic,
+        googleTrafficSeverity: signal.googleTrafficSeverity,
+        googleTrafficConflict: signal.googleTrafficConflict,
         independentSources: signal.independentSources,
         rangeMin: signal.rangeMin,
         rangeMax: signal.rangeMax,
@@ -3116,10 +3177,10 @@ async function buildEffectiveWaitMaps(store) {
 
       // Accuracy KPI: sample this prediction so a later measured wait can score it.
       if (isLive) recordPredictionSample(crossing.id, direction, signal);
-      // Alerts: detect threshold crossings vs the previously displayed wait. Skip while the
-      // camera contradicts the wait (visualConflict) — we are not confident enough to push a
-      // "veliko čekanje" alert when the camera shows no such queue (avoids false 4h alerts).
-      if (isLive && !signal.visualConflict) {
+      // Alerts: detect threshold crossings vs the previously displayed wait. Skip while ANY
+      // conflict is active (camera-vs-wait or Google-jam) — we are not confident enough to push
+      // a "veliko čekanje" alert on a contradicted/uncertain wait (avoids false alerts).
+      if (isLive && !signal.conflictKind) {
         const prevWait = lastWaitForAlerts.get(key);
         evaluateAndStoreAlerts(crossing, direction, prevWait, effectiveWaits[key]);
         lastWaitForAlerts.set(key, effectiveWaits[key]);
@@ -3962,11 +4023,27 @@ app.get('/api/admin/overview', authRequired, adminRequired, async (req, res) => 
   const confidenceDistribution = { visoka: 0, srednja: 0, niska: 0, nedovoljno: 0 };
   const conflicts = [];
   const staleSources = [];
+  const googleTraffic = [];
   for (const [key, meta] of Object.entries(waitSources)) {
     const level = meta.confidenceLevel || 'nedovoljno';
     if (confidenceDistribution[level] !== undefined) confidenceDistribution[level] += 1;
     if (meta.explanationPayload?.conflict?.detected) conflicts.push({ key, spreadMinutes: meta.explanationPayload.conflict.spreadMinutes, confidenceLevel: level });
     if (meta.stale && meta.displayReady) staleSources.push({ key, ageSeconds: meta.ageSeconds, label: meta.label });
+    const gt = meta.googleTraffic;
+    if (gt) {
+      googleTraffic.push({
+        key,
+        available: gt.available,
+        severity: meta.googleTrafficSeverity || gt.severity,
+        worstTrafficLevel: gt.worstTrafficLevel,
+        slowMeters: gt.slowMeters,
+        jamMeters: gt.jamMeters,
+        affectedRatio: gt.affectedRatio,
+        usedInFusion: gt.usedAsFusionSignal === true,
+        usedAsAuthority: false,
+        conflictCreatedByGoogleTraffic: meta.googleTrafficConflict === true,
+      });
+    }
   }
 
   const audit = await buildCameraAudit({ configOnly: true });
@@ -3989,6 +4066,7 @@ app.get('/api/admin/overview', authRequired, adminRequired, async (req, res) => 
     calibration: { sampleSize: calibration.sampleSize, miscalibrated: calibration.miscalibrated, perBucket: calibration.perBucket, minSamplesHigh: CALIBRATION_THRESHOLDS.high.minN },
     conflicts,
     staleSources,
+    googleTraffic,
     roiReadiness,
     cameraHealth: audit.summary,
     unreliableCameras: audit.summary.topRisky,
@@ -6311,10 +6389,14 @@ function nearestPathIndex(point, path = []) {
   return bestIndex;
 }
 
-function slicePathAroundPoint(path = [], centerPoint, beforeMeters = 900, afterMeters = 1100) {
-  if (!Array.isArray(path) || path.length < 2 || !centerPoint) return path || [];
+// Slice a path to the control zone AND return the original start/end indices so callers can
+// remap Google's speedReadingIntervals (which reference original polyline point indices) onto
+// the sliced display path. Returns { path, startIndex, endIndex } where indices are into the
+// ORIGINAL path. `sliced` is false when no real slice happened (path returned unchanged).
+function slicePathAroundPointIndexed(path = [], centerPoint, beforeMeters = 900, afterMeters = 1100) {
+  if (!Array.isArray(path) || path.length < 2 || !centerPoint) return { path: path || [], startIndex: 0, endIndex: Math.max(0, (path?.length || 1) - 1), sliced: false };
   const centerIndex = nearestPathIndex(centerPoint, path);
-  if (centerIndex < 0) return path;
+  if (centerIndex < 0) return { path, startIndex: 0, endIndex: path.length - 1, sliced: false };
 
   let startIndex = centerIndex;
   let walkedBefore = 0;
@@ -6330,8 +6412,68 @@ function slicePathAroundPoint(path = [], centerPoint, beforeMeters = 900, afterM
     endIndex += 1;
   }
 
-  const sliced = path.slice(startIndex, endIndex + 1);
-  return sliced.length >= 2 ? sliced : path;
+  const slice = path.slice(startIndex, endIndex + 1);
+  if (slice.length < 2) return { path, startIndex: 0, endIndex: path.length - 1, sliced: false };
+  return { path: slice, startIndex, endIndex, sliced: true };
+}
+
+function slicePathAroundPoint(path = [], centerPoint, beforeMeters = 900, afterMeters = 1100) {
+  return slicePathAroundPointIndexed(path, centerPoint, beforeMeters, afterMeters).path;
+}
+
+// Remap Google speedReadingIntervals (referencing ORIGINAL polyline point indices) onto a
+// sliced display path that starts at `sliceStart` and ends at `sliceEnd` (original indices).
+// Intervals are clipped to the overlap and re-indexed to local (0-based) display coordinates.
+// Non-overlapping intervals are dropped. This is the fix for traffic being lost on slicing.
+function remapSpeedReadingIntervals(intervals = [], sliceStart = 0, sliceEnd = Infinity) {
+  if (!Array.isArray(intervals) || !intervals.length) return [];
+  const out = [];
+  for (const iv of intervals) {
+    const gStart = Number(iv.startPolylinePointIndex ?? 0);
+    const gEnd = Number(iv.endPolylinePointIndex ?? gStart);
+    if (!Number.isFinite(gStart) || !Number.isFinite(gEnd)) continue;
+    const oStart = Math.max(gStart, sliceStart);
+    const oEnd = Math.min(gEnd, sliceEnd);
+    if (oEnd <= oStart) continue; // no overlapping segment with the sliced path
+    out.push({ ...iv, startPolylinePointIndex: oStart - sliceStart, endPolylinePointIndex: oEnd - sliceStart, speed: iv.speed });
+  }
+  return out;
+}
+
+// Summarise the traffic segments on a route: counts, worst level, slow/jam metres, affected ratio.
+function buildTrafficSummary(trafficSegments = [], totalMeters = 0) {
+  const segs = Array.isArray(trafficSegments) ? trafficSegments : [];
+  let normalSegmentCount = 0;
+  let slowSegmentCount = 0;
+  let trafficJamSegmentCount = 0;
+  let unknownSegmentCount = 0;
+  let slowMeters = 0;
+  let jamMeters = 0;
+  for (const s of segs) {
+    const meters = pathDistanceMeters(s.path || []);
+    const level = s.level || trafficSegmentColorSpeed(s.speed);
+    if (level === 'jam') { trafficJamSegmentCount += 1; jamMeters += meters; }
+    else if (level === 'slow') { slowSegmentCount += 1; slowMeters += meters; }
+    else if (level === 'normal') normalSegmentCount += 1;
+    else unknownSegmentCount += 1;
+  }
+  const total = Number(totalMeters) > 0 ? Number(totalMeters) : segs.reduce((sum, s) => sum + pathDistanceMeters(s.path || []), 0);
+  const affectedMeters = slowMeters + jamMeters;
+  const worstTrafficLevel = trafficJamSegmentCount ? 'TRAFFIC_JAM' : slowSegmentCount ? 'SLOW' : normalSegmentCount ? 'NORMAL' : 'UNKNOWN';
+  return {
+    hasTrafficIntervals: segs.length > 0,
+    trafficIntervalCount: segs.length,
+    normalSegmentCount,
+    slowSegmentCount,
+    trafficJamSegmentCount,
+    unknownSegmentCount,
+    worstTrafficLevel,
+    slowMeters: Math.round(slowMeters),
+    jamMeters: Math.round(jamMeters),
+    affectedMeters: Math.round(affectedMeters),
+    affectedRatio: total > 0 ? Math.round((affectedMeters / total) * 100) / 100 : 0,
+    trafficSegmentsPreservedAfterRouteGuard: segs.length > 0,
+  };
 }
 
 
@@ -6401,9 +6543,16 @@ function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
   const guard = anchor.routeGuard || {};
   const beforeMeters = Number(guard.displayBeforeMeters || process.env.ROUTE_DISPLAY_BEFORE_METERS || 850);
   const afterMeters = Number(guard.displayAfterMeters || process.env.ROUTE_DISPLAY_AFTER_METERS || 1050);
-  const displayPath = slicePathAroundPoint(route.path || [], anchor.borderPoint, beforeMeters, afterMeters);
+  const slice = slicePathAroundPointIndexed(route.path || [], anchor.borderPoint, beforeMeters, afterMeters);
+  const displayPath = slice.path;
   const displayDistanceMeters = pathDistanceMeters(displayPath);
   if (!displayPath.length || displayDistanceMeters <= 0) return route;
+  // Preserve Google's traffic: remap the original speedReadingIntervals onto the sliced path
+  // (this is exactly where they used to be thrown away). The sliced path is around the border,
+  // so the resulting segments are the NEAR-BORDER traffic — what matters for the wait.
+  const remappedIntervals = remapSpeedReadingIntervals(route.speedReadingIntervals || [], slice.startIndex, slice.endIndex);
+  const displayTrafficSegments = buildTrafficSegments(displayPath, remappedIntervals);
+  const displayTrafficSummary = buildTrafficSummary(displayTrafficSegments, displayDistanceMeters);
 
   const originalDistanceMeters = Number(route.distanceMeters || pathDistanceMeters(route.path || []) || displayDistanceMeters);
   const ratio = Math.max(0.1, Math.min(1, displayDistanceMeters / Math.max(originalDistanceMeters, 1)));
@@ -6424,7 +6573,9 @@ function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
     delayMinutes,
     ratio: staticMinutes ? Number((durationMinutes / staticMinutes).toFixed(2)) : route.ratio,
     level: delayLevel(delayMinutes, staticMinutes ? durationMinutes / staticMinutes : route.ratio),
-    trafficSegments: buildTrafficSegments(displayPath, []),
+    speedReadingIntervals: remappedIntervals,
+    trafficSegments: displayTrafficSegments,
+    trafficSummary: displayTrafficSummary,
     label: route.primary ? 'Provjerena zona' : (route.variantLabel || 'Alternativni prilaz'),
     displayMode: 'control_zone',
     displayNote: 'Na karti je namjerno prikazana samo provjerena dionica oko prijelaza, bez čudnih početnih i završnih točaka.',
@@ -6780,6 +6931,7 @@ function normalizeRoute(route, index, meta = {}) {
     level: delayLevel(delayMinutes, ratio),
     speedReadingIntervals: route.travelAdvisory?.speedReadingIntervals || [],
     trafficSegments: buildTrafficSegments(pathPoints, route.travelAdvisory?.speedReadingIntervals || []),
+    trafficSummary: buildTrafficSummary(buildTrafficSegments(pathPoints, route.travelAdvisory?.speedReadingIntervals || []), route.distanceMeters || 0),
     source: 'Google Routes API',
     ...meta,
   };
@@ -7522,6 +7674,11 @@ export {
   inferCameraDirections,
   cameraRelevantForDirection,
   buildCameraAudit,
+  // Google traffic-aware route helpers (exposed for unit tests).
+  buildTrafficSegments,
+  buildTrafficSummary,
+  remapSpeedReadingIntervals,
+  makeMapFriendlyControlZoneRoute,
   // Exposed for integration tests (mint an admin token against the seeded admin user).
   signToken,
 };

@@ -124,6 +124,10 @@ describe('formatWaitDisplay', () => {
     expect(formatWaitDisplay(360, { conflictKind: 'clear-high' })).toBe('~6 h');
   });
 
+  it('google-jam conflict shows a floor ("od X"), low wait but Google jam on the approach', () => {
+    expect(formatWaitDisplay(8, { conflictKind: 'google-jam' })).toBe('od 8 min');
+  });
+
   it('never returns the literal strings "null", "undefined", or "NaN"', () => {
     for (const candidate of [null, undefined, NaN, '', 'foo', 0, 15, 30, 45, 80]) {
       const out = formatWaitDisplay(candidate);

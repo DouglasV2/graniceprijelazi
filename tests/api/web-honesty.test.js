@@ -52,6 +52,7 @@ describe('GET /api/admin/overview (debug surface)', () => {
     expect(res.body.roiReadiness).toHaveProperty('needsManualConfigBeforeYolo');
     expect(Array.isArray(res.body.conflicts)).toBe(true);
     expect(Array.isArray(res.body.staleSources)).toBe(true);
+    expect(Array.isArray(res.body.googleTraffic)).toBe(true); // Google traffic debug surface
     // ROI readiness must flag the known un-configured cameras (Maljevac/Bijača HAK lack ROI).
     expect(res.body.roiReadiness.missingQueueRoi).toContain('maljevac/mal-hak-hr-entry');
     expect(findIllegalJsonValue(res.body, '$')).toBeNull();

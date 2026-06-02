@@ -39,7 +39,7 @@ export function formatWaitDisplay(wait, sourceMeta = {}) {
   // contradicts it. A visible queue with a low wait → floor "od X min" (at least this, likely
   // more). No/small queue with a very high wait → approximate "~X min" (suspect, verify).
   if (sourceMeta.conflictKind === 'clear-high') return `~${formatMinutes(n)}`;
-  if (sourceMeta.visualCongestionConflict || sourceMeta.conflictKind === 'congestion') return `od ${formatMinutes(n)}`;
+  if (sourceMeta.visualCongestionConflict || sourceMeta.conflictKind === 'congestion' || sourceMeta.conflictKind === 'google-jam') return `od ${formatMinutes(n)}`;
   const hint = sourceMeta.confidenceHint || '';
   // The confidence engine's level/precision is the source of truth for honesty: we only
   // show a single exact number at HIGH confidence. Anything below shows a range (when one

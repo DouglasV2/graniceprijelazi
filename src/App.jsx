@@ -1528,6 +1528,9 @@ function getBaseWaitSourceMeta(crossing, directionKey, overrides = {}) {
       visualConflict: source.visualConflict,
       visualCongestionConflict: source.visualCongestionConflict,
       conflictKind: source.conflictKind,
+      googleTraffic: source.googleTraffic,
+      googleTrafficSeverity: source.googleTrafficSeverity,
+      googleTrafficConflict: source.googleTrafficConflict,
       note: source.note || 'Vrijednost je izračunata iz javnih izvora, kamera i dojava.',
       explanation: source.explanation,
       explanationPayload: source.explanationPayload,
@@ -1927,7 +1930,7 @@ function AuthScreen({ setCurrentUser, compact = false, onCancel }) {
 function RoadSign({ crossing, direction, wait, sourceMeta = {} }) {
   // Use the conflict-aware display (formatWaitDisplay reads sourceMeta) so the headline pill
   // never shows a confident raw number when the camera contradicts it (Maljevac/Šamac fix).
-  const conflict = sourceMeta.visualConflict || sourceMeta.visualCongestionConflict;
+  const conflict = sourceMeta.visualConflict || sourceMeta.visualCongestionConflict || Boolean(sourceMeta.conflictKind);
   const status = conflict
     ? { className: 'busy', label: 'Provjeri' }
     : (statusMeta[statusFromWait(wait)] || statusMeta.unknown);
@@ -3086,6 +3089,13 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
       <div ref={mapEl} className="google-map" />
       {!mapsReady && !mapError && <div className="map-loading">Učitavam kartu…</div>}
       {mapError && <div className="map-error">{mapError}</div>}
+      {routes.some((route) => (route.trafficSegments || []).length > 0) && (
+        <div className="map-traffic-legend" aria-label="Legenda prometa">
+          <span><i className="legend-dot normal" /> protočno</span>
+          <span><i className="legend-dot slow" /> usporeno</span>
+          <span><i className="legend-dot jam" /> gužva</span>
+        </div>
+      )}
       {focusTraffic && (
         <div className={`traffic-focus-card route-focus-card production-route-card route-status-${routeMeta.className}`}>
           <div className="traffic-focus-head">
