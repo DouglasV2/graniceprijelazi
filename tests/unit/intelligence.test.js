@@ -132,6 +132,20 @@ describe('queue bands', () => {
     const b = classifyQueueBand({ occupancyPct: 90, laneFullnessPct: 90, queueVehicles: 30, confidence: 80, stale: true });
     expect(QUEUE_BANDS.indexOf(b.band)).toBeLessThanOrEqual(2);
   });
+  // Live Maljevac bug: an essentially empty "ulaz" frame read laneFullnessPct 99 with a single
+  // car and was classified "Ekstremna kolona". Pixel fullness without vehicles is sensor noise.
+  it('a single vehicle can never be more than "mala" no matter how full the pixels look', () => {
+    const b = classifyQueueBand({ occupancyPct: 0, laneFullnessPct: 99, queueVehicles: 1, confidence: 60 });
+    expect(b.band).toBe('mala');
+  });
+  it('a few vehicles (≤4) cap at "srednja" even with extreme lane fullness', () => {
+    const b = classifyQueueBand({ occupancyPct: 10, laneFullnessPct: 95, queueVehicles: 3, confidence: 70 });
+    expect(b.band).toBe('srednja');
+  });
+  it('a real queue (≥5 vehicles) keeps its fullness-driven high band (undercount fix preserved)', () => {
+    const b = classifyQueueBand({ occupancyPct: 20, laneFullnessPct: 85, queueVehicles: 9, confidence: 72 });
+    expect(['velika', 'ekstremna']).toContain(b.band);
+  });
 });
 
 describe('image hash + stale detection', () => {

@@ -1741,19 +1741,52 @@ function clampWait(value) {
   return Math.max(0, Math.min(360, n));
 }
 
-function extractBihamkSection(text, names = []) {
+function extractBihamkSection(text, names = [], boundaryNames = []) {
   const normalized = normalizeAscii(text);
-  const namePositions = names
-    .map((name) => normalizeAscii(name))
+  const ownNames = names.map((name) => normalizeAscii(name)).filter(Boolean);
+  const namePositions = ownNames
     .map((name) => normalized.indexOf(name))
     .filter((index) => index >= 0)
     .sort((a, b) => a - b);
   if (!namePositions.length) return '';
-  const start = Math.max(0, namePositions[0] - 80);
-  const after = normalized.slice(namePositions[0] + 8);
+  const anchor = namePositions[0];
+  const anchorName = ownNames.find((name) => normalized.indexOf(name) === anchor) || '';
+  const ownEnd = anchor + Math.max(8, anchorName.length);
+
+  // The HAK/BIHAMK status pages concatenate EVERY border crossing into one text blob, using
+  // bare names like "Bajakovo (Batrovci)" (no "GP " prefix). The section for one crossing must
+  // therefore be cut at the nearest OTHER crossing's name — before AND after — otherwise a
+  // neighbour's number leaks in as this crossing's wait. This was the Maljevac=360 min bug:
+  // the 760-char window swallowed "Bajakovo (Batrovci) - ... 6 h" → "Eksplicitno čekanje 360 min".
+  const others = boundaryNames.map((name) => normalizeAscii(name)).filter((name) => name && !ownNames.includes(name));
+  let endCut = text.length;
+  let startCut = 0;
+  for (const other of others) {
+    let idx = normalized.indexOf(other);
+    while (idx >= 0) {
+      if (idx >= ownEnd && idx < endCut) endCut = idx;
+      if (idx < anchor && idx + other.length > startCut) startCut = idx + other.length;
+      idx = normalized.indexOf(other, idx + 1);
+    }
+  }
+  // Keep the legacy "next GP" boundary as a secondary tightener, and a hard cap as a backstop
+  // for pages where no boundary name is found (so we never fall back to the whole document).
+  const after = normalized.slice(ownEnd);
   const nextGpRelative = after.search(/\bgp\s+[a-z]/i);
-  const end = nextGpRelative > 120 ? namePositions[0] + 8 + nextGpRelative : Math.min(text.length, namePositions[0] + 760);
+  if (nextGpRelative >= 0) endCut = Math.min(endCut, ownEnd + nextGpRelative);
+  const start = Math.max(startCut, anchor - 80, 0);
+  const end = Math.min(endCut, anchor + 760, text.length);
   return text.slice(start, end).trim();
+}
+
+// Union of every configured crossing's public-source names — used to bound one crossing's
+// text section at the next crossing's name (see extractBihamkSection).
+function allPublicSourceNames(nameKey = 'bihamkNames') {
+  const set = new Set();
+  for (const config of Object.values(PUBLIC_SOURCE_TARGETS)) {
+    for (const name of (config[nameKey] || config.bihamkNames || [])) set.add(name);
+  }
+  return [...set];
 }
 
 function waitTextHasStatusSignal(context = '') {
@@ -2024,8 +2057,9 @@ async function fetchBihamkSnapshots() {
   const html = await fetchTextWithTimeout(url);
   const text = stripHtml(html);
   const snapshots = [];
+  const boundaryNames = allPublicSourceNames('bihamkNames');
   Object.entries(PUBLIC_SOURCE_TARGETS).forEach(([crossingId, config]) => {
-    const section = extractBihamkSection(text, config.bihamkNames || []);
+    const section = extractBihamkSection(text, config.bihamkNames || [], boundaryNames);
     if (!section) return;
     const parsed = parseDirectionalWaitsFromText(section);
     parsed.forEach((signal) => {
@@ -2055,9 +2089,10 @@ async function fetchHakSnapshots() {
   const html = await fetchTextWithTimeout(url);
   const text = stripHtml(html);
   const snapshots = [];
+  const boundaryNames = [...allPublicSourceNames('hakNames'), ...allPublicSourceNames('bihamkNames')];
   Object.entries(PUBLIC_SOURCE_TARGETS).forEach(([crossingId, config]) => {
     const names = config.hakNames || config.bihamkNames || [];
-    const section = extractBihamkSection(text, names);
+    const section = extractBihamkSection(text, names, boundaryNames);
     if (!section) return;
     const parsed = parseDirectionalWaitsFromText(section, { sourceSide: 'hr' });
     parsed.forEach((signal) => {
@@ -7842,6 +7877,9 @@ export {
   inferCameraDirections,
   cameraRelevantForDirection,
   buildCameraAudit,
+  // Public-source text parsing (exposed for unit tests — the HAK/BIHAMK blob bleed bug).
+  extractBihamkSection,
+  allPublicSourceNames,
   // Google traffic-aware route helpers (exposed for unit tests).
   buildTrafficSegments,
   buildTrafficSummary,

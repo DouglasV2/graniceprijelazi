@@ -483,6 +483,15 @@ export function classifyQueueBand({ occupancyPct = 0, laneFullnessPct = 0, queue
   else if (fullness < 70 && q <= 22) band = 'velika';
   else band = 'ekstremna';
 
+  // Pixel fullness (occupancy / lane) with NO vehicle evidence is sensor noise — wet asphalt,
+  // greenery, shadows, off-lane parked cars. A real "kolona" always has several vehicles, so a
+  // frame with ≤1 queued vehicle can never be more than "mala" no matter what fullness claims,
+  // and ≤4 can never exceed "srednja". This kills the empty-frame "Ekstremna kolona" bug
+  // (laneFullnessPct 99 with a single car). Real queues (q ≥ 5) keep their fullness-driven band,
+  // so the bumper-to-bumper undercount fix is untouched.
+  if (q <= 1 && QUEUE_BANDS.indexOf(band) > QUEUE_BANDS.indexOf('mala')) band = 'mala';
+  else if (q <= 4 && QUEUE_BANDS.indexOf(band) > QUEUE_BANDS.indexOf('srednja')) band = 'srednja';
+
   // An unreliable frame must not scream "ekstremna". Cap the claim.
   if ((stale || confidence < 45) && QUEUE_BANDS.indexOf(band) > 2) band = 'srednja';
 
