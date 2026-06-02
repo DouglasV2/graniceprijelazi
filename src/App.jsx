@@ -1524,6 +1524,10 @@ function getBaseWaitSourceMeta(crossing, directionKey, overrides = {}) {
       hasHardPublicSignal: source.hasHardPublicSignal,
       hasSoftUpperBoundPublic: source.hasSoftUpperBoundPublic,
       googleClearWhileQueue: source.googleClearWhileQueue,
+      visualBand: source.visualBand,
+      visualConflict: source.visualConflict,
+      visualCongestionConflict: source.visualCongestionConflict,
+      conflictKind: source.conflictKind,
       note: source.note || 'Vrijednost je izračunata iz javnih izvora, kamera i dojava.',
       explanation: source.explanation,
       explanationPayload: source.explanationPayload,
@@ -1920,16 +1924,21 @@ function AuthScreen({ setCurrentUser, compact = false, onCancel }) {
   );
 }
 
-function RoadSign({ crossing, direction, wait }) {
-  const status = statusMeta[statusFromWait(wait)] || statusMeta.unknown;
+function RoadSign({ crossing, direction, wait, sourceMeta = {} }) {
+  // Use the conflict-aware display (formatWaitDisplay reads sourceMeta) so the headline pill
+  // never shows a confident raw number when the camera contradicts it (Maljevac/Šamac fix).
+  const conflict = sourceMeta.visualConflict || sourceMeta.visualCongestionConflict;
+  const status = conflict
+    ? { className: 'busy', label: 'Provjeri' }
+    : (statusMeta[statusFromWait(wait)] || statusMeta.unknown);
   return (
-    <article className="road-sign">
+    <article className={`road-sign${conflict ? ' road-sign-conflict' : ''}`}>
       <div>
         <span>{crossing.shortName}</span>
         <b>{direction.label}</b>
       </div>
-      <strong>{formatMinutes(wait)}</strong>
-      <small>{hasKnownWait(wait) ? 'osobna vozila' : 'nema svježeg izvora'}</small>
+      <strong>{hasKnownWait(wait) ? formatWaitDisplay(wait, sourceMeta) : '—'}</strong>
+      <small>{!hasKnownWait(wait) ? 'nema svježeg izvora' : conflict ? 'kamera se ne slaže — provjeri' : 'osobna vozila'}</small>
       <em className={`status ${status.className}`}>{status.label}</em>
     </article>
   );
@@ -3269,7 +3278,7 @@ function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, se
               </div>
             </div>
           )}
-          <RoadSign crossing={selectedCrossing} direction={direction} wait={getDisplayedWait(selectedCrossing, selectedDirection, overrides)} />
+          <RoadSign crossing={selectedCrossing} direction={direction} wait={getDisplayedWait(selectedCrossing, selectedDirection, overrides)} sourceMeta={getWaitSourceMeta(selectedCrossing, selectedDirection, overrides)} />
           <div className="map-info">
             <FieldBadge crossing={selectedCrossing} />
             <h3>{selectedCrossing.name}</h3>
@@ -3406,6 +3415,13 @@ function CameraPanel({ crossing, selectedDirection }) {
   const cameraDecision = cameraEstimateDecision(analytics, cameraHeadlineWait);
   const cameraContradictsOfficial = cameraDecision.contradictsOfficial;
   const cameraEstimateUsable = cameraDecision.usable;
+  // Live conflict banner (immediate, from the live camera band vs the displayed headline) — robust
+  // even if the backend's stored visual signal hasn't refreshed yet. Two directions:
+  //  • camera shows a big queue but the headline wait is low  → likely under-estimate, verify.
+  //  • camera shows little/no queue but the headline wait is very high → suspect high number, verify.
+  const liveBand = analytics.queueBand;
+  const liveCongestionConflict = (liveBand === 'velika' || liveBand === 'ekstremna') && hasKnownWait(cameraHeadlineWait) && Number(cameraHeadlineWait) < 30;
+  const liveClearConflict = (liveBand === 'nema' || liveBand === 'mala') && hasKnownWait(cameraHeadlineWait) && Number(cameraHeadlineWait) >= 90;
   const laneProfile = analytics.laneProfile || aggregateLaneProfile(analytics.laneSignals || []);
   const showLanes = crossingHasLaneCalibration(crossing);
   const selectedSignalData = analytics.laneSignals.find((signal) => signal.id === selectedSignal) || analytics.laneSignals[0];
@@ -3482,6 +3498,14 @@ function CameraPanel({ crossing, selectedDirection }) {
           <button type="button" className="ghost-button active" onClick={() => setRefreshKey(Date.now())}>Osvježi prikaz</button>
         </div>
       </div>
+
+      {(liveCongestionConflict || liveClearConflict) && (
+        <div className="camera-conflict-banner">
+          ⚠️ {liveCongestionConflict
+            ? `Na kameri se vidi ${analytics.queueBandLabel || 'velika kolona'}, ali prikazano čekanje (${formatMinutes(cameraHeadlineWait)}) je nisko — vjerojatno je veće. Provjeri službene izvore.`
+            : `Prikazano čekanje (${formatMinutes(cameraHeadlineWait)}) je visoko, ali kamera trenutno ne pokazuje takvu kolonu. Moguća je greška ili zastarjeli izvor — provjeri službene izvore.`}
+        </div>
+      )}
 
       <div className="camera-analytics-grid">
         <article className={`camera-intelligence-card ${cameraEstimateUsable ? trafficClassFromWait(analytics.wait) : 'pending'}`}>
@@ -4813,7 +4837,7 @@ export default function App() {
             </div>
           </div>
           <aside className="hero-command-card" aria-label="Sažetak odabranog prijelaza">
-            <RoadSign crossing={selectedCrossing} direction={direction} wait={selectedWait} />
+            <RoadSign crossing={selectedCrossing} direction={direction} wait={selectedWait} sourceMeta={getWaitSourceMeta(selectedCrossing, selectedDirection, overrides)} />
             <label className="hero-crossing-select"><span>Prijelaz</span><select value={selectedCrossing.id} onChange={(event) => selectCrossing(event.target.value)}>{CROSSINGS.map((crossing) => <option key={crossing.id} value={crossing.id}>{crossing.name}</option>)}</select></label>
             <div className="hero-route-cities">
               <span>HR</span>

@@ -382,6 +382,88 @@ export function applyRoiToDetections(detections = [], calibration = {}, opts = {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// 4c. CAMERA INTELLIGENCE v6 — wait-from-signals + YOLO eligibility (spec §6/§8/§11)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Derive a wait from camera queue+flow signals. The physical model is queueing: wait ≈
+// queue / throughput. High queue + low flow ⇒ high wait; high queue + high flow ⇒ lower;
+// low queue + high flow ⇒ low. Without ROI/direction there is NO reliable wait; without flow
+// or calibration we return a RANGE, never a confident single number.
+export function estimateWaitFromCameraSignals(input = {}) {
+  const { queueVehicles = null, flowVehiclesPerMinute = null, congestionBand = null, calibrationProfile = null, hasRoi = false, hasDirection = false, hasCountLine = false } = input;
+  const reasonCodes = [];
+  if (!hasRoi) { reasonCodes.push('missing_queue_roi'); return { waitMinutes: null, waitRange: null, precise: false, confidence: 'none', reasonCodes }; }
+  if (!hasDirection) { reasonCodes.push('direction_not_verified'); return { waitMinutes: null, waitRange: null, precise: false, confidence: 'none', reasonCodes }; }
+  if (!isNum(queueVehicles)) { reasonCodes.push('no_queue_count'); return { waitMinutes: null, waitRange: null, precise: false, confidence: 'low', reasonCodes }; }
+
+  const cal = calibrationProfile || {};
+  const vehicleToMinute = isNum(cal.vehicleToMinuteFactor) ? cal.vehicleToMinuteFactor : 1.2;
+  const minWait = isNum(cal.minWait) ? cal.minWait : 0;
+  const maxWait = isNum(cal.maxWait) ? cal.maxWait : 240;
+  const enoughCal = cal.enoughMeasuredVolume === true;
+  const q = Number(queueVehicles);
+  const flowKnown = isNum(flowVehiclesPerMinute);
+  const flow = flowKnown ? Number(flowVehiclesPerMinute) : null;
+
+  let base;
+  if (flowKnown && flow > 0) {
+    base = clamp(q / flow, minWait, maxWait); // drain time = the wait
+  } else if (flowKnown && flow === 0) {
+    base = clamp(q * vehicleToMinute * 1.5, minWait, maxWait); // stopped queue → longer
+    reasonCodes.push('stopped_queue');
+  } else {
+    base = clamp(q * vehicleToMinute, minWait, maxWait); // no flow → rough, wide range
+    reasonCodes.push('insufficient_frames_for_flow');
+  }
+  if (!hasCountLine && !reasonCodes.includes('insufficient_frames_for_flow')) reasonCodes.push('no_count_line');
+
+  const wide = !flowKnown || !hasCountLine || !enoughCal;
+  if (!enoughCal) reasonCodes.push('uncalibrated');
+  const waitMinutes = Math.round(base);
+  const half = wide ? Math.max(8, Math.round(waitMinutes * 0.4)) : Math.max(4, Math.round(waitMinutes * 0.18));
+  return {
+    waitMinutes,
+    waitRange: { min: Math.max(0, waitMinutes - half), max: Math.min(360, waitMinutes + half) },
+    precise: !wide,
+    confidence: enoughCal ? (wide ? 'medium' : 'medium') : 'low',
+    congestionBand: congestionBand || null,
+    reasonCodes,
+  };
+}
+
+// Decide whether a camera may be used by YOLO in SHADOW (record only) and in FUSION (drives
+// wait) modes. Fusion is strict: ROI + direction + countLine + fresh + latency + confidence +
+// no error + good calibration + on the per-camera fusion allowlist. Shadow is lenient.
+export function cameraYoloEligibility(camera = {}, direction = null, runtime = {}, flags = {}) {
+  const reasonCodes = [];
+  const hasRoi = Boolean(camera.queueRoi || camera.calibration?.queueRoi || camera.calibration?.roi);
+  const validForDir = Array.isArray(camera.validForDirections) && camera.validForDirections.length > 0 && (!direction || camera.validForDirections.includes(direction));
+  const hasCountLine = Boolean(camera.countLine || camera.calibration?.countLine);
+  const fresh = runtime.hasFreshFrame !== false;
+  const latencyOk = !isNum(runtime.latencyMs) || Number(runtime.latencyMs) <= (flags.maxLatencyMs ?? 8000);
+  const confOk = !isNum(runtime.confidence) || Number(runtime.confidence) >= (flags.minConfidence ?? 35);
+  const noError = !runtime.error && !runtime.timedOut;
+  const calOk = runtime.calibrationOk !== false;
+
+  if (!hasRoi) reasonCodes.push('missing_queue_roi');
+  if (!validForDir) reasonCodes.push('direction_not_verified');
+  if (!hasCountLine) reasonCodes.push('missing_count_line');
+  if (!fresh) reasonCodes.push('stale_frame');
+  if (!latencyOk) reasonCodes.push('latency_exceeded');
+  if (!confOk) reasonCodes.push('low_confidence');
+  if (!noError) reasonCodes.push('runtime_error');
+  if (!calOk) reasonCodes.push('bad_calibration');
+
+  const camId = camera.cameraId || camera.id;
+  const shadowAllow = !Array.isArray(flags.shadowAllowlist) || flags.shadowAllowlist.length === 0 || flags.shadowAllowlist.includes(camId);
+  const fusionAllow = Array.isArray(flags.fusionAllowlist) && flags.fusionAllowlist.includes(camId);
+
+  const eligibleForShadow = hasRoi && validForDir && fresh && noError && shadowAllow;
+  const eligibleForFusion = hasRoi && validForDir && hasCountLine && fresh && latencyOk && confOk && noError && calOk && fusionAllow;
+  return { eligibleForShadow, eligibleForFusion, hasRoi, hasCountLine, validForDir, fusionAllowlisted: fusionAllow, reasonCodes };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // 4. CAMERA — QUEUE BANDS, IMAGE HASH, STALE & MOTION
 // ───────────────────────────────────────────────────────────────────────────
 //
@@ -432,6 +514,18 @@ export function detectVisualCongestionConflict({ visualBand = null, fusedWait = 
   // The visual evidence says congested but the number is low → unreliable low number.
   const suggestedRangeMax = visualBand === 'ekstremna' ? 120 : 60;
   return { conflict: true, visualBand, suggestedRangeMax };
+}
+
+// INVERSE conflict (the Šamac case): the camera VISUALLY shows little/no queue (nema/mala)
+// but the fused wait is very high. The high number is suspect (stale/misparsed source, or a
+// queue the camera angle can't see) — we flag it, drop confidence and warn, without
+// fabricating a different number. Admin/measured stay authoritative for the value itself.
+export function detectCameraClearConflict({ visualBand = null, fusedWait = null, highThreshold = 90 } = {}) {
+  const rank = queueBandRank(visualBand);
+  const clear = rank >= 0 && rank <= queueBandRank('mala'); // nema or mala (band must be known)
+  if (!clear || !isNum(fusedWait)) return { conflict: false, visualBand };
+  if (Number(fusedWait) < highThreshold) return { conflict: false, visualBand };
+  return { conflict: true, visualBand };
 }
 
 // Pick the worst (most congested) band from a list.

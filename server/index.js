@@ -15,6 +15,9 @@ import {
   QUEUE_BANDS,
   applyRoiToDetections,
   detectVisualCongestionConflict,
+  detectCameraClearConflict,
+  estimateWaitFromCameraSignals,
+  cameraYoloEligibility,
   worstQueueBand,
   computeAverageHash,
   detectStaleFrames,
@@ -1298,7 +1301,18 @@ const cvApiKey = process.env.CAMERA_CV_API_KEY || '';
 const YOLO_ENABLED = process.env.YOLO_ENABLED === 'true';
 // Shadow mode: run YOLO and record its result for comparison, but NEVER use it for the wait.
 // Lets us validate YOLO against the heuristic in production with zero risk before enabling it.
-const YOLO_SHADOW_MODE = process.env.YOLO_SHADOW_MODE === 'true';
+// YOLO_SHADOW_ENABLED is the standardized name; YOLO_SHADOW_MODE kept as a back-compat alias.
+const YOLO_SHADOW_MODE = process.env.YOLO_SHADOW_ENABLED === 'true' || process.env.YOLO_SHADOW_MODE === 'true';
+// Controlled fusion (V6 §11): YOLO may drive the wait ONLY when explicitly enabled AND the
+// camera is on the per-camera fusion allowlist AND eligible. Default OFF in production.
+const YOLO_FUSION_ENABLED = process.env.YOLO_FUSION_ENABLED === 'true';
+const parseList = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+const YOLO_SHADOW_ALLOWLIST = parseList(process.env.YOLO_SHADOW_CAMERA_ALLOWLIST);
+const YOLO_FUSION_ALLOWLIST = parseList(process.env.YOLO_FUSION_CAMERA_ALLOWLIST);
+const YOLO_MAX_LATENCY_MS = Math.max(500, Number(process.env.YOLO_MAX_LATENCY_MS || 8000));
+const YOLO_REQUIRE_ROI = process.env.YOLO_REQUIRE_ROI !== 'false';
+const YOLO_REQUIRE_DIRECTION = process.env.YOLO_REQUIRE_DIRECTION !== 'false';
+const YOLO_REQUIRE_COUNTLINE = process.env.YOLO_REQUIRE_COUNTLINE !== 'false';
 const yoloEndpoint = process.env.YOLO_ENDPOINT || process.env.CAMERA_CV_ENDPOINT || '';
 const yoloApiKey = process.env.YOLO_API_KEY || process.env.CAMERA_CV_API_KEY || '';
 const YOLO_TIMEOUT_MS = Math.max(1500, Number(process.env.YOLO_TIMEOUT_MS || 6000));
@@ -2141,12 +2155,12 @@ async function buildCameraSourceSnapshots() {
       });
     }
 
-    // (2) VISUAL CONGESTION signal — emitted even for visual-only cameras when the camera
-    // VISUALLY shows a big queue (velika/ekstremna). Carries NO wait (does not drive the
-    // number), only the band — so the fusion can flag a conflict when the official/Google
-    // wait is low while the camera clearly shows congestion (the Maljevac case).
+    // (2) VISUAL signal — the camera's qualitative band, emitted for ANY band (even visual-only
+    // cameras) whenever there is a real frame. Carries NO wait (never drives the number), only
+    // the band — so the fusion can flag BOTH conflicts: a big queue while the wait is low
+    // (Maljevac), AND no/small queue while the wait is very high (Šamac).
     const band = analytics.queueBand;
-    if ((band === 'velika' || band === 'ekstremna') && (hasActualSnapshot || hasIngestOrCv)) {
+    if (band && (hasActualSnapshot || hasIngestOrCv)) {
       out.push({
         crossingId,
         direction,
@@ -2875,6 +2889,7 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     // the low number is unreliable (often a lagging text source). We do NOT fabricate a
     // number; we drop confidence to niska, force a range, and tell the user to verify.
     const congestion = detectVisualCongestionConflict({ visualBand, fusedWait: finalWait });
+    const clearConflict = !congestion.conflict && detectCameraClearConflict({ visualBand, fusedWait: finalWait }).conflict;
     let outLevel = calibrated.level;
     let outPrecision = calibrated.precision;
     let outHint = confidenceHint;
@@ -2882,7 +2897,10 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     let outRangeMin = range.rangeMin;
     let outRangeMax = range.rangeMax;
     let note = capReason ? `${explanation} ${capReason}` : explanation;
+    let conflictKind = null;
     if (congestion.conflict) {
+      // Camera shows a big queue but the wait is low → "od X min" (at least), verify.
+      conflictKind = 'congestion';
       outLevel = 'niska';
       outPrecision = 'range';
       outHint = 'low';
@@ -2890,7 +2908,16 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       outRangeMin = Math.max(0, Math.min(finalWait, range.rangeMin ?? finalWait));
       outRangeMax = Math.max(range.rangeMax ?? finalWait, congestion.suggestedRangeMax);
       note = `${note} Na kameri se vidi ${visualBand === 'ekstremna' ? 'ekstremna' : 'velika'} kolona, ali čekanje nije pouzdano izračunato — provjeri službene izvore.`;
+    } else if (clearConflict) {
+      // Camera shows little/no queue but the wait is very high → suspect number, warn (Šamac).
+      conflictKind = 'clear-high';
+      outLevel = 'niska';
+      outPrecision = 'range';
+      outHint = 'low';
+      outScore = Math.min(outScore, 30);
+      note = `${note} Kamera ne pokazuje kolonu koja bi opravdala ovako visoko čekanje — provjeri službene izvore.`;
     }
+    const visualConflict = congestion.conflict || clearConflict;
 
     return {
       wait: finalWait,
@@ -2909,10 +2936,12 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       biasAdjustMin: biasResult.adjustMin,
       explanation,
       explanationPayload,
-      // Visual congestion conflict (camera shows a big queue but the wait is low/uncertain).
+      // Camera-vs-wait conflict (either a big queue with a low wait, or no queue with a high wait).
       visualBand: visualBand || null,
       visualCongestionConflict: congestion.conflict,
-      label: congestion.conflict ? 'Moguća gužva — provjeri' : combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
+      visualConflict,
+      conflictKind,
+      label: congestion.conflict ? 'Moguća gužva — provjeri' : clearConflict ? 'Provjeri — kamera se ne slaže' : combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
       className: combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
       sourceType: combined ? 'combined-estimate' : bestCandidate.sourceType,
       confidence: outScore,
@@ -3053,6 +3082,8 @@ async function buildEffectiveWaitMaps(store) {
         calibration: signal.calibration,
         visualBand: signal.visualBand,
         visualCongestionConflict: signal.visualCongestionConflict,
+        visualConflict: signal.visualConflict,
+        conflictKind: signal.conflictKind,
         independentSources: signal.independentSources,
         rangeMin: signal.rangeMin,
         rangeMax: signal.rangeMax,
@@ -3892,8 +3923,20 @@ app.get('/api/admin/camera/debug', authRequired, adminRequired, async (req, res)
       passedVehicles: c.passedVehicles ?? null,
       countLineCrossings: c.countLineCrossings ?? null,
     })),
-    yoloEnabled: YOLO_ENABLED,
-    yoloShadowMode: YOLO_SHADOW_MODE,
+    yolo: {
+      enabled: YOLO_ENABLED,
+      shadowEnabled: YOLO_SHADOW_MODE,
+      fusionEnabled: YOLO_FUSION_ENABLED,
+      shadowAllowlist: YOLO_SHADOW_ALLOWLIST,
+      fusionAllowlist: YOLO_FUSION_ALLOWLIST,
+      maxLatencyMs: YOLO_MAX_LATENCY_MS,
+      require: { roi: YOLO_REQUIRE_ROI, direction: YOLO_REQUIRE_DIRECTION, countLine: YOLO_REQUIRE_COUNTLINE },
+    },
+    // Per-camera YOLO eligibility (shadow/fusion) — OFF in fusion until enabled + allowlisted.
+    yoloEligibility: (CAMERA_FEEDS[crossingId] || []).map((camera) => ({
+      cameraId: camera.id,
+      ...cameraYoloEligibility(camera, direction, {}, { shadowAllowlist: YOLO_SHADOW_ALLOWLIST, fusionAllowlist: YOLO_FUSION_ALLOWLIST, maxLatencyMs: YOLO_MAX_LATENCY_MS, minConfidence: YOLO_MIN_CONFIDENCE }),
+    })),
   });
 });
 
@@ -5715,7 +5758,26 @@ async function runSnapshotCounter(camera, crossingId, direction, previousSnapsho
   const analysis = analyzeSnapshotImage(image, camera, direction, previousSnapshot, yoloForWait);
   if (!YOLO_ENABLED && YOLO_SHADOW_MODE && yoloResult) {
     const shadow = applyRoiToDetections(yoloResult.detections, camera.calibration || {}, { minConfidence: YOLO_MIN_CONFIDENCE });
-    analysis.yoloShadow = { queueVehicles: shadow.queueVehicles, visibleVehicles: shadow.visibleVehicles, detectionsBeforeRoi: shadow.detectionsBeforeRoi, detectionsAfterRoi: shadow.detectionsAfterRoi, counts: shadow.counts };
+    // Compute the v6 wait estimate from the YOLO signals (shadow only — never used for the
+    // displayed wait) so the admin can compare it against the legacy heuristic + official.
+    const shadowWait = estimateWaitFromCameraSignals({
+      queueVehicles: shadow.hasRoi ? shadow.queueVehicles : null,
+      flowVehiclesPerMinute: null, // single-frame YOLO has no flow yet (needs frame history)
+      calibrationProfile: camera.calibrationProfile || null,
+      hasRoi: shadow.hasRoi,
+      hasDirection: cameraContributionMode(camera, direction) === 'hard',
+      hasCountLine: Boolean(camera.countLine || camera.calibration?.countLine),
+    });
+    analysis.yoloShadow = {
+      queueVehicles: shadow.queueVehicles,
+      visibleVehicles: shadow.visibleVehicles,
+      detectionsBeforeRoi: shadow.detectionsBeforeRoi,
+      detectionsAfterRoi: shadow.detectionsAfterRoi,
+      counts: shadow.counts,
+      waitEstimateMinutes: shadowWait.waitMinutes,
+      waitRange: shadowWait.waitRange,
+      reasonCodes: shadowWait.reasonCodes,
+    };
   }
 
   // Multi-frame stale detection via average-hash. A frozen feed or cached placeholder

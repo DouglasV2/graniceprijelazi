@@ -105,9 +105,18 @@ describe('Scenario 7 (core fix): visual congestion conflict — camera shows a b
 
   it('Šamac: official wait with no camera congestion is NOT flagged as a camera estimate', async () => {
     const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [hardPublic(120)]);
-    expect(sig.visualCongestionConflict).toBe(false);
     expect(sig.explanationPayload.authorityTier).toBe('official');
     expect(sig.explanationPayload.sources.some((s) => s.kind === 'camera')).toBe(false);
+  });
+
+  it('Šamac inverse conflict: high wait but camera shows only a small queue → conflict, niska, verify', async () => {
+    // 6h-style absurd wait with the camera visually showing nema/mala kolona.
+    const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [hardPublic(360), cameraVisual('mala')]);
+    expect(sig.conflictKind).toBe('clear-high');
+    expect(sig.visualConflict).toBe(true);
+    expect(sig.confidenceLevel).toBe('niska');
+    expect(sig.label).toMatch(/provjeri/i);
+    expect(sig.note).toMatch(/kamera ne pokazuje/i);
   });
 });
 
