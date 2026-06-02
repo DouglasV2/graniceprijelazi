@@ -1276,10 +1276,19 @@ function cameraHasQueueRoi(camera = {}) {
 // declared direction (ambiguous — could show either side) or is explicitly valid for it. A
 // camera declared ONLY for the opposite direction must NOT bleed its queue into this direction
 // (the Maljevac bug: the "izlaz iz HR" queue showing as "ekstremna kolona" on the BiH→HR card).
-function cameraRelevantForDirection(camera = {}, direction = 'toBih') {
+function cameraRelevantForDirection(camera = {}, direction = 'toBih', allCameras = []) {
   const v = camera.validForDirections;
-  if (!Array.isArray(v) || v.length === 0) return true;
-  return v.includes(direction);
+  if (Array.isArray(v) && v.length > 0) return v.includes(direction);
+
+  // Ambiguous visual-only cameras are useful only when we have no direction-specific camera
+  // for this side. If a crossing has explicit entry/exit cameras, allowing a wide/unknown
+  // frame into both display aggregates makes a queue from one side appear in BOTH directions.
+  // This is display/fusion hygiene only; ambiguous cameras still show in the image grid/admin.
+  const hasDirectionSpecificCamera = Array.isArray(allCameras) && allCameras.some((candidate) => {
+    const dirs = candidate?.validForDirections;
+    return Array.isArray(dirs) && dirs.includes(direction);
+  });
+  return !hasDirectionSpecificCamera;
 }
 
 function applyCameraDirectionSafety() {
@@ -6119,7 +6128,7 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
   // Display aggregate + band must be DIRECTION-RELEVANT: a camera that only shows the opposite
   // direction must not contribute its queue to this direction's band/mix. Cameras with no
   // declared direction (ambiguous) still count. The full camera image grid is shown separately.
-  const directionRelevantRows = allSnapshotRows.filter((row) => cameraRelevantForDirection(feedById.get(row.cameraId) || {}, direction));
+  const directionRelevantRows = allSnapshotRows.filter((row) => cameraRelevantForDirection(feedById.get(row.cameraId) || {}, direction, feeds));
   const displayAggregate = aggregateCameraSnapshots(directionRelevantRows);
 
   const laneSignals = feeds.map((camera, index) => {
@@ -6430,12 +6439,21 @@ function remapSpeedReadingIntervals(intervals = [], sliceStart = 0, sliceEnd = I
   const out = [];
   for (const iv of intervals) {
     const gStart = Number(iv.startPolylinePointIndex ?? 0);
-    const gEnd = Number(iv.endPolylinePointIndex ?? gStart);
+    // Google can omit the end index for the last interval. Treat that as "until the end of
+    // the current slice"; the previous implementation defaulted it to start and dropped it.
+    const gEnd = iv.endPolylinePointIndex === undefined || iv.endPolylinePointIndex === null
+      ? Number(sliceEnd)
+      : Number(iv.endPolylinePointIndex);
     if (!Number.isFinite(gStart) || !Number.isFinite(gEnd)) continue;
-    const oStart = Math.max(gStart, sliceStart);
-    const oEnd = Math.min(gEnd, sliceEnd);
+    const oStart = Math.max(Math.min(gStart, gEnd), sliceStart);
+    const oEnd = Math.min(Math.max(gStart, gEnd), sliceEnd);
     if (oEnd <= oStart) continue; // no overlapping segment with the sliced path
-    out.push({ ...iv, startPolylinePointIndex: oStart - sliceStart, endPolylinePointIndex: oEnd - sliceStart, speed: iv.speed });
+    out.push({
+      ...iv,
+      startPolylinePointIndex: oStart - sliceStart,
+      endPolylinePointIndex: oEnd - sliceStart,
+      speed: iv.speed || trafficSpeedFromLevel(iv.level),
+    });
   }
   return out;
 }
@@ -6463,6 +6481,7 @@ function buildTrafficSummary(trafficSegments = [], totalMeters = 0) {
   return {
     hasTrafficIntervals: segs.length > 0,
     trafficIntervalCount: segs.length,
+    trafficSegmentCount: segs.length,
     normalSegmentCount,
     slowSegmentCount,
     trafficJamSegmentCount,
@@ -6550,7 +6569,8 @@ function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
   // Preserve Google's traffic: remap the original speedReadingIntervals onto the sliced path
   // (this is exactly where they used to be thrown away). The sliced path is around the border,
   // so the resulting segments are the NEAR-BORDER traffic — what matters for the wait.
-  const remappedIntervals = remapSpeedReadingIntervals(route.speedReadingIntervals || [], slice.startIndex, slice.endIndex);
+  const sourceTrafficIntervals = extractSpeedReadingIntervals(route);
+  const remappedIntervals = remapSpeedReadingIntervals(sourceTrafficIntervals, slice.startIndex, slice.endIndex);
   const displayTrafficSegments = buildTrafficSegments(displayPath, remappedIntervals);
   const displayTrafficSummary = buildTrafficSummary(displayTrafficSegments, displayDistanceMeters);
 
@@ -6825,21 +6845,59 @@ function trafficSegmentColorSpeed(speed) {
   return 'unknown';
 }
 
+function trafficSegmentSeverity(speedOrLevel) {
+  const level = trafficSegmentColorSpeed(speedOrLevel);
+  if (level === 'jam') return 2;
+  if (level === 'slow') return 1;
+  if (level === 'normal') return 0;
+  return null;
+}
+
+function trafficSpeedFromLevel(level = '') {
+  if (level === 'jam') return 'TRAFFIC_JAM';
+  if (level === 'slow') return 'SLOW';
+  if (level === 'normal') return 'NORMAL';
+  return 'SPEED_UNSPECIFIED';
+}
+
+function extractSpeedReadingIntervals(route = {}) {
+  if (Array.isArray(route.speedReadingIntervals) && route.speedReadingIntervals.length) return route.speedReadingIntervals;
+  // Defensive fallback: if a route was already normalized before another display/slicing pass,
+  // the original Google array may be missing while trafficSegments still carry the original
+  // point indexes. Convert those back into Google-like intervals instead of silently turning
+  // the route blue again. No segment is fabricated here; this only preserves existing signal.
+  if (!Array.isArray(route.trafficSegments) || !route.trafficSegments.length) return [];
+  return route.trafficSegments
+    .map((segment) => ({
+      startPolylinePointIndex: segment.startPolylinePointIndex,
+      endPolylinePointIndex: segment.endPolylinePointIndex,
+      speed: segment.speed || trafficSpeedFromLevel(segment.level),
+    }))
+    .filter((segment) => Number.isFinite(Number(segment.startPolylinePointIndex)) && Number.isFinite(Number(segment.endPolylinePointIndex)));
+}
+
 function buildTrafficSegments(pathPoints, intervals = []) {
   if (!Array.isArray(pathPoints) || pathPoints.length < 2 || !Array.isArray(intervals) || !intervals.length) return [];
 
   return intervals
     .map((interval, index) => {
-      const start = Math.max(0, Number(interval.startPolylinePointIndex ?? 0));
-      const end = Math.min(pathPoints.length - 1, Number(interval.endPolylinePointIndex ?? pathPoints.length - 1));
-      const segmentPath = pathPoints.slice(start, end + 1);
+      const start = Math.max(0, Math.min(pathPoints.length - 1, Number(interval.startPolylinePointIndex ?? 0)));
+      const endRaw = interval.endPolylinePointIndex === undefined || interval.endPolylinePointIndex === null
+        ? pathPoints.length - 1
+        : Number(interval.endPolylinePointIndex);
+      const end = Math.max(0, Math.min(pathPoints.length - 1, endRaw));
+      const from = Math.min(start, end);
+      const to = Math.max(start, end);
+      const segmentPath = pathPoints.slice(from, to + 1);
+      const speed = interval.speed || 'SPEED_UNSPECIFIED';
 
       return {
         id: `traffic-${index + 1}`,
-        speed: interval.speed || 'SPEED_UNSPECIFIED',
-        level: trafficSegmentColorSpeed(interval.speed),
-        startPolylinePointIndex: start,
-        endPolylinePointIndex: end,
+        speed,
+        level: trafficSegmentColorSpeed(speed),
+        severity: trafficSegmentSeverity(speed),
+        startPolylinePointIndex: from,
+        endPolylinePointIndex: to,
         path: segmentPath.length >= 2 ? segmentPath : [],
       };
     })
@@ -7677,6 +7735,7 @@ export {
   // Google traffic-aware route helpers (exposed for unit tests).
   buildTrafficSegments,
   buildTrafficSummary,
+  extractSpeedReadingIntervals,
   remapSpeedReadingIntervals,
   makeMapFriendlyControlZoneRoute,
   // Exposed for integration tests (mint an admin token against the seeded admin user).

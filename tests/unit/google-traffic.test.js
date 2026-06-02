@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildTrafficSegments,
   buildTrafficSummary,
+  extractSpeedReadingIntervals,
   remapSpeedReadingIntervals,
   makeMapFriendlyControlZoneRoute,
 } from '../../server/index.js';
@@ -26,6 +27,15 @@ describe('buildTrafficSegments (A. parsing)', () => {
   });
   it('returns nothing without intervals (so the route stays plain blue)', () => {
     expect(buildTrafficSegments(path, [])).toEqual([]);
+  });
+
+  it('includes severity so the frontend can render true traffic colors', () => {
+    const segs = buildTrafficSegments(path, [
+      { startPolylinePointIndex: 0, endPolylinePointIndex: 3, speed: 'NORMAL' },
+      { startPolylinePointIndex: 3, endPolylinePointIndex: 6, speed: 'SLOW' },
+      { startPolylinePointIndex: 6, endPolylinePointIndex: 10, speed: 'TRAFFIC_JAM' },
+    ]);
+    expect(segs.map((s) => s.severity)).toEqual([0, 1, 2]);
   });
 });
 
@@ -70,6 +80,30 @@ describe('remapSpeedReadingIntervals (B. slicing remap)', () => {
   it('no intervals → empty', () => {
     expect(remapSpeedReadingIntervals([], 40, 70)).toEqual([]);
   });
+
+  it('keeps a last interval with omitted endPolylinePointIndex instead of dropping it', () => {
+    const intervals = [{ startPolylinePointIndex: 45, speed: 'TRAFFIC_JAM' }];
+    const remapped = remapSpeedReadingIntervals(intervals, 40, 70);
+    expect(remapped).toHaveLength(1);
+    expect(remapped[0].startPolylinePointIndex).toBe(5);
+    expect(remapped[0].endPolylinePointIndex).toBe(30);
+  });
+});
+
+
+describe('extractSpeedReadingIntervals (defensive preservation)', () => {
+  it('reconstructs Google-like intervals from existing trafficSegments when raw intervals are missing', () => {
+    const route = {
+      trafficSegments: [
+        { startPolylinePointIndex: 2, endPolylinePointIndex: 5, level: 'slow' },
+        { startPolylinePointIndex: 5, endPolylinePointIndex: 8, speed: 'TRAFFIC_JAM' },
+      ],
+    };
+    expect(extractSpeedReadingIntervals(route)).toEqual([
+      { startPolylinePointIndex: 2, endPolylinePointIndex: 5, speed: 'SLOW' },
+      { startPolylinePointIndex: 5, endPolylinePointIndex: 8, speed: 'TRAFFIC_JAM' },
+    ]);
+  });
 });
 
 describe('makeMapFriendlyControlZoneRoute (B. traffic survives the route guard)', () => {
@@ -87,6 +121,23 @@ describe('makeMapFriendlyControlZoneRoute (B. traffic survives the route guard)'
     expect(display.trafficSegments.length).toBeGreaterThan(0);
     expect(display.trafficSummary.worstTrafficLevel).toBe('TRAFFIC_JAM');
     expect(display.trafficSummary.trafficSegmentsPreservedAfterRouteGuard).toBe(true);
+  });
+
+
+  it('preserves already-normalized trafficSegments if raw speedReadingIntervals were lost upstream', () => {
+    const route = {
+      path,
+      distanceMeters: 1000,
+      durationMinutes: 10,
+      staticMinutes: 8,
+      speedReadingIntervals: [],
+      trafficSegments: [
+        { startPolylinePointIndex: 2, endPolylinePointIndex: 8, speed: 'TRAFFIC_JAM', level: 'jam', path: path.slice(2, 9) },
+      ],
+    };
+    const display = makeMapFriendlyControlZoneRoute(route, anchor);
+    expect(display.trafficSegments.length).toBeGreaterThan(0);
+    expect(display.trafficSummary.worstTrafficLevel).toBe('TRAFFIC_JAM');
   });
 
   it('a route with no traffic intervals stays blue (no fabricated segments)', () => {

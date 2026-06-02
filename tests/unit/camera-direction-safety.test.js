@@ -80,3 +80,17 @@ describe('direction-relevant display band (Maljevac opposite-lane leak fix)', ()
     expect(cameraRelevantForDirection(cam('maljevac', 'mal-bihamk-kladusa'), 'toBih')).toBe(true);
   });
 });
+
+describe('direction-relevant display band with explicit cameras present', () => {
+  it('an ambiguous visual camera does not bleed into both directions when that side has an explicit camera', () => {
+    const feeds = CAMERA_FEEDS.maljevac;
+    expect(cameraRelevantForDirection(cam('maljevac', 'mal-bihamk-kladusa'), 'toHr', feeds)).toBe(false);
+    expect(cameraRelevantForDirection(cam('maljevac', 'mal-bihamk-kladusa'), 'toBih', feeds)).toBe(false);
+  });
+
+  it('an ambiguous visual camera remains relevant when it is the only available visual clue for that side', () => {
+    const feeds = [cam('maljevac', 'mal-bihamk-kladusa')];
+    expect(cameraRelevantForDirection(feeds[0], 'toHr', feeds)).toBe(true);
+    expect(cameraRelevantForDirection(feeds[0], 'toBih', feeds)).toBe(true);
+  });
+});
