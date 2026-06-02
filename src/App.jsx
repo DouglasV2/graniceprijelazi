@@ -3142,6 +3142,9 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
                 {borderSourceMeta.hasStrongCameraQueue && (
                   <span className="signal-badge signal-camera-queue">Kamera: kolona vidljiva</span>
                 )}
+                {routePayload.live && routePayload.trafficAvailable === false && (
+                  <span className="signal-badge signal-soft-bound" title="Google nije vratio podatke o gustoći prometa za ovu dionicu — linija je plava jer nema žive procjene, ne zato što je dokazano prohodno.">Promet: podaci nedostupni</span>
+                )}
               </div>
               {borderSourceMeta.note && (
                 <p className="route-note">{borderSourceMeta.note}</p>

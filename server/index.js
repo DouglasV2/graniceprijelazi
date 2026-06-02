@@ -3971,6 +3971,38 @@ app.get('/api/admin/camera/debug', authRequired, adminRequired, async (req, res)
     return res.status(500).json({ ok: false, error: safeError(error) });
   }
   const a = payload.analytics || {};
+  // Directional band provenance: list EVERY configured camera (not just the ones that survived
+  // the direction filter) and say, per camera, whether it was allowed to drive THIS direction's
+  // visual band and why. This is what proves a wrong/opposite-direction or ambiguous camera is
+  // not bleeding its queue into the other direction (the Maljevac "both sides jammed" bug).
+  const feeds = CAMERA_FEEDS[crossingId] || [];
+  const snapById = new Map((a.cameraSnapshots || []).map((c) => [c.cameraId, c]));
+  const explicitDirectionCameraIds = feeds.filter((c) => Array.isArray(c.validForDirections) && c.validForDirections.includes(direction)).map((c) => c.id);
+  const ambiguousCameraIds = feeds.filter((c) => !Array.isArray(c.validForDirections) || c.validForDirections.length === 0).map((c) => c.id);
+  const visualBandContributors = feeds.map((camera) => {
+    const v = camera.validForDirections;
+    const explicit = Array.isArray(v) && v.length > 0;
+    const ambiguous = !explicit;
+    const usedForDirectionalBand = cameraRelevantForDirection(camera, direction, feeds);
+    const snap = snapById.get(camera.id) || null;
+    let reason;
+    if (explicit) reason = usedForDirectionalBand ? 'explicit-for-direction' : 'explicit-opposite-direction-excluded';
+    else reason = usedForDirectionalBand ? 'ambiguous-fallback-no-explicit-camera' : 'ambiguous-excluded-explicit-camera-present';
+    return {
+      cameraId: camera.id,
+      cameraLabel: camera.label,
+      validForDirections: explicit ? v : null,
+      ambiguous,
+      waitCapable: snap ? snap.visualOnly === false : false,
+      visualOnly: snap ? Boolean(snap.visualOnly) : true,
+      congestionBand: snap?.queueBand ?? null,
+      visibleVehicles: snap?.visibleVehicles ?? null,
+      queueVehicles: snap?.queueVehicles ?? null,
+      frameFresh: snap ? snap.stale !== true : null,
+      usedForDirectionalBand,
+      reason,
+    };
+  });
   res.json({
     ok: true,
     crossingId,
@@ -3980,6 +4012,11 @@ app.get('/api/admin/camera/debug', authRequired, adminRequired, async (req, res)
     wait: a.wait,
     queueBand: a.queueBand,
     queueBandLabel: a.queueBandLabel,
+    finalVisualBand: a.queueBand || null,
+    explicitDirectionCameraIds,
+    ambiguousCameraIds,
+    selectedCameraIdsForDirection: visualBandContributors.filter((c) => c.usedForDirectionalBand).map((c) => c.cameraId),
+    visualBandContributors,
     source: a.source,
     confidence: a.confidence,
     cameras: (a.cameraSnapshots || []).map((c) => ({
@@ -4020,6 +4057,72 @@ app.get('/api/admin/camera/debug', authRequired, adminRequired, async (req, res)
       ...cameraYoloEligibility(camera, direction, {}, { shadowAllowlist: YOLO_SHADOW_ALLOWLIST, fusionAllowlist: YOLO_FUSION_ALLOWLIST, maxLatencyMs: YOLO_MAX_LATENCY_MS, minConfidence: YOLO_MIN_CONFIDENCE }),
     })),
   });
+});
+
+// ── LIVE ROUTE-TRAFFIC DEBUG (proof that Google traffic survives the whole pipeline) ──────
+// Runs the REAL pipeline for one crossing/direction — same request, field mask and
+// extra-computations the public route uses — then walks the signal stage by stage:
+//   raw Google speedReadingIntervals → normalizeRoute → makeMapFriendlyControlZoneRoute slice
+//     → public payload trafficSegments.
+// Use this to settle, with live numbers, whether Google returns traffic intervals at all and
+// (if it does) whether any are lost on slicing. Admin-gated; never exposed publicly.
+app.get('/api/debug/route-traffic/:crossingId', authRequired, adminRequired, async (req, res) => {
+  const crossingId = String(req.params.crossingId || '').trim();
+  const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
+  const crossing = BORDER_CROSSINGS[crossingId];
+  if (!crossing) return res.status(404).json({ ok: false, error: 'Nepoznat prijelaz.' });
+  const anchor = crossing.anchors[direction] || crossing.anchors.toBih;
+  if (!serverKey) {
+    return res.json({ ok: false, crossingId, direction, googleRequestUsesTraffic: false, usedFallbackRoute: true, routeSource: 'no-server-key', note: 'GOOGLE_MAPS_SERVER_KEY nije postavljen — Google se ne zove, traffic je nedostupan.' });
+  }
+  if (!anchor.routeGuard) {
+    return res.json({ ok: false, crossingId, direction, usedFallbackRoute: true, routeSource: 'route-pending', note: 'Prijelaz nema kalibrirani routeGuard pa se cestovna linija (i traffic) ne crta.' });
+  }
+  const request = routeRequest({
+    origin: latLngWaypoint(anchor.approachStart),
+    destination: latLngWaypoint(anchor.exitPoint),
+    intermediates: anchor.borderPoint ? [latLngWaypoint(anchor.borderPoint, { via: true })] : [],
+    alternatives: false,
+  });
+  try {
+    const data = await fetchRoutes(request);
+    const rawRoute = data?.routes?.[0];
+    if (!rawRoute) return res.json({ ok: false, crossingId, direction, googleRequestUsesTraffic: true, usedFallbackRoute: true, routeSource: 'google-empty', note: 'Google nije vratio nijednu rutu za ovaj zahtjev.' });
+    const rawIntervals = rawRoute.travelAdvisory?.speedReadingIntervals || [];
+    const normalized = normalizeRoute(rawRoute, 0, { crossingId: crossing.id, direction });
+    const display = makeMapFriendlyControlZoneRoute({ ...normalized, primary: true }, anchor);
+    const segs = display.trafficSegments || [];
+    const levelCount = (lvl) => segs.filter((s) => (s.level || trafficSegmentColorSpeed(s.speed)) === lvl).length;
+    res.json({
+      ok: true,
+      crossingId: crossing.id,
+      direction,
+      googleRequestUsesTraffic: request.extraComputations?.includes('TRAFFIC_ON_POLYLINE') || false,
+      fieldMaskHasSpeedIntervals: true,
+      requestRoutingPreference: request.routingPreference,
+      rawSpeedReadingIntervalsCount: rawIntervals.length,
+      rawSpeedReadingLevels: rawIntervals.map((iv) => iv.speed),
+      normalizedTrafficSegmentsCount: (normalized.trafficSegments || []).length,
+      slicedDisplayPathPoints: (display.path || []).length,
+      slicedTrafficSegmentsCount: segs.length,
+      normalSegmentCount: levelCount('normal'),
+      slowSegmentCount: levelCount('slow'),
+      trafficJamSegmentCount: levelCount('jam'),
+      worstTrafficLevel: display.trafficSummary?.worstTrafficLevel,
+      smallestSegmentPathLength: segs.length ? Math.min(...segs.map((s) => (s.path || []).length)) : 0,
+      routeSource: normalized.source,
+      usedFallbackRoute: false,
+      routeTrafficPreservedAfterSlicing: Boolean(display.trafficSummary?.trafficSegmentsPreservedAfterRouteGuard) || segs.length > 0,
+      trafficAvailable: rawIntervals.length > 0,
+      note: rawIntervals.length === 0
+        ? 'Google ne vraća traffic intervals za ovu rutu (cesta je protočna ili nema podataka) — linija je ispravno plava, nije bug.'
+        : segs.length === 0
+          ? 'Google je vratio intervale, ali nijedan se ne preklapa s kontrolnom zonom oko granice.'
+          : 'Google traffic intervali su sačuvani kroz cijeli pipeline do public payloada.',
+    });
+  } catch (error) {
+    res.status(502).json({ ok: false, crossingId, direction, googleRequestUsesTraffic: true, usedFallbackRoute: true, error: safeError(error), note: 'Google Routes poziv nije uspio (vidi error).' });
+  }
 });
 
 // ── CONSOLIDATED ADMIN OVERVIEW (spec V5 §8) ──────────────────────────────────
@@ -7256,6 +7359,12 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
   }
 
   const combinedRoutes = [...rankedAccepted, ...variantRoutes];
+  const displayRoutes = combinedRoutes.map((route, index) => makeMapFriendlyControlZoneRoute({ ...route, primary: index === 0 }, anchor));
+  // Honest traffic-availability flag: true only when Google actually returned speed-reading
+  // intervals for at least one drawn route. When false the lines are plain blue because there
+  // is no live density data — NOT because the road is provably clear. The UI uses this to say
+  // "promet podaci nedostupni" instead of implying everything is flowing.
+  const trafficAvailable = displayRoutes.some((route) => (route.trafficSegments || []).length > 0 || route.trafficSummary?.hasTrafficIntervals);
 
   return {
     ok: true,
@@ -7272,9 +7381,10 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
     updatedAt: new Date().toISOString(),
     source: 'Google Routes API + route guard',
     displayMode: 'control_zone',
+    trafficAvailable,
     note: rejected.length ? `${rejected.length} Google alternativa je odbačena jer ne prolazi kroz kalibrirane točke prijelaza. Na karti prikazujemo samo provjerenu zonu oko granice.` : 'Na karti prikazujemo samo provjerenu cestovnu zonu oko prijelaza, bez umjetnih početnih i završnih točaka.',
     rejectedRoutes: process.env.NODE_ENV === 'production' ? undefined : rejected.map((route) => ({ id: route.id, distanceKm: route.distanceKm, routeGuard: route.routeGuard })),
-    routes: combinedRoutes.map((route, index) => makeMapFriendlyControlZoneRoute({ ...route, primary: index === 0 }, anchor)),
+    routes: displayRoutes,
   };
 }
 
