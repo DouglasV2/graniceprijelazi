@@ -3397,6 +3397,13 @@ function CameraPanel({ crossing, selectedDirection }) {
   const historySeries = analytics.history?.length ? analytics.history : buildCameraHistorySeries(crossing);
   const maxPassed = Math.max(...historySeries.map((item) => item.passed), 1);
   const state = statusMeta[analytics.state] || statusMeta.normal;
+  // Camera-card honesty (spec — no false "procjena iz kamere"): the camera only shows a
+  // minute estimate when a real, fresh, direction-verified camera actually drove it. When the
+  // camera contradicts the official/fused headline by a lot, we defer to the headline and do
+  // NOT present the camera number as the truth.
+  const cameraHeadlineWait = getDisplayedWait(crossing, selectedDirection, {});
+  const cameraContradictsOfficial = analytics.cameraEstimateReliable && hasKnownWait(cameraHeadlineWait) && hasKnownWait(analytics.wait) && Math.abs(Number(analytics.wait) - Number(cameraHeadlineWait)) > 20;
+  const cameraEstimateUsable = analytics.cameraEstimateReliable === true && analytics.waitIsCameraDriven === true && !cameraContradictsOfficial;
   const laneProfile = analytics.laneProfile || aggregateLaneProfile(analytics.laneSignals || []);
   const showLanes = crossingHasLaneCalibration(crossing);
   const selectedSignalData = analytics.laneSignals.find((signal) => signal.id === selectedSignal) || analytics.laneSignals[0];
@@ -3475,15 +3482,19 @@ function CameraPanel({ crossing, selectedDirection }) {
       </div>
 
       <div className="camera-analytics-grid">
-        <article className={`camera-intelligence-card ${trafficClassFromWait(analytics.wait)}`}>
+        <article className={`camera-intelligence-card ${cameraEstimateUsable ? trafficClassFromWait(analytics.wait) : 'pending'}`}>
           <div className="camera-intelligence-head">
             <div>
-              <span>Procjena iz kamera</span>
-              <strong>{formatMinutes(analytics.wait)}</strong>
+              <span>{cameraEstimateUsable ? 'Procjena iz kamera' : 'Kamera — vizualna provjera'}</span>
+              <strong>{cameraEstimateUsable ? formatMinutes(analytics.wait) : (analytics.queueBandLabel || 'Vizualna provjera')}</strong>
             </div>
             <b className={`status ${state.className}`}>{state.label}</b>
           </div>
-          <p>{analytics.message}</p>
+          <p>{cameraEstimateUsable
+            ? analytics.message
+            : cameraContradictsOfficial
+              ? `Kamera pokazuje ~${formatMinutes(analytics.wait)}, ali službeni izvor pokazuje ${formatMinutes(cameraHeadlineWait)} — prikazujemo službenu procjenu, a kamera služi za vizualnu provjeru.`
+              : 'Za ovaj smjer kamera trenutno služi samo za vizualnu provjeru — čekanje nije izvedeno iz kamere.'}</p>
           <div className="camera-stat-grid">
             <div><span>Zadnjih 15 min</span><strong>{analytics.passed15}</strong><small>vozila</small></div>
             <div><span>Protok</span><strong>{analytics.throughputPerHour}</strong><small>vozila/h</small></div>
@@ -3501,10 +3512,10 @@ function CameraPanel({ crossing, selectedDirection }) {
             <span>🚐 {analytics.vehicleMix15.vans || 0}</span>
             <span>🚛 {analytics.vehicleMix15.trucks}</span>
             <span>🚌 {analytics.vehicleMix15.buses}</span>
-            <span>{confidenceLabel(analytics.confidence)}</span>
-            <span>Prema kameri</span>
+            <span>{cameraEstimateUsable ? confidenceLabel(analytics.confidence) : 'Vizualna provjera'}</span>
+            <span>{cameraEstimateUsable ? 'Prema kameri' : 'Procjena nije iz kamere'}</span>
           </div>
-          {analytics.cameraSnapshots?.length ? <p className="camera-source-note">Procjena iz kamera pomaže orijentaciji, ali službene obavijesti i dalje imaju prednost.</p> : null}
+          {cameraEstimateUsable && analytics.cameraSnapshots?.length ? <p className="camera-source-note">Procjena iz kamera pomaže orijentaciji, ali službene obavijesti i dalje imaju prednost.</p> : null}
         </article>
 
         <article className="camera-flow-card">

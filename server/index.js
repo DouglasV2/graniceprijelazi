@@ -1256,6 +1256,13 @@ function inferCameraDirections(camera = {}) {
   return null; // unprovable → visualOnly
 }
 
+// A camera is "wait-capable by configuration" only with an explicit calibrated queue ROI
+// (a lane/queue region, anchor or zones) — NOT the default full-frame fallback (spec §5).
+function cameraHasQueueRoi(camera = {}) {
+  const cal = camera.calibration || {};
+  return Boolean(cal.roi || cal.queueAnchor || (Array.isArray(cal.laneZones) && cal.laneZones.length));
+}
+
 function applyCameraDirectionSafety() {
   for (const feeds of Object.values(CAMERA_FEEDS)) {
     for (const camera of feeds) {
@@ -3802,6 +3809,149 @@ app.get('/api/admin/camera/debug', authRequired, adminRequired, async (req, res)
   });
 });
 
+// ── FULL CAMERA SANITY AUDIT (spec — every crossing/camera/direction) ─────────
+// Treats the Maljevac/Svilaj false-wait as a CLASS of problem: every camera×direction gets a
+// known status (wait-capable / visual-only / stale / missing-config), automatic warnings, and
+// a recommendation. Decides which cameras may drive the wait and which are display-only.
+async function buildCameraAudit({ crossingId = null, direction = null, includeSnapshots = false, configOnly = false } = {}) {
+  const crossingList = crossingId && BORDER_CROSSINGS[crossingId] ? [BORDER_CROSSINGS[crossingId]] : Object.values(BORDER_CROSSINGS);
+  const directions = direction ? [direction] : ['toBih', 'toHr'];
+  const all = [];
+  for (const crossing of crossingList) {
+    const feeds = CAMERA_FEEDS[crossing.id] || [];
+    for (const dir of directions) {
+      let analytics = {};
+      let fusedWait = null;
+      let fusedHasBoothSignal = false;
+      // configOnly skips all network/analytics — used by the startup report.
+      if (!configOnly) {
+        try { analytics = (await buildCameraAnalyticsPayload(crossing.id, dir, { forceSnapshot: includeSnapshots })).analytics || {}; } catch { analytics = {}; }
+        try {
+          const sig = await effectiveBorderSignal(crossing, dir, 'car');
+          fusedWait = sig.displayReady === false ? null : sig.wait;
+          fusedHasBoothSignal = Boolean(sig.hasHardPublicSignal || sig.hasMeasuredSession);
+        } catch { /* optional */ }
+      }
+      const snapByCam = new Map((analytics.cameraSnapshots || []).map((c) => [c.cameraId, c]));
+      for (const camera of feeds) {
+        const snap = snapByCam.get(camera.id) || null;
+        const cal = camera.calibration || {};
+        const hasQueueRoi = cameraHasQueueRoi(camera);
+        const hasCountLine = Boolean(cal.countLine);
+        const hasIgnoreZones = Boolean(cal.ignoreZones && cal.ignoreZones.length);
+        const directionDeclared = Array.isArray(camera.validForDirections) && camera.validForDirections.length > 0;
+        const configuredForDirection = directionDeclared && camera.validForDirections.includes(dir);
+        const contributionMode = cameraContributionMode(camera, dir);
+        const visualOnly = contributionMode !== 'hard';
+        const hasSnapshot = Boolean(snap);
+        const stale = Boolean(snap?.stale);
+        const occ = snap?.occupancyPct ?? 0;
+        const real = snap?.visibleVehicles ?? 0;
+        const waitCapable = !visualOnly && hasQueueRoi && configuredForDirection;
+        const cameraEstimateReliable = Boolean(snap && snap.contributesWait !== null && !stale && !visualOnly);
+
+        const warnings = [];
+        if (!hasQueueRoi) warnings.push('missing_queue_roi');
+        if (!hasCountLine) warnings.push('missing_count_line');
+        if (!directionDeclared) warnings.push('direction_not_verified');
+        if (stale) warnings.push('stale_snapshot');
+        if (!hasSnapshot) warnings.push('no_recent_snapshot');
+        if (hasIgnoreZones === false && hasQueueRoi) { /* ignore zones are optional; no warning */ }
+        if (hasSnapshot && occ >= 45 && real < 4) warnings.push('occupancy_without_vehicle_evidence');
+        if (hasSnapshot && (snap.flowVehicles15 || 0) <= 8 && (snap.queueVehicles || 0) <= 2 && (snap.wait || 0) > 8) warnings.push('low_throughput_without_queue');
+        if (analytics.source === 'baseline-camera-model' && analytics.waitIsCameraDriven) warnings.push('baseline_used_as_live_signal');
+        if (hasSnapshot && snap.contributesWait !== null && !cameraEstimateReliable) warnings.push('camera_wait_without_reliable_signal');
+        if (hasSnapshot && snap.queueBand && (snap.queueBand === 'nema' || snap.queueBand === 'mala') && Number(snap.wait || 0) > (snap.queueBand === 'nema' ? 8 : 15)) warnings.push('camera_estimate_too_high_for_queue_band');
+        if (visualOnly && hasSnapshot && snap.contributesWait !== null) warnings.push('visual_only_but_ui_shows_camera_estimate');
+        if (hasSnapshot && Number.isFinite(Number(snap.wait)) && Number.isFinite(Number(fusedWait)) && fusedHasBoothSignal && Math.abs(Number(snap.wait) - Number(fusedWait)) > 20) warnings.push('camera_contradicts_official_signal');
+
+        const mode = !hasQueueRoi || !directionDeclared ? 'missing-config'
+          : !hasSnapshot || stale ? 'stale/unavailable'
+          : visualOnly ? 'visual-only'
+          : 'wait-capable';
+        let recommendation;
+        if (warnings.includes('missing_queue_roi')) recommendation = 'Dodaj queue ROI prije YOLO + ROI; do tada vizualna provjera.';
+        else if (warnings.includes('direction_not_verified')) recommendation = 'Potvrdi smjer (validForDirections) ili ostavi kao visual-only.';
+        else if (warnings.includes('camera_contradicts_official_signal')) recommendation = 'Kamera proturječi službenom izvoru — ne koristiti kao wait dok se ne kalibrira/provjeri ROI.';
+        else if (warnings.includes('occupancy_without_vehicle_evidence') || warnings.includes('camera_estimate_too_high_for_queue_band')) recommendation = 'Sumnjiva procjena bez stvarnih vozila — ostaje vizualna provjera.';
+        else if (mode === 'wait-capable') recommendation = 'OK za fusion uz nadzor; finalno potvrditi nakon measured volumena.';
+        else if (mode === 'stale/unavailable') recommendation = 'Nema svježeg snapshota; samo vizualna provjera dok feed ne proradi.';
+        else recommendation = 'Vizualna provjera; ne ulazi u izračun čekanja.';
+
+        all.push({
+          crossingId: crossing.id,
+          crossingName: crossing.shortName || crossing.name,
+          direction: dir,
+          cameraId: camera.id,
+          cameraLabel: camera.label,
+          sourceName: camera.source || 'HAK',
+          url: camera.url || '',
+          enabled: true,
+          mode,
+          configuredForDirection,
+          validForDirections: camera.validForDirections || [],
+          hasQueueRoi,
+          hasCountLine,
+          hasIgnoreZones,
+          stale,
+          ageSeconds: snap?.snapshotAgeSec ?? null,
+          visualOnly,
+          waitCapable,
+          cameraEstimateReliable,
+          visibleVehicles: snap?.visibleVehicles ?? null,
+          queueVehicles: snap?.queueVehicles ?? null,
+          occupancyPct: snap?.occupancyPct ?? null,
+          laneFullnessPct: snap?.laneFullnessPct ?? null,
+          flowVehicles15: snap?.flowVehicles15 ?? null,
+          queueEvidenceScore: snap?.queueEvidenceScore ?? null,
+          queueBand: snap?.queueBand ?? null,
+          preGuardWait: snap?.preGuardWait ?? null,
+          postGuardWait: snap?.wait ?? null,
+          guardApplied: Boolean(snap?.guardApplied),
+          guardReason: snap?.guardApplied ? `evidence cap ${snap?.evidenceCap} min (band: ${snap?.queueBand})` : null,
+          waitIsCameraDriven: Boolean(analytics.waitIsCameraDriven),
+          source: analytics.source,
+          fusedWait,
+          warnings,
+          recommendation,
+          ...(includeSnapshots ? { snapshot: snap } : {}),
+        });
+      }
+    }
+  }
+  const count = (pred) => all.filter(pred).length;
+  const summary = {
+    totalEntries: all.length,
+    uniqueCameras: new Set(all.map((c) => `${c.crossingId}:${c.cameraId}`)).size,
+    waitCapable: count((c) => c.waitCapable),
+    visualOnly: count((c) => c.visualOnly),
+    stale: count((c) => c.stale),
+    missingQueueRoi: count((c) => c.warnings.includes('missing_queue_roi')),
+    missingCountLine: count((c) => c.warnings.includes('missing_count_line')),
+    withWarnings: count((c) => c.warnings.length > 0),
+    safeForFusion: count((c) => c.cameraEstimateReliable && c.waitCapable && !c.warnings.includes('camera_contradicts_official_signal')),
+    excludedFromFusion: count((c) => !(c.cameraEstimateReliable && c.waitCapable)),
+    topRisky: [...all].sort((a, b) => b.warnings.length - a.warnings.length).filter((c) => c.warnings.length).slice(0, 8).map((c) => ({ crossingId: c.crossingId, cameraId: c.cameraId, direction: c.direction, mode: c.mode, warnings: c.warnings })),
+  };
+  return { all, summary };
+}
+
+app.get('/api/admin/camera/audit', authRequired, adminRequired, async (req, res) => {
+  const crossingId = String(req.query.crossingId || '').trim() || null;
+  const direction = req.query.direction === 'toHr' ? 'toHr' : req.query.direction === 'toBih' ? 'toBih' : null;
+  const includeSnapshots = req.query.includeSnapshots === 'true';
+  const onlyProblems = req.query.onlyProblems === 'true';
+  if (crossingId && !BORDER_CROSSINGS[crossingId]) return res.status(404).json({ ok: false, error: 'Nepoznat prijelaz.' });
+  let result;
+  try {
+    result = await buildCameraAudit({ crossingId, direction, includeSnapshots });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: safeError(error) });
+  }
+  const cameras = onlyProblems ? result.all.filter((c) => c.warnings.length > 0) : result.all;
+  res.json({ ok: true, generatedAt: new Date().toISOString(), summary: result.summary, cameras });
+});
+
 // ── PRODUCTION TELEMETRY (spec §11) ───────────────────────────────────────────
 // Per crossing/direction: which sources are available, how fresh the camera and
 // official feeds are, the confidence level right now, and the accuracy summary.
@@ -5092,8 +5242,18 @@ function estimateCameraFlowFromSnapshot({ visibleTotal = 0, visibleVehicles = nu
     const occupancyFloor = Math.round(clampNumber((fullness - 38) * 0.7, 0, 42));
     wait = Math.max(wait, occupancyFloor);
   }
+  // Diagnostics: the wait BEFORE the evidence ceiling, and whether the ceiling fired.
+  const preGuardWait = clampWait(wait);
   // Apply the evidence ceiling LAST — the negative-evidence veto.
   wait = Math.min(wait, evidenceCap);
+  const guardApplied = preGuardWait !== null && clampWait(wait) !== preGuardWait;
+  // How much REAL evidence supports a queue (0-1). Penalised when area fullness is high but
+  // few vehicles are actually detected (the dark-frame / shadow false-positive signature).
+  let queueEvidenceScore;
+  if (realVehicles <= 2) queueEvidenceScore = clampNumber(realVehicles / 10, 0, 0.2);
+  else queueEvidenceScore = clampNumber(0.3 + Math.min(realVehicles, 20) / 20 * 0.7, 0, 1);
+  if (fullness >= 45 && realVehicles < 4) queueEvidenceScore = Math.min(queueEvidenceScore, 0.2);
+  queueEvidenceScore = Math.round(queueEvidenceScore * 100) / 100;
 
   let confidence = Math.round(54 + Math.min(16, realVehicles * 1.4) - Math.max(0, fullness - 40) * 0.3 + (queueTrend === 'unknown' ? -4 : 4));
   if (queueBand === 'nema' || queueBand === 'mala') confidence = Math.min(confidence, 52);
@@ -5105,6 +5265,9 @@ function estimateCameraFlowFromSnapshot({ visibleTotal = 0, visibleVehicles = nu
     visibleVehicles: realVehicles,
     queueBand,
     evidenceCap,
+    preGuardWait,
+    guardApplied,
+    queueEvidenceScore,
     flowVehicles15,
     throughputPerHour: Math.max(8, flowVehicles15 * 4),
     wait: clampWait(wait),
@@ -5285,6 +5448,9 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null)
     queueVehicles: flowEstimate.queueVehicles,
     queueBand: flowEstimate.queueBand,
     evidenceCap: flowEstimate.evidenceCap,
+    preGuardWait: flowEstimate.preGuardWait,
+    guardApplied: flowEstimate.guardApplied,
+    queueEvidenceScore: flowEstimate.queueEvidenceScore,
     passed15: flowEstimate.flowVehicles15,
     flowVehicles15: flowEstimate.flowVehicles15,
     throughputPerHour: flowEstimate.throughputPerHour,
@@ -5558,6 +5724,10 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
     const camera = feedById.get(row.cameraId);
     if (!camera) return false;
     if (cameraContributionMode(camera, direction) !== 'hard') return false;
+    // Must have a calibrated queue ROI to drive the wait (spec §5) — a default full-frame
+    // ROI is not a queue ROI and can fabricate waits. Such cameras stay visual-only until
+    // ROI is configured (surfaced by /api/admin/camera/audit before YOLO+ROI).
+    if (!cameraHasQueueRoi(camera)) return false;
     if (row.stale || row.metadata?.stale) return false;
     return true;
   });
@@ -5714,6 +5884,11 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
           waitRangeMax: item.metadata?.waitRangeMax,
           method: item.method,
           fetchedAt: item.fetchedAt,
+          // Guard diagnostics for the camera audit.
+          preGuardWait: item.preGuardWait ?? null,
+          guardApplied: Boolean(item.guardApplied),
+          evidenceCap: item.evidenceCap ?? null,
+          queueEvidenceScore: item.queueEvidenceScore ?? null,
           ...analysis,
         };
       }),
@@ -7029,6 +7204,7 @@ export {
   analyzeSnapshotImage,
   buildCameraAnalyticsPayload,
   inferCameraDirections,
+  buildCameraAudit,
   // Exposed for integration tests (mint an admin token against the seeded admin user).
   signToken,
 };
@@ -7071,6 +7247,14 @@ if (process.env.NODE_ENV !== 'test') {
         console.log(`PrijelazRadar backend running on http://localhost:${port}`);
         console.log(`Datastore: ${datastoreMode}`);
         console.log(serverKey ? 'Routes API server key: configured' : 'Routes API server key: missing');
+        // Config-based camera sanity report (no network) — surfaces which cameras must be
+        // manually configured (ROI / direction) before YOLO + ROI, and which are wait-capable.
+        buildCameraAudit({ configOnly: true }).then(({ summary, all }) => {
+          const needConfig = all.filter((c) => c.warnings.includes('missing_queue_roi') || c.warnings.includes('direction_not_verified'));
+          console.log(`[camera-audit] ${summary.uniqueCameras} cameras / ${summary.totalEntries} camera×direction entries`);
+          console.log(`[camera-audit] config wait-capable: ${summary.waitCapable} · visual-only: ${summary.visualOnly} · missing ROI: ${summary.missingQueueRoi} · direction unverified: ${all.filter((c) => c.warnings.includes('direction_not_verified')).length}`);
+          if (needConfig.length) console.log('[camera-audit] needs manual config before YOLO+ROI:', [...new Set(needConfig.map((c) => `${c.crossingId}/${c.cameraId}`))].join(', '));
+        }).catch((e) => console.warn('[camera-audit] startup report failed:', e.message));
       });
     })
     .catch((error) => {
