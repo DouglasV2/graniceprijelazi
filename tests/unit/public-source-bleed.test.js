@@ -34,10 +34,14 @@ describe('extractBihamkSection bounds one crossing at the next crossing name (no
     expect(waits.some((w) => w >= 120)).toBe(false);
   });
 
-  it('the OLD greedy behavior (no boundary names) is what produced the bogus 360 min', () => {
-    const greedy = extractBihamkSection(HAK_BLOB, MALJEVAC_NAMES); // no boundary list = pre-fix path
-    const waits = parseDirectionalWaitsFromText(greedy, { sourceSide: 'hr' }).map((s) => s.wait);
-    expect(waits).toContain(360); // documents the regression the fix prevents
+  it('stays safe even when the caller passes NO target boundary names (built-in foreign + cap)', () => {
+    // Defence in depth: the foreign section boundaries (Bajakovo, "Srbija - Hrvatska", …) and the
+    // tight per-row cap are applied INSIDE extractBihamkSection, so even a caller that forgets the
+    // boundary list can never inherit a neighbour/foreign multi-hour number.
+    const section = extractBihamkSection(HAK_BLOB, MALJEVAC_NAMES);
+    const waits = parseDirectionalWaitsFromText(section, { sourceSide: 'hr' }).map((s) => s.wait);
+    expect(waits).not.toContain(360);
+    expect(/6\s*h/.test(section)).toBe(false);
   });
 
   it('a crossing with its own number still keeps it (boundary does not over-trim)', () => {

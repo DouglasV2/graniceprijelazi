@@ -1758,7 +1758,13 @@ function extractBihamkSection(text, names = [], boundaryNames = []) {
   // therefore be cut at the nearest OTHER crossing's name — before AND after — otherwise a
   // neighbour's number leaks in as this crossing's wait. This was the Maljevac=360 min bug:
   // the 760-char window swallowed "Bajakovo (Batrovci) - ... 6 h" → "Eksplicitno čekanje 360 min".
-  const others = boundaryNames.map((name) => normalizeAscii(name)).filter((name) => name && !ownNames.includes(name));
+  // Boundaries = every OTHER configured crossing's name PLUS foreign crossings / country
+  // section headers that appear on the same HAK/BIHAMK page (Serbian, Montenegrin, Hungarian
+  // border lists, "Pomorski promet", etc.). Without the foreign boundaries the LAST BiH crossing
+  // before a run of foreign rows would still swallow a foreign number.
+  const others = [...boundaryNames, ...PUBLIC_SECTION_BOUNDARIES]
+    .map((name) => normalizeAscii(name))
+    .filter((name) => name && !ownNames.includes(name));
   let endCut = text.length;
   let startCut = 0;
   for (const other of others) {
@@ -1769,15 +1775,34 @@ function extractBihamkSection(text, names = [], boundaryNames = []) {
       idx = normalized.indexOf(other, idx + 1);
     }
   }
-  // Keep the legacy "next GP" boundary as a secondary tightener, and a hard cap as a backstop
-  // for pages where no boundary name is found (so we never fall back to the whole document).
+  // Keep the legacy "next GP" boundary as a secondary tightener, and a tight hard cap as a
+  // backstop for pages where no boundary name is found (so we never fall back to a window that
+  // can span several crossings). A single crossing row — name + ulaz/izlaz status + timestamps —
+  // comfortably fits in this many characters.
   const after = normalized.slice(ownEnd);
   const nextGpRelative = after.search(/\bgp\s+[a-z]/i);
   if (nextGpRelative >= 0) endCut = Math.min(endCut, ownEnd + nextGpRelative);
-  const start = Math.max(startCut, anchor - 80, 0);
-  const end = Math.min(endCut, anchor + 760, text.length);
+  // Start AT the crossing's own name. The HAK/BIHAMK row format is "<Name> - <ulaz/izlaz status>",
+  // so a crossing's own waits always follow its name; reaching back (the old -80 lookback) only
+  // pulled the PREVIOUS crossing's trailing number into this section (backward bleed).
+  const start = Math.max(startCut, anchor, 0);
+  const end = Math.min(endCut, anchor + 380, text.length);
   return text.slice(start, end).trim();
 }
+
+// Foreign border crossings and section headers that share the HAK/BIHAMK status pages with our
+// BiH crossings. They are never our targets, but they MUST act as section boundaries so their
+// (often multi-hour) numbers cannot bleed into the nearest BiH crossing's wait.
+const PUBLIC_SECTION_BOUNDARIES = [
+  // HR–Srbija
+  'Bajakovo', 'Batrovci', 'Tovarnik', 'Šid', 'Sid', 'Batina', 'Bezdan', 'Ilok', 'Bačka Palanka', 'Backa Palanka', 'Erdut', 'Bogojevo',
+  // HR–Crna Gora / Srbija-CG bleed guards
+  'Crna Gora', 'Karasovići', 'Karasovici',
+  // HR–Slovenija / HR–Mađarska section headers
+  'Slovenija', 'Mađarska', 'Madarska', 'Goričan', 'Gorican', 'Bregana',
+  // Country / mode section headers on the page
+  'Srbija - Hrvatska', 'Hrvatska - Srbija', 'Bosna i Hercegovina', 'Pomorski promet', 'Granični prijelazi',
+];
 
 // Union of every configured crossing's public-source names — used to bound one crossing's
 // text section at the next crossing's name (see extractBihamkSection).
