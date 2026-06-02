@@ -1272,6 +1272,16 @@ function cameraHasQueueRoi(camera = {}) {
   return Boolean(cal.roi || cal.queueAnchor || (Array.isArray(cal.laneZones) && cal.laneZones.length));
 }
 
+// A camera is RELEVANT to a direction for DISPLAY (band, vehicle mix) when it either has no
+// declared direction (ambiguous — could show either side) or is explicitly valid for it. A
+// camera declared ONLY for the opposite direction must NOT bleed its queue into this direction
+// (the Maljevac bug: the "izlaz iz HR" queue showing as "ekstremna kolona" on the BiH→HR card).
+function cameraRelevantForDirection(camera = {}, direction = 'toBih') {
+  const v = camera.validForDirections;
+  if (!Array.isArray(v) || v.length === 0) return true;
+  return v.includes(direction);
+}
+
 function applyCameraDirectionSafety() {
   for (const feeds of Object.values(CAMERA_FEEDS)) {
     for (const camera of feeds) {
@@ -3106,8 +3116,10 @@ async function buildEffectiveWaitMaps(store) {
 
       // Accuracy KPI: sample this prediction so a later measured wait can score it.
       if (isLive) recordPredictionSample(crossing.id, direction, signal);
-      // Alerts: detect threshold crossings vs the previously displayed wait.
-      if (isLive) {
+      // Alerts: detect threshold crossings vs the previously displayed wait. Skip while the
+      // camera contradicts the wait (visualConflict) — we are not confident enough to push a
+      // "veliko čekanje" alert when the camera shows no such queue (avoids false 4h alerts).
+      if (isLive && !signal.visualConflict) {
         const prevWait = lastWaitForAlerts.get(key);
         evaluateAndStoreAlerts(crossing, direction, prevWait, effectiveWaits[key]);
         lastWaitForAlerts.set(key, effectiveWaits[key]);
@@ -6026,8 +6038,11 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
     return true;
   });
   const aggregatedSnapshots = aggregateCameraSnapshots(waitDrivingRows.length ? waitDrivingRows : []);
-  // Separate display-only aggregate (all cameras, for the camera view / queue band).
-  const displayAggregate = aggregateCameraSnapshots(allSnapshotRows);
+  // Display aggregate + band must be DIRECTION-RELEVANT: a camera that only shows the opposite
+  // direction must not contribute its queue to this direction's band/mix. Cameras with no
+  // declared direction (ambiguous) still count. The full camera image grid is shown separately.
+  const directionRelevantRows = allSnapshotRows.filter((row) => cameraRelevantForDirection(feedById.get(row.cameraId) || {}, direction));
+  const displayAggregate = aggregateCameraSnapshots(directionRelevantRows);
 
   const laneSignals = feeds.map((camera, index) => {
     const detector = detectorCounts[index];
@@ -7505,6 +7520,7 @@ export {
   analyzeSnapshotImage,
   buildCameraAnalyticsPayload,
   inferCameraDirections,
+  cameraRelevantForDirection,
   buildCameraAudit,
   // Exposed for integration tests (mint an admin token against the seeded admin user).
   signToken,

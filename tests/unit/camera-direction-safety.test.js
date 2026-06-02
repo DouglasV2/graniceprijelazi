@@ -2,7 +2,7 @@
 // We derive each camera's valid direction from its Croatian label and mark ambiguous
 // cameras visualOnly so they never contaminate the opposite direction's wait.
 import { describe, it, expect } from 'vitest';
-import { CAMERA_FEEDS, inferCameraDirections } from '../../server/index.js';
+import { CAMERA_FEEDS, inferCameraDirections, cameraRelevantForDirection } from '../../server/index.js';
 
 function cam(crossingId, cameraId) {
   return (CAMERA_FEEDS[crossingId] || []).find((c) => c.id === cameraId);
@@ -63,5 +63,20 @@ describe('CAMERA_FEEDS are annotated for direction safety', () => {
         if (camera.visualOnly) expect(camera.validForDirections).toEqual([]);
       }
     }
+  });
+});
+
+describe('direction-relevant display band (Maljevac opposite-lane leak fix)', () => {
+  it('the "izlaz iz HR" (toBih) camera does NOT bleed into the BiH→HR (toHr) band', () => {
+    expect(cameraRelevantForDirection(cam('maljevac', 'mal-hak-hr-exit'), 'toHr')).toBe(false);
+    expect(cameraRelevantForDirection(cam('maljevac', 'mal-hak-hr-exit'), 'toBih')).toBe(true);
+  });
+  it('the "ulaz u HR" (toHr) camera is relevant for BiH→HR, not for HR→BiH', () => {
+    expect(cameraRelevantForDirection(cam('maljevac', 'mal-hak-hr-entry'), 'toHr')).toBe(true);
+    expect(cameraRelevantForDirection(cam('maljevac', 'mal-hak-hr-entry'), 'toBih')).toBe(false);
+  });
+  it('an ambiguous (no-direction) camera is relevant to both directions', () => {
+    expect(cameraRelevantForDirection(cam('maljevac', 'mal-bihamk-kladusa'), 'toHr')).toBe(true);
+    expect(cameraRelevantForDirection(cam('maljevac', 'mal-bihamk-kladusa'), 'toBih')).toBe(true);
   });
 });
