@@ -74,4 +74,23 @@ describe('GET /api/admin/camera/audit', () => {
     const res = await auth(request(app).get('/api/admin/camera/audit').query({ crossingId: 'gradiska', direction: 'toBih' }));
     expect(res.body.cameras.every((c) => c.crossingId === 'gradiska' && c.direction === 'toBih')).toBe(true);
   });
+
+  it('a camera WITH a direction but NO queue ROI is still not wait-capable (spec §5)', async () => {
+    // maljevac mal-hak-hr-entry has validForDirections=[toHr] but no calibrated ROI.
+    const res = await auth(request(app).get('/api/admin/camera/audit').query({ crossingId: 'maljevac', direction: 'toHr' }));
+    const entry = res.body.cameras.find((c) => c.cameraId === 'mal-hak-hr-entry');
+    expect(entry.hasQueueRoi).toBe(false);
+    expect(entry.waitCapable).toBe(false);
+    expect(entry.warnings).toContain('missing_queue_roi');
+    expect(entry.fusionReason).toMatch(/ROI/i);
+  });
+
+  it('every entry carries YOLO status and a fusion reason', async () => {
+    const res = await auth(request(app).get('/api/admin/camera/audit'));
+    for (const c of res.body.cameras) {
+      expect(typeof c.yoloEnabled).toBe('boolean');
+      expect(typeof c.yoloUsed).toBe('boolean');
+      expect(typeof c.fusionReason).toBe('string');
+    }
+  });
 });

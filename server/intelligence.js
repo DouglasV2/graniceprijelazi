@@ -296,6 +296,92 @@ export function buildSourceExplanation(parts = {}) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// 4b. YOLO + ROI (spec V5 §6)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// YOLO gives REAL vehicle detections (boxes). The ROI decides which of them are in the
+// actual queue. This is the pure geometry + counting layer — testable in isolation and
+// runtime-agnostic (the YOLO transport lives in the server, behind a feature flag).
+const VEHICLE_TYPES = new Set(['car', 'auto', 'van', 'kombi', 'truck', 'kamion', 'bus', 'autobus']);
+
+function isVehicleDetection(d = {}) {
+  const t = String(d.type || d.label || d.cls || '').toLowerCase();
+  return VEHICLE_TYPES.has(t) || /\b(car|van|truck|bus)\b/.test(t);
+}
+
+function vehicleClass(d = {}) {
+  const t = String(d.type || d.label || d.cls || 'car').toLowerCase();
+  if (t.includes('truck') || t.includes('kamion')) return 'trucks';
+  if (t.includes('bus')) return 'buses';
+  if (t.includes('van') || t.includes('kombi')) return 'vans';
+  return 'cars';
+}
+
+// Axis-aligned rectangle membership in PERCENT coordinates (0-100). `rotate` on a ROI is
+// cosmetic for the overlay; for membership we use the bounding rectangle (conservative).
+export function pointInRect(px, py, rect) {
+  if (!rect) return false;
+  const x = Number(rect.x);
+  const y = Number(rect.y);
+  const w = Number(rect.w);
+  const h = Number(rect.h);
+  if (![x, y, w, h, px, py].every(Number.isFinite)) return false;
+  return px >= x && px <= x + w && py >= y && py <= y + h;
+}
+
+// Which side of the count line a point is on (sign of the 2D cross product). Used as a
+// snapshot proxy for "already crossed" — true temporal crossing needs frame-to-frame tracking.
+export function detectionPastCountLine(d = {}, line = null) {
+  if (!line) return false;
+  const { x1, y1, x2, y2 } = line;
+  if (![x1, y1, x2, y2].every((n) => Number.isFinite(Number(n)))) return false;
+  const cross = (x2 - x1) * (Number(d.y) - y1) - (y2 - y1) * (Number(d.x) - x1);
+  return cross < 0; // one consistent side = "past the booth"
+}
+
+// Filter raw YOLO detections by the camera calibration: keep vehicles inside the queue ROI,
+// drop anything in an ignore zone (parking, opposite direction, booths, frame edges) or
+// outside the ROI, and count by class. Returns full diagnostics for the audit/debug.
+export function applyRoiToDetections(detections = [], calibration = {}, opts = {}) {
+  const queueRoi = calibration.queueRoi || calibration.roi || null;
+  const ignoreZones = Array.isArray(calibration.ignoreZones) ? calibration.ignoreZones : [];
+  const countLine = calibration.countLine || null;
+  const minConfidence = opts.minConfidence ?? 35;
+  const list = Array.isArray(detections) ? detections : [];
+
+  const inRoi = [];
+  const ignored = [];
+  let passedVehicles = 0;
+  const counts = { cars: 0, vans: 0, trucks: 0, buses: 0 };
+
+  for (const d of list) {
+    if (!isVehicleDetection(d)) { ignored.push({ ...d, reason: 'not_vehicle' }); continue; }
+    if (Number(d.confidence ?? 100) < minConfidence) { ignored.push({ ...d, reason: 'low_confidence' }); continue; }
+    const cx = Number(d.x);
+    const cy = Number(d.y);
+    if (ignoreZones.some((z) => pointInRect(cx, cy, z))) { ignored.push({ ...d, reason: 'ignore_zone' }); continue; }
+    if (queueRoi && !pointInRect(cx, cy, queueRoi)) { ignored.push({ ...d, reason: 'outside_roi' }); continue; }
+    inRoi.push(d);
+    counts[vehicleClass(d)] += 1;
+    if (detectionPastCountLine(d, countLine)) passedVehicles += 1;
+  }
+
+  const visibleVehicles = list.filter(isVehicleDetection).length; // all vehicles in frame
+  return {
+    hasRoi: Boolean(queueRoi),
+    detectionsBeforeRoi: visibleVehicles,
+    detectionsAfterRoi: inRoi.length,
+    visibleVehicles,
+    queueVehicles: inRoi.length,
+    counts,
+    passedVehicles,
+    countLineCrossings: passedVehicles,
+    inRoi,
+    ignored,
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // 4. CAMERA — QUEUE BANDS, IMAGE HASH, STALE & MOTION
 // ───────────────────────────────────────────────────────────────────────────
 //

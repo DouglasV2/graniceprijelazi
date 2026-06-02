@@ -68,6 +68,20 @@ describe('Scenario 5: low confidence → range, not a single number', () => {
   });
 });
 
+describe('Scenario 6 (V5 §6): camera cannot override official, and YOLO cannot bypass calibration', () => {
+  it('official 90 vs camera 10 → fused stays high (official priority)', async () => {
+    const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [hardPublic(90), camera(10, 1)]);
+    expect(sig.wait).toBeGreaterThanOrEqual(85);
+    expect(sig.explanationPayload.authorityTier).toBe('official');
+  });
+
+  it('a camera-led estimate cannot be HIGH confidence without measured calibration data', async () => {
+    const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [camera(35, 24)]);
+    // Even a strong camera queue is camera-heuristic only → calibration caps it below visoka.
+    expect(sig.confidenceLevel).not.toBe('visoka');
+  });
+});
+
 describe('Scenario 3: suspicious measured wait must NOT enter the fusion', () => {
   it('a measured session with GPS far from the crossing is discarded (no report, no signal)', async () => {
     // Start + finish with coordinates nowhere near izacic → gpsSuspicious → discarded.

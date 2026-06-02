@@ -13,6 +13,7 @@ import {
   buildSourceExplanation,
   classifyQueueBand,
   QUEUE_BANDS,
+  applyRoiToDetections,
   computeAverageHash,
   detectStaleFrames,
   buildCameraAnalysis,
@@ -1285,6 +1286,15 @@ const cameraEvents = [];
 const cameraSnapshotBuffer = [];
 const cvEndpoint = process.env.CAMERA_CV_ENDPOINT || '';
 const cvApiKey = process.env.CAMERA_CV_API_KEY || '';
+// YOLO + ROI (V5 §6). OFF by default — must be explicitly enabled, and even then it only
+// REPLACES the vehicle-detection step; the wait still flows through the same evidence-cap,
+// direction/ROI gate and confidence calibration. If the model/runtime is unavailable the
+// pipeline silently falls back to the existing heuristic (system must never crash).
+const YOLO_ENABLED = process.env.YOLO_ENABLED === 'true';
+const yoloEndpoint = process.env.YOLO_ENDPOINT || process.env.CAMERA_CV_ENDPOINT || '';
+const yoloApiKey = process.env.YOLO_API_KEY || process.env.CAMERA_CV_API_KEY || '';
+const YOLO_TIMEOUT_MS = Math.max(1500, Number(process.env.YOLO_TIMEOUT_MS || 6000));
+const YOLO_MIN_CONFIDENCE = Math.max(1, Math.min(99, Number(process.env.YOLO_MIN_CONFIDENCE || 35)));
 const CAMERA_SNAPSHOT_COUNTING_ENABLED = process.env.CAMERA_SNAPSHOT_COUNTING_ENABLED !== 'false';
 const CAMERA_SNAPSHOT_TIMEOUT_MS = Math.max(1500, Number(process.env.CAMERA_SNAPSHOT_TIMEOUT_MS || 4500));
 const CAMERA_SNAPSHOT_MIN_CONFIDENCE = Math.max(35, Math.min(95, Number(process.env.CAMERA_SNAPSHOT_MIN_CONFIDENCE || 46)));
@@ -3805,7 +3815,14 @@ app.get('/api/admin/camera/debug', authRequired, adminRequired, async (req, res)
       wait: c.wait,
       contributesWait: c.contributesWait,
       method: c.method,
+      yoloUsed: Boolean(c.yoloUsed),
+      detectionsBeforeRoi: c.detectionsBeforeRoi ?? null,
+      detectionsAfterRoi: c.detectionsAfterRoi ?? null,
+      ignoredDetections: c.ignoredDetections ?? null,
+      passedVehicles: c.passedVehicles ?? null,
+      countLineCrossings: c.countLineCrossings ?? null,
     })),
+    yoloEnabled: YOLO_ENABLED,
   });
 });
 
@@ -3912,6 +3929,22 @@ async function buildCameraAudit({ crossingId = null, direction = null, includeSn
           waitIsCameraDriven: Boolean(analytics.waitIsCameraDriven),
           source: analytics.source,
           fusedWait,
+          // YOLO + ROI status.
+          yoloEnabled: YOLO_ENABLED,
+          yoloUsed: Boolean(snap?.yoloUsed),
+          detectionsBeforeRoi: snap?.detectionsBeforeRoi ?? null,
+          detectionsAfterRoi: snap?.detectionsAfterRoi ?? null,
+          ignoredDetections: snap?.ignoredDetections ?? null,
+          passedVehicles: snap?.passedVehicles ?? null,
+          // Plain-language reason for being in/out of the wait fusion.
+          fusionReason: !hasQueueRoi ? 'nema queue ROI — vizualna provjera'
+            : !directionDeclared ? 'smjer nije potvrđen — vizualna provjera'
+            : visualOnly ? 'kamera nije za ovaj smjer — vizualna provjera'
+            : !hasSnapshot ? 'nema svježeg snapshota'
+            : stale ? 'snapshot je zastario (zamrznut feed)'
+            : !cameraEstimateReliable ? 'nedovoljno pouzdan signal kamere'
+            : warnings.includes('camera_contradicts_official_signal') ? 'proturječi službenom izvoru'
+            : 'ulazi u izračun čekanja (uz nadzor i kalibraciju)',
           warnings,
           recommendation,
           ...(includeSnapshots ? { snapshot: snap } : {}),
@@ -4938,6 +4971,61 @@ async function runCvDetector(camera, crossingId, direction) {
   return normalizeCounts(payload.counts || payload.frame || payload.detectionsByClass || {});
 }
 
+// YOLO detector (V5 §6). Sends the JPEG to the model and returns per-vehicle DETECTION BOXES
+// (so the ROI layer can decide which vehicles are in the queue). Fully resilient: a timeout,
+// a non-200, a malformed body or a thrown error all return null → the caller falls back to the
+// heuristic. Detections are normalised to PERCENT coordinates (0-100) of the frame.
+async function runYoloDetector(camera, crossingId, direction, buffer, contentType) {
+  if (!YOLO_ENABLED || !yoloEndpoint || !buffer) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), YOLO_TIMEOUT_MS);
+  try {
+    const response = await fetch(yoloEndpoint, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(yoloApiKey ? { Authorization: `Bearer ${yoloApiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        cameraId: camera.id,
+        crossingId,
+        direction,
+        classes: ['car', 'van', 'truck', 'bus'],
+        contentType: contentType || 'image/jpeg',
+        imageBase64: Buffer.from(buffer).toString('base64'),
+        timestamp: new Date().toISOString(),
+      }),
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const raw = Array.isArray(payload?.detections) ? payload.detections : [];
+    const w = Number(payload?.width || 0);
+    const h = Number(payload?.height || 0);
+    // Accept either percent (0-100) or pixel coords; normalise to percent.
+    const detections = raw.map((d) => {
+      const looksPixel = (w > 0 && Number(d.x) > 100) || (h > 0 && Number(d.y) > 100);
+      const x = looksPixel && w ? (Number(d.x) / w) * 100 : Number(d.x);
+      const y = looksPixel && h ? (Number(d.y) / h) * 100 : Number(d.y);
+      const bw = looksPixel && w ? (Number(d.w || 0) / w) * 100 : Number(d.w || 0);
+      const bh = looksPixel && h ? (Number(d.h || 0) / h) * 100 : Number(d.h || 0);
+      return {
+        type: String(d.type || d.label || d.cls || 'car').toLowerCase(),
+        x: Math.round(x * 10) / 10,
+        y: Math.round(y * 10) / 10,
+        w: Math.round(bw * 10) / 10,
+        h: Math.round(bh * 10) / 10,
+        confidence: Math.round(Number(d.confidence ?? d.score ?? 0) * (Number(d.confidence ?? d.score ?? 0) <= 1 ? 100 : 1)),
+      };
+    }).filter((d) => Number.isFinite(d.x) && Number.isFinite(d.y));
+    return { detections, width: w || null, height: h || null, model: payload?.model || 'yolo' };
+  } catch {
+    return null; // network/timeout/parse failure → heuristic fallback
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 
 async function fetchBinaryWithTimeout(url, { accept = 'image/jpeg,image/*;q=0.9,*/*;q=0.5', timeoutMs = CAMERA_SNAPSHOT_TIMEOUT_MS } = {}) {
   const controller = new AbortController();
@@ -5278,7 +5366,7 @@ function estimateCameraFlowFromSnapshot({ visibleTotal = 0, visibleVehicles = nu
   };
 }
 
-function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null) {
+function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null, yoloResult = null) {
   const roi = camera.calibration?.roi || { x: 8, y: 12, w: 84, h: 76 };
   const rect = percentToRect(roi, image.width, image.height);
   const gridX = 24;
@@ -5436,15 +5524,28 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null)
 
   // Pass REAL typed detections (visibleTotal) AND the area-corroborated estimate
   // (queueEstimate) separately so the flow estimator can veto occupancy-only false waits.
-  const flowEstimate = estimateCameraFlowFromSnapshot({ visibleVehicles: visibleTotal, queueVehicles: queueEstimate, occupancyPct, laneFullnessPct, componentDensity, direction, previousSnapshot });
+  // ── YOLO + ROI override (V5 §6) ──────────────────────────────────────────
+  // When YOLO detections are available, the REAL vehicle evidence comes from boxes filtered
+  // by the queue ROI / ignore zones — not the connected-components heuristic. Occupancy/lane
+  // fullness stay (secondary), but the evidence-cap now keys off the YOLO in-ROI count, so a
+  // shadow-filled frame with zero detected vehicles can never fabricate a wait. Everything
+  // downstream (evidence cap, direction/ROI gate, confidence calibration) is unchanged.
+  const yolo = (yoloResult && Array.isArray(yoloResult.detections))
+    ? applyRoiToDetections(yoloResult.detections, camera.calibration || {}, { minConfidence: YOLO_MIN_CONFIDENCE })
+    : null;
+  const effVisible = yolo ? yolo.visibleVehicles : visibleTotal;
+  const effQueue = yolo ? yolo.queueVehicles : queueEstimate;
+  const effCounts = yolo ? yolo.counts : blendedCounts;
+
+  const flowEstimate = estimateCameraFlowFromSnapshot({ visibleVehicles: effVisible, queueVehicles: effQueue, occupancyPct, laneFullnessPct, componentDensity, direction, previousSnapshot });
   const cameraWait = flowEstimate.wait;
   const blendedConfidence = Math.max(CAMERA_SNAPSHOT_MIN_CONFIDENCE, Math.min(90, Math.round(confidence * 0.62 + flowEstimate.confidence * 0.38)));
 
   return {
-    counts: blendedCounts,
+    counts: effCounts,
     rawCounts: counts,
-    visibleTotal,
-    visibleVehicles: visibleTotal,
+    visibleTotal: effVisible,
+    visibleVehicles: flowEstimate.visibleVehicles,
     queueVehicles: flowEstimate.queueVehicles,
     queueBand: flowEstimate.queueBand,
     evidenceCap: flowEstimate.evidenceCap,
@@ -5460,7 +5561,7 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null)
     queueTrend: flowEstimate.queueTrend,
     trendDelta: flowEstimate.trendDelta,
     confidence: blendedConfidence,
-    detections,
+    detections: yolo ? yolo.inRoi : detections,
     laneGroups: laneProfile,
     roi: camera.calibration?.roi || roi,
     width: image.width,
@@ -5469,7 +5570,14 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null)
     laneFullnessPct,
     componentCount: usefulComponents.length,
     componentDensity: Math.round(componentDensity * 100) / 100,
-    method: flowEstimate.method,
+    // YOLO + ROI diagnostics (null when running the heuristic).
+    yoloUsed: Boolean(yolo),
+    detectionsBeforeRoi: yolo ? yolo.detectionsBeforeRoi : null,
+    detectionsAfterRoi: yolo ? yolo.detectionsAfterRoi : null,
+    ignoredDetections: yolo ? yolo.ignored.map((d) => ({ type: d.type, x: d.x, y: d.y, reason: d.reason })) : null,
+    passedVehicles: yolo ? yolo.passedVehicles : null,
+    countLineCrossings: yolo ? yolo.countLineCrossings : null,
+    method: yolo ? `yolo-roi${flowEstimate.method.includes('single') ? '-single-frame' : ''}` : flowEstimate.method,
   };
 }
 
@@ -5484,7 +5592,10 @@ async function runSnapshotCounter(camera, crossingId, direction, previousSnapsho
   if (!isUsableCameraImage(buffer, contentType)) return null;
 
   const image = decodeJpegImage(buffer);
-  const analysis = analyzeSnapshotImage(image, camera, direction, previousSnapshot);
+  // YOLO (when enabled) replaces the heuristic vehicle detection; on any failure it returns
+  // null and analyzeSnapshotImage falls back to the connected-components heuristic.
+  const yoloResult = await runYoloDetector(camera, crossingId, direction, buffer, contentType).catch(() => null);
+  const analysis = analyzeSnapshotImage(image, camera, direction, previousSnapshot, yoloResult);
 
   // Multi-frame stale detection via average-hash. A frozen feed or cached placeholder
   // serves the same pixels repeatedly; we compare this frame's hash to the previous
@@ -5889,6 +6000,13 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
           guardApplied: Boolean(item.guardApplied),
           evidenceCap: item.evidenceCap ?? null,
           queueEvidenceScore: item.queueEvidenceScore ?? null,
+          // YOLO + ROI diagnostics.
+          yoloUsed: Boolean(item.yoloUsed),
+          detectionsBeforeRoi: item.detectionsBeforeRoi ?? null,
+          detectionsAfterRoi: item.detectionsAfterRoi ?? null,
+          ignoredDetections: item.ignoredDetections ?? null,
+          passedVehicles: item.passedVehicles ?? null,
+          countLineCrossings: item.countLineCrossings ?? null,
           ...analysis,
         };
       }),
