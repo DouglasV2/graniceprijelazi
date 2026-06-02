@@ -21,6 +21,7 @@ import {
   User,
 } from 'lucide-react';
 import { formatMinutes, hasKnownWait, isUsableMinuteValue, normalizeMinutes, formatWaitDisplay } from './utils/wait-format.js';
+import { cameraEstimateDecision } from './utils/camera-display.js';
 
 
 function makeCrossingHistory(baseCars, baseTrucks, baseBuses, baseWait) {
@@ -3402,8 +3403,9 @@ function CameraPanel({ crossing, selectedDirection }) {
   // camera contradicts the official/fused headline by a lot, we defer to the headline and do
   // NOT present the camera number as the truth.
   const cameraHeadlineWait = getDisplayedWait(crossing, selectedDirection, {});
-  const cameraContradictsOfficial = analytics.cameraEstimateReliable && hasKnownWait(cameraHeadlineWait) && hasKnownWait(analytics.wait) && Math.abs(Number(analytics.wait) - Number(cameraHeadlineWait)) > 20;
-  const cameraEstimateUsable = analytics.cameraEstimateReliable === true && analytics.waitIsCameraDriven === true && !cameraContradictsOfficial;
+  const cameraDecision = cameraEstimateDecision(analytics, cameraHeadlineWait);
+  const cameraContradictsOfficial = cameraDecision.contradictsOfficial;
+  const cameraEstimateUsable = cameraDecision.usable;
   const laneProfile = analytics.laneProfile || aggregateLaneProfile(analytics.laneSignals || []);
   const showLanes = crossingHasLaneCalibration(crossing);
   const selectedSignalData = analytics.laneSignals.find((signal) => signal.id === selectedSignal) || analytics.laneSignals[0];
@@ -3532,8 +3534,8 @@ function CameraPanel({ crossing, selectedDirection }) {
             ))}
           </div>
           <div className="camera-day-total">
-            <span>Danas 07–19</span>
-            <strong>{historySeries.reduce((sum, item) => sum + item.passed, 0)} vozila</strong>
+            <span>Danas 07–19 · procjena</span>
+            <strong>~{historySeries.reduce((sum, item) => sum + item.passed, 0)} vozila</strong>
           </div>
         </article>
 
@@ -4015,6 +4017,10 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection 
   const [historySource, setHistorySource] = useState('');
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  // Honesty contract (V5 §7 H / §8): never present fabricated vehicle counts as fact.
+  const [vehicleCountsAreReal, setVehicleCountsAreReal] = useState(false);
+  const [historyCoverage, setHistoryCoverage] = useState(null);
+  const [historyNote, setHistoryNote] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -4028,6 +4034,9 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection 
           setApiHistory(Array.isArray(payload.history) ? payload.history : []);
           setHistoryCalendar(payload.calendar || []);
           setHistorySource(payload.source || 'api');
+          setVehicleCountsAreReal(payload.vehicleCountsAreReal === true);
+          setHistoryCoverage(payload.coverage || null);
+          setHistoryNote(payload.note || '');
           if (!selectedDate || !payload.calendar?.some((item) => item.date === selectedDate)) setSelectedDate(payload.selectedDate || payload.calendar?.at(-1)?.date || '');
         }
       } catch {
@@ -4155,15 +4164,19 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection 
           <div className="selected-day-summary">
             <div><small>Najmirnije</small><strong>{quietSlot.hour}:00</strong><em>{formatMinutes(quietSlot.wait)}</em></div>
             <div><small>Najsporije</small><strong>{peakSlot.hour}:00</strong><em>{formatMinutes(peakSlot.wait)}</em></div>
-            <div><small>Protok</small><strong>{focusTotal}</strong><em>vozila</em></div>
+            <div><small>Protok</small><strong>{vehicleCountsAreReal ? focusTotal : '—'}</strong><em>{vehicleCountsAreReal ? 'vozila (kamera)' : 'nije brojano'}</em></div>
           </div>
         </article>
         <article className="history-selected-day-card subdued">
           <span>Struktura prometa</span>
-          <h3>{vehicleMixText}</h3>
-          <p>Ovaj omjer pomaže razumjeti zašto se čekanje mijenja kroz dan, ali nije potreban za osnovnu odluku o polasku.</p>
+          <h3>{vehicleCountsAreReal ? vehicleMixText : 'Nije dostupno'}</h3>
+          <p>{vehicleCountsAreReal
+            ? 'Ovaj omjer pomaže razumjeti zašto se čekanje mijenja kroz dan, ali nije potreban za osnovnu odluku o polasku.'
+            : 'Broj vozila nije stvarno brojan za ovaj prijelaz (povijest je iz javnih izvora čekanja), pa ne prikazujemo izmišljene brojke.'}</p>
         </article>
       </div>
+
+      {historyNote && <p className="history-honesty-note">{historyNote}</p>}
 
       <article className="history-details-toggle-card">
         <div>

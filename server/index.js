@@ -1291,6 +1291,9 @@ const cvApiKey = process.env.CAMERA_CV_API_KEY || '';
 // direction/ROI gate and confidence calibration. If the model/runtime is unavailable the
 // pipeline silently falls back to the existing heuristic (system must never crash).
 const YOLO_ENABLED = process.env.YOLO_ENABLED === 'true';
+// Shadow mode: run YOLO and record its result for comparison, but NEVER use it for the wait.
+// Lets us validate YOLO against the heuristic in production with zero risk before enabling it.
+const YOLO_SHADOW_MODE = process.env.YOLO_SHADOW_MODE === 'true';
 const yoloEndpoint = process.env.YOLO_ENDPOINT || process.env.CAMERA_CV_ENDPOINT || '';
 const yoloApiKey = process.env.YOLO_API_KEY || process.env.CAMERA_CV_API_KEY || '';
 const YOLO_TIMEOUT_MS = Math.max(1500, Number(process.env.YOLO_TIMEOUT_MS || 6000));
@@ -3823,6 +3826,50 @@ app.get('/api/admin/camera/debug', authRequired, adminRequired, async (req, res)
       countLineCrossings: c.countLineCrossings ?? null,
     })),
     yoloEnabled: YOLO_ENABLED,
+    yoloShadowMode: YOLO_SHADOW_MODE,
+  });
+});
+
+// ── CONSOLIDATED ADMIN OVERVIEW (spec V5 §8) ──────────────────────────────────
+// One call for the admin debug surface: camera/ROI readiness, confidence calibration,
+// unreliable cameras, live source conflicts and stale sources. Lightweight — uses one
+// effective-wait pass + a config-only camera audit (no per-camera network).
+app.get('/api/admin/overview', authRequired, adminRequired, async (req, res) => {
+  const store = await readAppStore();
+  const { waitSources } = await buildEffectiveWaitMaps(store).catch(() => ({ waitSources: {} }));
+  const confidenceDistribution = { visoka: 0, srednja: 0, niska: 0, nedovoljno: 0 };
+  const conflicts = [];
+  const staleSources = [];
+  for (const [key, meta] of Object.entries(waitSources)) {
+    const level = meta.confidenceLevel || 'nedovoljno';
+    if (confidenceDistribution[level] !== undefined) confidenceDistribution[level] += 1;
+    if (meta.explanationPayload?.conflict?.detected) conflicts.push({ key, spreadMinutes: meta.explanationPayload.conflict.spreadMinutes, confidenceLevel: level });
+    if (meta.stale && meta.displayReady) staleSources.push({ key, ageSeconds: meta.ageSeconds, label: meta.label });
+  }
+
+  const audit = await buildCameraAudit({ configOnly: true });
+  const roiReadiness = {
+    summary: audit.summary,
+    missingQueueRoi: [...new Set(audit.all.filter((c) => c.warnings.includes('missing_queue_roi')).map((c) => `${c.crossingId}/${c.cameraId}`))],
+    missingDirection: [...new Set(audit.all.filter((c) => c.warnings.includes('direction_not_verified')).map((c) => `${c.crossingId}/${c.cameraId}`))],
+    missingCountLine: [...new Set(audit.all.filter((c) => c.warnings.includes('missing_count_line')).map((c) => `${c.crossingId}/${c.cameraId}`))],
+    waitCapableCameras: [...new Set(audit.all.filter((c) => c.waitCapable).map((c) => `${c.crossingId}/${c.cameraId}`))],
+    needsManualConfigBeforeYolo: [...new Set(audit.all.filter((c) => c.warnings.includes('missing_queue_roi') || c.warnings.includes('direction_not_verified')).map((c) => `${c.crossingId}/${c.cameraId}`))],
+  };
+
+  const calibration = computeConfidenceCalibrationStats(recentResolvedAccuracy());
+
+  res.json({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    yolo: { enabled: YOLO_ENABLED, shadowMode: YOLO_SHADOW_MODE, endpointConfigured: Boolean(yoloEndpoint) },
+    confidenceDistribution,
+    calibration: { sampleSize: calibration.sampleSize, miscalibrated: calibration.miscalibrated, perBucket: calibration.perBucket, minSamplesHigh: CALIBRATION_THRESHOLDS.high.minN },
+    conflicts,
+    staleSources,
+    roiReadiness,
+    cameraHealth: audit.summary,
+    unreliableCameras: audit.summary.topRisky,
   });
 });
 
@@ -4976,7 +5023,8 @@ async function runCvDetector(camera, crossingId, direction) {
 // a non-200, a malformed body or a thrown error all return null → the caller falls back to the
 // heuristic. Detections are normalised to PERCENT coordinates (0-100) of the frame.
 async function runYoloDetector(camera, crossingId, direction, buffer, contentType) {
-  if (!YOLO_ENABLED || !yoloEndpoint || !buffer) return null;
+  // Runs when YOLO is enabled OR in shadow mode (shadow result is recorded but not used).
+  if ((!YOLO_ENABLED && !YOLO_SHADOW_MODE) || !yoloEndpoint || !buffer) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), YOLO_TIMEOUT_MS);
   try {
@@ -5593,9 +5641,15 @@ async function runSnapshotCounter(camera, crossingId, direction, previousSnapsho
 
   const image = decodeJpegImage(buffer);
   // YOLO (when enabled) replaces the heuristic vehicle detection; on any failure it returns
-  // null and analyzeSnapshotImage falls back to the connected-components heuristic.
+  // null and analyzeSnapshotImage falls back to the connected-components heuristic. In SHADOW
+  // mode YOLO runs but is NOT applied to the wait — its ROI result is attached for comparison.
   const yoloResult = await runYoloDetector(camera, crossingId, direction, buffer, contentType).catch(() => null);
-  const analysis = analyzeSnapshotImage(image, camera, direction, previousSnapshot, yoloResult);
+  const yoloForWait = YOLO_ENABLED ? yoloResult : null;
+  const analysis = analyzeSnapshotImage(image, camera, direction, previousSnapshot, yoloForWait);
+  if (!YOLO_ENABLED && YOLO_SHADOW_MODE && yoloResult) {
+    const shadow = applyRoiToDetections(yoloResult.detections, camera.calibration || {}, { minConfidence: YOLO_MIN_CONFIDENCE });
+    analysis.yoloShadow = { queueVehicles: shadow.queueVehicles, visibleVehicles: shadow.visibleVehicles, detectionsBeforeRoi: shadow.detectionsBeforeRoi, detectionsAfterRoi: shadow.detectionsAfterRoi, counts: shadow.counts };
+  }
 
   // Multi-frame stale detection via average-hash. A frozen feed or cached placeholder
   // serves the same pixels repeatedly; we compare this frame's hash to the previous
