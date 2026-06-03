@@ -1630,6 +1630,13 @@ const SOURCE_FETCH_ENABLED = process.env.SOURCE_FETCH_ENABLED !== 'false';
 // stay polite to HAK/BIHAMK/Google.
 const SOURCE_REFRESH_INTERVAL_MS = Math.max(2, Number(process.env.SOURCE_REFRESH_INTERVAL_MINUTES || 4)) * 60 * 1000;
 const SOURCE_FETCH_TIMEOUT_MS = Math.max(1500, Number(process.env.SOURCE_FETCH_TIMEOUT_MS || 4500));
+// Scheduled Google near-border traffic estimate. This was REFERENCED in buildGoogleTrafficSnapshots
+// but never defined → every refresh threw "GOOGLE_TRAFFIC_ESTIMATE_ENABLED is not defined", so the
+// scheduler never built any Google snapshot. Crossings WITHOUT an official text source (e.g. Gornji
+// Varoš) therefore showed "Nedovoljno podataka" and the near-border jam never reached the headline.
+// Default ON (needs the server key); set GOOGLE_TRAFFIC_ESTIMATE_ENABLED=false to disable for cost.
+const GOOGLE_TRAFFIC_ESTIMATE_ENABLED = process.env.GOOGLE_TRAFFIC_ESTIMATE_ENABLED !== 'false';
+const GOOGLE_TRAFFIC_REFRESH_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.GOOGLE_TRAFFIC_REFRESH_CONCURRENCY || 3)));
 let sourceRefreshState = { lastRunAt: 0, running: null, lastError: '' };
 
 const PUBLIC_SOURCE_TARGETS = {
@@ -2516,6 +2523,17 @@ function applyTrafficSanityCaps(wait, { googleSignal = null, cameraSignal = null
     };
   }
 
+  // Soft official + clear/blue Google: Google is a HELPER, never a downward authority. It must not
+  // pull the blended estimate BELOW the official's own number (now that scheduled Google snapshots
+  // enter every fusion, a clear approach was dragging "do 30 → ~11" down to ~8). Keep ≥ the soft
+  // official value so "Google normal ne spušta official". A jam/slow Google still raises elsewhere.
+  if (softPublicOnly && !hasDriverReports && (clearGoogle || !googleSignal)) {
+    const softMax = clampWait(Math.max(...publicSignals.map((item) => Number(item.normalizedWaitMin || 0))));
+    if (softMax !== null && softMax > finalWait) {
+      return { wait: softMax, adjusted: true, reason: '' };
+    }
+  }
+
   // Any (non-strong) driver report present but no authoritative signal → still trust it,
   // reports are first-hand evidence the road API can miss.
   if (hasDriverReports) return { wait: finalWait, adjusted: false, reason: '' };
@@ -3078,16 +3096,26 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     const googleTrafficSeverity = googleSignal?.metadata?.googleTrafficSeverity || 'unknown';
     const googleJamNearBorder = googleTrafficSeverity === 'jam';
     const googleSlowNearBorder = googleTrafficSeverity === 'slow';
+    const googleJamMeters = Number(googleSignal?.metadata?.jamMeters || 0);
     const googleJamConflict = !congestion.conflict && !clearConflict && !cameraClearOverride && !cameraCongestionOverride && googleJamNearBorder && Number.isFinite(Number(finalWait)) && Number(finalWait) < 20;
     if (googleJamConflict) {
       conflictKind = 'google-jam';
+      // A genuine red jam near the booth must NOT headline a tiny number ("od 6 min" next to a
+      // visible column). Google's own time-delay averages the whole zone and is unreliable here, so
+      // we floor the estimate by the LENGTH of the jam (a queue this long is minutes). Applied only
+      // when no HARD official/measured value governs the wait and the booth camera isn't shown clear,
+      // so an open road (jamMeters 0 → no jam severity) is never affected.
+      if (!hardAuthorityForCamera) {
+        const jamFloor = googleJamMeters >= 600 ? 22 : googleJamMeters >= 300 ? 16 : googleJamMeters >= 120 ? 12 : Number(finalWait);
+        finalWait = Math.max(Number(finalWait), jamFloor);
+      }
       outLevel = 'niska';
       outPrecision = 'range';
       outHint = 'low';
-      outScore = Math.min(outScore, 32);
+      outScore = Math.min(outScore, 36);
       outRangeMin = Math.max(0, Math.min(finalWait, range.rangeMin ?? finalWait));
-      outRangeMax = Math.max(range.rangeMax ?? finalWait, 45);
-      note = `${note} Google promet pokazuje gužvu na prilazu — čekanje može biti veće.`;
+      outRangeMax = Math.max(range.rangeMax ?? finalWait, finalWait + 20, 45);
+      note = `${note} Google promet pokazuje gužvu na prilaznoj cesti (~${Math.round(googleJamMeters)} m kolone) — čekanje je vjerojatno ${finalWait} min ili više.`;
     }
     const visualConflict = congestion.conflict || clearConflict;
 

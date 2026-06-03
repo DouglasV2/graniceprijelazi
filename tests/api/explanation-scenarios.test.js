@@ -143,6 +143,23 @@ describe('Scenario 8 (Google traffic): helper signal, never authority', () => {
     expect(sig.explanationPayload.googleTraffic.usedAsFusionSignal).toBe(true);
     expect(sig.explanationPayload.googleTraffic.usedAsAuthority).toBe(false);
     expect(sig.note).toMatch(/Google promet pokazuje gužvu/i);
+    // A genuine near-border jam (fixture jamMeters 420) floors the headline above the tiny base 8
+    // so it does not read "od 6/8 min" next to a visible column.
+    expect(sig.wait).toBeGreaterThanOrEqual(12);
+  });
+
+  it('a longer jam floors the wait higher than a short one (proportional to jam metres)', async () => {
+    const big = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [{ ...googleJam(8), metadata: { ...googleJam(8).metadata, jamMeters: 900 } }]);
+    const small = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [{ ...googleJam(8), metadata: { ...googleJam(8).metadata, jamMeters: 150 } }]);
+    expect(big.wait).toBeGreaterThanOrEqual(20);
+    expect(big.wait).toBeGreaterThan(small.wait);
+  });
+
+  it('a hard official wait is NOT raised by the Google jam floor (official > google)', async () => {
+    // 18 min hard official + Google jam: the jam floor (22) must NOT apply (official governs).
+    const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [hardPublic(18), googleJam(8)]);
+    expect(sig.wait).toBeLessThan(22); // not floored up to the Google-jam value
+    expect(sig.wait).toBeGreaterThanOrEqual(10); // governed by the official, not Google's tiny 8
   });
 
   it('Google clear must NOT lower an official high wait (official stays primary)', async () => {
