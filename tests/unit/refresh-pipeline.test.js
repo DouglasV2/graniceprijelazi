@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const app = readFileSync(join(root, 'src', 'App.jsx'), 'utf8');
+const mapsLoader = readFileSync(join(root, 'src', 'utils', 'google-maps-loader.js'), 'utf8');
 
 describe('frontend fetch never serves cached data', () => {
   it("fetchJson sets cache: 'no-store'", () => {
@@ -46,8 +47,19 @@ describe('frontend polling + live-signal push', () => {
   });
 });
 
-describe('Google Maps loader best practice', () => {
+describe('Google Maps loader best practice (src/utils/google-maps-loader.js)', () => {
   it('loads the Maps JS API with loading=async', () => {
-    expect(app).toMatch(/maps\.googleapis\.com\/maps\/api\/js\?key=\$\{apiKey\}&loading=async&libraries=marker&v=weekly/);
+    expect(mapsLoader).toMatch(/maps\.googleapis\.com\/maps\/api\/js\?key=\$\{apiKey\}&loading=async&libraries=marker&v=weekly/);
+  });
+  it('awaits importLibrary before resolving (async loading attaches constructors lazily)', () => {
+    // Prevents the "google.maps.LatLngBounds is not a constructor" regression that loading=async
+    // causes if the classic constructors are used before the bundles are imported.
+    expect(mapsLoader).toMatch(/importLibrary\('core'\)/);
+    expect(mapsLoader).toMatch(/importLibrary\('maps'\)/);
+    // "ready" must mean the constructors are attached, not just that google.maps exists.
+    expect(mapsLoader).toMatch(/window\.google\?\.maps\?\.Map/);
+  });
+  it('App.jsx uses the extracted loader', () => {
+    expect(app).toMatch(/import \{ loadGoogleMaps \} from '\.\/utils\/google-maps-loader\.js'/);
   });
 });

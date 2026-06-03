@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { formatMinutes, hasKnownWait, isUsableMinuteValue, normalizeMinutes, formatWaitDisplay } from './utils/wait-format.js';
 import { cameraEstimateDecision } from './utils/camera-display.js';
+import { loadGoogleMaps } from './utils/google-maps-loader.js';
 
 
 function makeCrossingHistory(baseCars, baseTrucks, baseBuses, baseWait) {
@@ -2480,31 +2481,6 @@ function TripPlanner({ selectedDirection, setSelectedDirection, tripCrossing, se
       </div>
     </section>
   );
-}
-
-function loadGoogleMaps(apiKey) {
-  if (window.google?.maps) return Promise.resolve(window.google);
-  if (window.__borderFlowGoogleMapsPromise) return window.__borderFlowGoogleMapsPromise;
-
-  window.__borderFlowGoogleMapsPromise = new Promise((resolve, reject) => {
-    const existing = document.querySelector('script[data-borderflow-google-maps="true"]');
-    if (existing) {
-      existing.addEventListener('load', () => resolve(window.google));
-      existing.addEventListener('error', reject);
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&libraries=marker&v=weekly`;
-    script.async = true;
-    script.defer = true;
-    script.dataset.borderflowGoogleMaps = 'true';
-    script.onload = () => resolve(window.google);
-    script.onerror = () => reject(new Error('Google Maps se nije uspio učitati.'));
-    document.head.appendChild(script);
-  });
-
-  return window.__borderFlowGoogleMapsPromise;
 }
 
 function getMarkerTone(crossing, selectedDirection = 'toBih', overrides = {}) {
