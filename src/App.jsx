@@ -980,6 +980,11 @@ const PUBLIC_STATE_POLL_MS = Number(import.meta.env.VITE_PUBLIC_STATE_POLL_MS) |
 // Custom DOM event used to push an immediate public-state reload when a fresh live signal lands
 // (route fetch persisted a Google snapshot, camera panel rescanned, admin forced a refresh).
 const LIVE_SIGNAL_EVENT = 'bf-live-signal-updated';
+// Stable, module-level dispatcher so passing it as a prop (e.g. CameraPanel.onLiveSignalUpdated)
+// does NOT change identity each render — otherwise effects that depend on it re-run in a loop.
+function dispatchLiveSignal() {
+  window.dispatchEvent(new Event(LIVE_SIGNAL_EVENT));
+}
 
 function apiUrl(path) {
   return `${API_BASE_URL}${path}`;
@@ -2913,7 +2918,7 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
           setRouteInspectorOpen(Boolean(payload?.routes?.length));
           // The route fetch just persisted a fresh Google snapshot server-side — push a sync
           // public-state reload so the marker/headline reflect it now, not at the next poll.
-          if (payload?.live) window.dispatchEvent(new Event(LIVE_SIGNAL_EVENT));
+          if (payload?.live) dispatchLiveSignal();
         }
       } catch {
         if (!cancelled) {
@@ -3246,7 +3251,7 @@ function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, se
       <div className="map-layout">
         <div>{mode === 'map'
           ? <GoogleMapView selectedDirection={selectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={setSelectedCrossing} showTraffic={showTraffic} focusTraffic={focusTraffic} visibleCrossings={visibleCrossings} overrides={overrides} stateVersion={stateVersion} />
-          : <CameraPanel crossing={selectedCrossing} selectedDirection={selectedDirection} onLiveSignalUpdated={() => window.dispatchEvent(new Event(LIVE_SIGNAL_EVENT))} />}</div>
+          : <CameraPanel crossing={selectedCrossing} selectedDirection={selectedDirection} onLiveSignalUpdated={dispatchLiveSignal} />}</div>
         <aside className="map-side">
           {mode === 'map' && (
             <div className="map-filter-card">
@@ -4735,7 +4740,16 @@ export default function App() {
         globalThis.__BF_STATUS_OVERRIDES = payload.statusOverrides || {};
         globalThis.__BF_SOURCE_REFRESH = payload.sourceRefresh || {};
         globalThis.__BF_STATE_READY = true;
-        if (payload.overrides) setOverrides(payload.overrides);
+        // Only replace overrides when the CONTENT changed — otherwise a new object identity every
+        // poll re-triggers the route-fetch effect (which dep on overrides), which dispatches a live
+        // signal, which reloads state… an "every second" feedback loop that also kept re-fitting
+        // the map. Returning the previous reference when equal keeps effects quiet.
+        if (payload.overrides) {
+          setOverrides((prev) => {
+            try { return JSON.stringify(prev) === JSON.stringify(payload.overrides) ? prev : payload.overrides; }
+            catch { return payload.overrides; }
+          });
+        }
         setServerStateVersion((value) => value + 1);
       }
       return payload;
@@ -4779,14 +4793,17 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function selectCrossing(idOrCrossing) {
+  // Stable identity: this is passed to GoogleMapView as setSelectedCrossing, which is a dependency
+  // of the (expensive) map-create + fitBounds effect. A fresh function every render would recreate
+  // the map and reset the zoom on every state refresh — keep it memoised.
+  const selectCrossing = useCallback((idOrCrossing) => {
     const crossing = typeof idOrCrossing === 'string'
       ? CROSSINGS.find((item) => item.id === idOrCrossing)
       : idOrCrossing;
     if (!crossing) return;
     setSelectedCrossing(crossing);
     setTripCrossing(crossing.id);
-  }
+  }, [setSelectedCrossing, setTripCrossing]);
 
   function toggleTracked(id) {
     setTrackedIds(trackedIds.includes(id) ? trackedIds.filter((item) => item !== id) : [...trackedIds, id]);

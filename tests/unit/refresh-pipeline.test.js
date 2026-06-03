@@ -34,12 +34,22 @@ describe('frontend polling + live-signal push', () => {
     expect(app).toMatch(/loadServerState\(\{\s*sync:\s*true\s*\}\)/);
   });
   it('a completed route fetch pushes a live-signal reload', () => {
-    expect(app).toMatch(/payload\?\.live\)\s*window\.dispatchEvent\(new Event\(LIVE_SIGNAL_EVENT\)\)/);
+    expect(app).toMatch(/payload\?\.live\)\s*dispatchLiveSignal\(\)/);
   });
-  it('CameraPanel notifies the app via onLiveSignalUpdated', () => {
+  it('the live-signal dispatcher is a stable module-level function (no per-render identity)', () => {
+    expect(app).toMatch(/function dispatchLiveSignal\(\)\s*\{/);
+    expect(app).toMatch(/window\.dispatchEvent\(new Event\(LIVE_SIGNAL_EVENT\)\)/);
+  });
+  it('CameraPanel notifies the app via a STABLE onLiveSignalUpdated prop', () => {
     expect(app).toMatch(/function CameraPanel\(\{[^}]*onLiveSignalUpdated/);
     expect(app).toMatch(/onLiveSignalUpdated\?\.\(\)/);
-    expect(app).toMatch(/onLiveSignalUpdated=\{\(\)\s*=>\s*window\.dispatchEvent\(new Event\(LIVE_SIGNAL_EVENT\)\)\}/);
+    expect(app).toMatch(/onLiveSignalUpdated=\{dispatchLiveSignal\}/);
+  });
+  it('loadServerState avoids overrides identity churn (kills the re-render/zoom loop)', () => {
+    expect(app).toMatch(/JSON\.stringify\(prev\)\s*===\s*JSON\.stringify\(payload\.overrides\)\s*\?\s*prev\s*:\s*payload\.overrides/);
+  });
+  it('selectCrossing is memoised so the map is not recreated every render', () => {
+    expect(app).toMatch(/const selectCrossing = useCallback\(/);
   });
   it('admin "Osvježi live izvore" button refreshes then pushes a live reload', () => {
     expect(app).toMatch(/Osvježi live izvore/);
