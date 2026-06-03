@@ -3396,11 +3396,31 @@ app.get('/api/auth/me', authRequired, (req, res) => {
 });
 
 app.get('/api/public/state', async (req, res) => {
-  refreshProductionSources({ force: false }).catch((error) => {
-    console.warn('[source-refresh/public-state]', error.message);
-  });
+  // refresh=sync → AWAIT the refresh before building effectiveWaits, so the response carries the
+  // NEW estimate (used by the admin "Osvježi" button and right after a route/camera signal lands).
+  // refresh=force additionally forces a refetch even if the interval has not elapsed. Default keeps
+  // the cheap background refresh so the regular poll never blocks.
+  const refreshMode = String(req.query.refresh || '');
+  const wantSync = refreshMode === 'sync' || refreshMode === 'force';
+  let refreshedInThisRequest = false;
+  if (wantSync) {
+    try {
+      const result = await refreshProductionSources({ force: refreshMode === 'force' });
+      // "did a refresh actually execute" (not whether every external source succeeded — a partial
+      // failure still produced fresh data for the sources that did respond).
+      refreshedInThisRequest = Boolean(result && !result.skipped);
+    } catch (error) {
+      console.warn('[source-refresh/public-state-sync]', error.message);
+    }
+  } else {
+    refreshProductionSources({ force: false }).catch((error) => {
+      console.warn('[source-refresh/public-state]', error.message);
+    });
+  }
+  res.set('Cache-Control', 'no-store');
   const store = await readAppStore();
   const { effectiveWaits, waitSources } = await buildEffectiveWaitMaps(store);
+  const lastFinishedAt = sourceRefreshState.lastRunAt ? new Date(sourceRefreshState.lastRunAt).toISOString() : null;
   res.json({
     ok: true,
     updatedAt: new Date().toISOString(),
@@ -3411,7 +3431,12 @@ app.get('/api/public/state', async (req, res) => {
     waitSources,
     sourceRefresh: {
       enabled: SOURCE_FETCH_ENABLED,
-      lastRunAt: sourceRefreshState.lastRunAt ? new Date(sourceRefreshState.lastRunAt).toISOString() : null,
+      running: Boolean(sourceRefreshState.running),
+      refreshedInThisRequest,
+      ageSeconds: sourceRefreshState.lastRunAt ? Math.max(0, Math.round((Date.now() - sourceRefreshState.lastRunAt) / 1000)) : null,
+      lastFinishedAt,
+      intervalSeconds: Math.round(SOURCE_REFRESH_INTERVAL_MS / 1000),
+      lastRunAt: lastFinishedAt,
       lastError: sourceRefreshState.lastError || '',
     },
     reportsCount: store.reports.length,

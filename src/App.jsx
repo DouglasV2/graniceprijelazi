@@ -1,5 +1,5 @@
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bell,
@@ -14,6 +14,7 @@ import {
   MapPin,
   MessageCircle,
   Navigation,
+  RefreshCw,
   Search,
   ShieldCheck,
   Share2,
@@ -972,6 +973,12 @@ const trendMeta = {
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 const API_TIMEOUT_MS = 8500;
+// How often the headline/marker state is polled. Kept short so a cleared/forming queue shows up
+// within ~30 s; live signals (route/camera/admin refresh) also push an immediate sync reload.
+const PUBLIC_STATE_POLL_MS = Number(import.meta.env.VITE_PUBLIC_STATE_POLL_MS) || 30000;
+// Custom DOM event used to push an immediate public-state reload when a fresh live signal lands
+// (route fetch persisted a Google snapshot, camera panel rescanned, admin forced a refresh).
+const LIVE_SIGNAL_EVENT = 'bf-live-signal-updated';
 
 function apiUrl(path) {
   return `${API_BASE_URL}${path}`;
@@ -984,6 +991,9 @@ async function fetchJson(path, options = {}) {
 
   try {
     const response = await fetch(apiUrl(path), {
+      // Never serve a cached border estimate — the whole point is live data. Combined with the
+      // per-request cache-busting query on /api/public/state this defeats browser + proxy caches.
+      cache: 'no-store',
       ...fetchOptions,
       signal: controller.signal,
     });
@@ -2485,7 +2495,7 @@ function loadGoogleMaps(apiKey) {
     }
 
     const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=marker&v=weekly`;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&libraries=marker&v=weekly`;
     script.async = true;
     script.defer = true;
     script.dataset.borderflowGoogleMaps = 'true';
@@ -2925,6 +2935,9 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
           setRoutePayload(payload);
           setSelectedRoute(null);
           setRouteInspectorOpen(Boolean(payload?.routes?.length));
+          // The route fetch just persisted a fresh Google snapshot server-side — push a sync
+          // public-state reload so the marker/headline reflect it now, not at the next poll.
+          if (payload?.live) window.dispatchEvent(new Event(LIVE_SIGNAL_EVENT));
         }
       } catch {
         if (!cancelled) {
@@ -3257,7 +3270,7 @@ function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, se
       <div className="map-layout">
         <div>{mode === 'map'
           ? <GoogleMapView selectedDirection={selectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={setSelectedCrossing} showTraffic={showTraffic} focusTraffic={focusTraffic} visibleCrossings={visibleCrossings} overrides={overrides} stateVersion={stateVersion} />
-          : <CameraPanel crossing={selectedCrossing} selectedDirection={selectedDirection} />}</div>
+          : <CameraPanel crossing={selectedCrossing} selectedDirection={selectedDirection} onLiveSignalUpdated={() => window.dispatchEvent(new Event(LIVE_SIGNAL_EVENT))} />}</div>
         <aside className="map-side">
           {mode === 'map' && (
             <div className="map-filter-card">
@@ -3420,7 +3433,7 @@ function LaneSplitCard({ profile }) {
   );
 }
 
-function CameraPanel({ crossing, selectedDirection }) {
+function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
   const [refreshKey, setRefreshKey] = useState(Date.now());
   const [selectedSignal, setSelectedSignal] = useState(() => getDefaultCameraId(crossing));
   const baselineAnalytics = useMemo(() => getCameraAnalytics(crossing, selectedDirection), [crossing, selectedDirection, refreshKey]);
@@ -3458,13 +3471,17 @@ function CameraPanel({ crossing, selectedDirection }) {
     let cancelled = false;
     fetchJson(`/api/camera-analytics/${crossing.id}?direction=${selectedDirection}&t=${refreshKey}`)
       .then((payload) => {
-        if (!cancelled && payload?.ok && payload.analytics) setApiAnalytics(payload.analytics);
+        if (!cancelled && payload?.ok && payload.analytics) {
+          setApiAnalytics(payload.analytics);
+          // Fresh live camera band → tell the app to reload the headline/marker now.
+          onLiveSignalUpdated?.();
+        }
       })
       .catch(() => {
         if (!cancelled) setApiAnalytics(null);
       });
     return () => { cancelled = true; };
-  }, [crossing.id, selectedDirection, refreshKey]);
+  }, [crossing.id, selectedDirection, refreshKey, onLiveSignalUpdated]);
 
   useEffect(() => {
     setSelectedSignal(getDefaultCameraId(crossing));
@@ -3481,6 +3498,7 @@ function CameraPanel({ crossing, selectedDirection }) {
       if (payload?.ok && payload.analytics) {
         setApiAnalytics(payload.analytics);
         setRefreshKey(Date.now());
+        onLiveSignalUpdated?.();
       }
     } catch (error) {
       setApiAnalytics(null);
@@ -4302,6 +4320,7 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection 
 }
 
 function AdminView({ selectedCrossing, setSelectedCrossing, selectedDirection, setSelectedDirection, overrides, setOverrides, posts, currentUser }) {
+  const [sourceRefreshState, setSourceRefreshState] = useState('idle'); // idle | loading | success | error
   const direction = getDirection(selectedCrossing, selectedDirection);
   const key = `${selectedCrossing.id}:${selectedDirection}`;
   const hasManualOverride = Object.prototype.hasOwnProperty.call(overrides, key);
@@ -4384,6 +4403,30 @@ function AdminView({ selectedCrossing, setSelectedCrossing, selectedDirection, s
     window.setTimeout(() => setCopyStatus(''), 2200);
   }
 
+  async function refreshLiveSources() {
+    if (!currentUser?.token) {
+      setExportStatus('Za osvježavanje izvora potrebna je prijava člana tima.');
+      window.setTimeout(() => setExportStatus(''), 2600);
+      return;
+    }
+    setSourceRefreshState('loading');
+    try {
+      await fetchJson('/api/admin/sources/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${currentUser.token}` },
+        body: JSON.stringify({ force: true }),
+        timeoutMs: 25000,
+      });
+      // Pull the freshly-refreshed estimate immediately (sync) — no browser reload needed.
+      window.dispatchEvent(new Event(LIVE_SIGNAL_EVENT));
+      setSourceRefreshState('success');
+      window.setTimeout(() => setSourceRefreshState('idle'), 3000);
+    } catch {
+      setSourceRefreshState('error');
+      window.setTimeout(() => setSourceRefreshState('idle'), 3500);
+    }
+  }
+
   async function downloadDailyReport() {
     if (!currentUser?.token) {
       setExportStatus('Za izvoz je potrebna prijava člana tima.');
@@ -4421,6 +4464,18 @@ function AdminView({ selectedCrossing, setSelectedCrossing, selectedDirection, s
           <p className="screen-subtitle">Ovdje tim može potvrditi čekanje, označiti zatvoren prijelaz ili dodati kratku poruku koja pomaže vozačima prije polaska.</p>
         </div>
         <div className="admin-head-actions">
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={refreshLiveSources}
+            disabled={sourceRefreshState === 'loading'}
+          >
+            <RefreshCw size={16} />
+            {sourceRefreshState === 'loading' ? ' Osvježavam…'
+              : sourceRefreshState === 'success' ? ' Osvježeno ✓'
+              : sourceRefreshState === 'error' ? ' Greška — pokušaj opet'
+              : ' Osvježi live izvore'}
+          </button>
           <button type="button" className="ghost-button" onClick={downloadDailyReport}><Download size={16}/> Izvoz CSV</button>
           <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} />
         </div>
@@ -4688,34 +4743,44 @@ export default function App() {
     return () => window.removeEventListener('bf-route-sanity-updated', handleRouteSanityUpdated);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function loadServerState() {
-      try {
-        // Public state endpoint is intentionally guest-readable so the app works
-        // before any login. When a token is present we still send it so admin
-        // overrides can be reconciled, but it is never required.
-        const headers = currentUser?.token ? { Authorization: `Bearer ${currentUser.token}` } : undefined;
-        const payload = await fetchJson('/api/public/state', { timeoutMs: 9000, headers });
-        if (!cancelled && payload?.ok) {
-          globalThis.__BF_EFFECTIVE_WAITS = payload.effectiveWaits || {};
-          globalThis.__BF_WAIT_SOURCES = payload.waitSources || {};
-          globalThis.__BF_STATUS_OVERRIDES = payload.statusOverrides || {};
-          globalThis.__BF_STATE_READY = true;
-          if (payload.overrides) setOverrides(payload.overrides);
-          setServerStateVersion((value) => value + 1);
-        }
-      } catch {
-        // App stays usable with local fallback state when backend is unavailable.
+  // loadServerState is a useCallback so live signals (route fetch, camera rescan, admin refresh)
+  // can push an immediate reload. `sync:true` asks the backend to AWAIT a due refresh and adds a
+  // cache-busting query, so the response carries the NEW estimate, never a stale one.
+  const loadServerState = useCallback(async ({ sync = false } = {}) => {
+    try {
+      // Public state endpoint is intentionally guest-readable so the app works before any login.
+      // When a token is present we still send it so admin overrides can be reconciled.
+      const headers = currentUser?.token ? { Authorization: `Bearer ${currentUser.token}` } : undefined;
+      const query = `?${sync ? 'refresh=sync&' : ''}t=${Date.now()}`;
+      const payload = await fetchJson(`/api/public/state${query}`, { timeoutMs: sync ? 20000 : 9000, headers });
+      if (payload?.ok) {
+        globalThis.__BF_EFFECTIVE_WAITS = payload.effectiveWaits || {};
+        globalThis.__BF_WAIT_SOURCES = payload.waitSources || {};
+        globalThis.__BF_STATUS_OVERRIDES = payload.statusOverrides || {};
+        globalThis.__BF_SOURCE_REFRESH = payload.sourceRefresh || {};
+        globalThis.__BF_STATE_READY = true;
+        if (payload.overrides) setOverrides(payload.overrides);
+        setServerStateVersion((value) => value + 1);
       }
+      return payload;
+    } catch {
+      // App stays usable with local fallback state when backend is unavailable.
+      return null;
     }
-    loadServerState();
-    const timer = window.setInterval(loadServerState, 90000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
   }, [setOverrides, currentUser?.token]);
+
+  useEffect(() => {
+    loadServerState();
+    const timer = window.setInterval(loadServerState, PUBLIC_STATE_POLL_MS);
+    // A fresh live signal (route/camera/admin) pushes an immediate sync reload so the marker and
+    // headline update within seconds instead of waiting for the next poll.
+    const onLiveSignal = () => loadServerState({ sync: true });
+    window.addEventListener(LIVE_SIGNAL_EVENT, onLiveSignal);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener(LIVE_SIGNAL_EVENT, onLiveSignal);
+    };
+  }, [loadServerState]);
 
   const viewer = currentUser || { name: 'Gost', role: 'user' };
   const tabs = viewer.role === 'admin' ? TABS_ADMIN : TABS_USER;
