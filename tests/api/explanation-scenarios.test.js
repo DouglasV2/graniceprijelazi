@@ -93,15 +93,19 @@ describe('Scenario 6 (V5 §6): camera cannot override official, and YOLO cannot 
 });
 
 describe('Scenario 7 (core fix): visual congestion conflict — camera shows a big queue but wait is low', () => {
-  it('Maljevac: visual-only camera shows ekstremna kolona + low Google → conflict, niska, range, no confident low number', async () => {
+  it('Maljevac: visual-only camera shows ekstremna kolona + low Google → camera LEADS, commits to a higher number (no "provjeri")', async () => {
     const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [googleClear(8), cameraVisual('ekstremna')]);
     expect(sig.visualCongestionConflict).toBe(true);
     expect(sig.visualBand).toBe('ekstremna');
-    expect(sig.confidenceLevel).toBe('niska');
+    expect(sig.cameraCongestionOverride).toBe(true);
+    expect(sig.conflictKind).toBe('camera-congestion');
+    // The number is RAISED toward the camera read, not left at Google's low 8.
+    expect(sig.wait).toBeGreaterThanOrEqual(25);
     expect(sig.precision).toBe('range');
-    expect(sig.rangeMax).toBeGreaterThanOrEqual(60);
-    expect(sig.label).toMatch(/gužva|provjeri/i);
-    expect(sig.note).toMatch(/kolona|provjeri/i);
+    expect(sig.label).toMatch(/gužva|kamer/i);
+    expect(sig.label).not.toMatch(/provjeri/i);
+    expect(sig.note).toMatch(/kolon/i);
+    expect(sig.note).not.toMatch(/provjeri/i);
   });
 
   it('no conflict when the wait already reflects congestion (official high)', async () => {
@@ -121,9 +125,12 @@ describe('Scenario 7 (core fix): visual congestion conflict — camera shows a b
     const sig = await mod.effectiveBorderSignal(crossing, 'toBih', 'car', store, [hardPublic(360), cameraVisual('mala')]);
     expect(sig.conflictKind).toBe('clear-high');
     expect(sig.visualConflict).toBe(true);
-    expect(sig.confidenceLevel).toBe('niska');
-    expect(sig.label).toMatch(/provjeri/i);
-    expect(sig.note).toMatch(/kamera ne pokazuje/i);
+    // Official (hard) outranks the camera, so the high number stays — but we commit to it and say
+    // the camera doesn't show that queue, WITHOUT sending the user to official sources.
+    expect(sig.label).not.toMatch(/provjeri/i);
+    expect(sig.label).toMatch(/kamer/i);
+    expect(sig.note).toMatch(/kamera trenutno ne pokazuje/i);
+    expect(sig.note).not.toMatch(/provjeri/i);
   });
 });
 

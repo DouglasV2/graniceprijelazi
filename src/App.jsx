@@ -1930,9 +1930,19 @@ function AuthScreen({ setCurrentUser, compact = false, onCancel }) {
 function RoadSign({ crossing, direction, wait, sourceMeta = {} }) {
   // Use the conflict-aware display (formatWaitDisplay reads sourceMeta) so the headline pill
   // never shows a confident raw number when the camera contradicts it (Maljevac/Šamac fix).
-  const conflict = sourceMeta.visualConflict || sourceMeta.visualCongestionConflict || Boolean(sourceMeta.conflictKind);
+  const kind = sourceMeta.conflictKind;
+  const conflict = sourceMeta.visualConflict || sourceMeta.visualCongestionConflict || Boolean(kind);
+  // Always COMMIT to a number — the pill explains WHAT drives it, it never tells people to go check
+  // official sources elsewhere (that defeats the app). The headline number is the committed figure.
+  const conflictText =
+    kind === 'camera-congestion' ? 'kamera vidi gužvu — procjena povišena'
+    : kind === 'congestion' ? 'kamera vidi veću gužvu'
+    : kind === 'clear-high' ? 'kamera ne vidi takvu kolonu'
+    : kind === 'google-jam' ? 'gužva na prilaznoj cesti'
+    : 'procjena iz više izvora';
+  const congestionKind = kind === 'camera-congestion' || kind === 'congestion' || kind === 'google-jam';
   const status = conflict
-    ? { className: 'busy', label: 'Provjeri' }
+    ? { className: 'busy', label: congestionKind ? 'Gužva' : 'Pazi' }
     : (statusMeta[statusFromWait(wait)] || statusMeta.unknown);
   return (
     <article className={`road-sign${conflict ? ' road-sign-conflict' : ''}`}>
@@ -1941,7 +1951,7 @@ function RoadSign({ crossing, direction, wait, sourceMeta = {} }) {
         <b>{direction.label}</b>
       </div>
       <strong>{hasKnownWait(wait) ? formatWaitDisplay(wait, sourceMeta) : '—'}</strong>
-      <small>{!hasKnownWait(wait) ? 'nema svježeg izvora' : conflict ? 'kamera se ne slaže — provjeri' : 'osobna vozila'}</small>
+      <small>{!hasKnownWait(wait) ? 'nema svježeg izvora' : conflict ? conflictText : 'osobna vozila'}</small>
       <em className={`status ${status.className}`}>{status.label}</em>
     </article>
   );
@@ -3515,8 +3525,8 @@ function CameraPanel({ crossing, selectedDirection }) {
       {(liveCongestionConflict || liveClearConflict) && (
         <div className="camera-conflict-banner">
           ⚠️ {liveCongestionConflict
-            ? `Na kameri se vidi ${analytics.queueBandLabel || 'velika kolona'}, ali prikazano čekanje (${formatMinutes(cameraHeadlineWait)}) je nisko — vjerojatno je veće. Provjeri službene izvore.`
-            : `Prikazano čekanje (${formatMinutes(cameraHeadlineWait)}) je visoko, ali kamera trenutno ne pokazuje takvu kolonu. Moguća je greška ili zastarjeli izvor — provjeri službene izvore.`}
+            ? `Kamera pokazuje ${analytics.queueBandLabel || 'veliku kolonu'} — procjenu čekanja podigli smo prema slici uživo (kamera ima prednost pred starijom službenom procjenom).`
+            : `Kamera trenutno ne pokazuje veću kolonu, pa je procjena niža nego što bi sugerirao stariji službeni podatak — prikazujemo ono što kamera vidi uživo.`}
         </div>
       )}
 

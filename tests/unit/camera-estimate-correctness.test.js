@@ -6,7 +6,7 @@
 //   - estimateCameraFlowFromSnapshot → the camera's minute estimate (hard-capped by evidence)
 import { describe, it, expect } from 'vitest';
 import { estimateCameraFlowFromSnapshot } from '../../server/index.js';
-import { classifyQueueBand, QUEUE_BANDS, resolveCameraClearOverride } from '../../server/intelligence.js';
+import { classifyQueueBand, QUEUE_BANDS, resolveCameraClearOverride, resolveCameraCongestionOverride } from '../../server/intelligence.js';
 
 const rank = (b) => QUEUE_BANDS.indexOf(b);
 
@@ -113,5 +113,44 @@ describe('resolveCameraClearOverride — empty camera lowers a weak number, neve
   it('needs both numbers present', () => {
     expect(resolveCameraClearOverride({ ...base, cameraWait: null }).override).toBe(false);
     expect(resolveCameraClearOverride({ ...base, currentWait: null }).override).toBe(false);
+  });
+});
+
+describe('resolveCameraCongestionOverride — camera queue raises a low number (commit, never "provjeri")', () => {
+  const base = { visualBand: 'ekstremna', cameraWait: null, currentWait: 8, hardAuthorityPresent: false };
+
+  it('ekstremna band + low number + no hard authority → raises to the band floor (≥30)', () => {
+    const r = resolveCameraCongestionOverride({ ...base });
+    expect(r.override).toBe(true);
+    expect(r.wait).toBeGreaterThanOrEqual(30);
+  });
+
+  it('velika band raises to a lower floor (≥18) than ekstremna', () => {
+    const r = resolveCameraCongestionOverride({ ...base, visualBand: 'velika' });
+    expect(r.override).toBe(true);
+    expect(r.wait).toBeGreaterThanOrEqual(18);
+  });
+
+  it('uses the camera own wait when it is higher than the floor', () => {
+    const r = resolveCameraCongestionOverride({ ...base, cameraWait: 45 });
+    expect(r.wait).toBe(45);
+  });
+
+  it('a HARD official / measured value BLOCKS the raise (official|measured > camera)', () => {
+    const r = resolveCameraCongestionOverride({ ...base, hardAuthorityPresent: true });
+    expect(r.override).toBe(false);
+    expect(r.wait).toBe(8);
+  });
+
+  it('does NOT fire for a clear/small band (nema/mala/srednja)', () => {
+    for (const b of ['nema', 'mala', 'srednja']) {
+      expect(resolveCameraCongestionOverride({ ...base, visualBand: b }).override).toBe(false);
+    }
+  });
+
+  it('never LOWERS — if the current number already exceeds the band floor, no change', () => {
+    const r = resolveCameraCongestionOverride({ ...base, currentWait: 50 });
+    expect(r.override).toBe(false);
+    expect(r.wait).toBe(50);
   });
 });

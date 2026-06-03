@@ -17,6 +17,7 @@ import {
   detectVisualCongestionConflict,
   detectCameraClearConflict,
   resolveCameraClearOverride,
+  resolveCameraCongestionOverride,
   estimateWaitFromCameraSignals,
   cameraYoloEligibility,
   worstQueueBand,
@@ -1148,10 +1149,11 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     waits: { toBih: { car: 36, truck: 62, bus: 44 }, toHr: { car: 78, truck: 115, bus: 86 } },
     anchors: calibratedAnchors({
       hrLabel: 'Ličko Petrovo Selo', bihLabel: 'Izačić',
-      approachHr: { lat: 44.87770, lng: 15.76120 },
+      // Anchors extended ~3× out along the road bearing so the line is not a ~0.6 km stub.
+      approachHr: { lat: 44.88194, lng: 15.75524 },
       borderPoint: { lat: 44.87558, lng: 15.76418 },
-      exitBih: { lat: 44.87335, lng: 15.76665 },
-      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 850, displayBeforeMeters: 700, displayAfterMeters: 900 },
+      exitBih: { lat: 44.86889, lng: 15.77159 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1500, displayAfterMeters: 1500 },
     }),
     cameras: [
       // FIX: k=179 ("BIH Izačić") embeds cam.asp?id=407. Old 179.jpg = invalid-webcam placeholder.
@@ -1201,10 +1203,11 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     // bearing and the display window widened. Marker (lat/lng) unchanged.
     anchors: calibratedAnchors({
       hrLabel: 'Vinjani Donji', bihLabel: 'Gorica',
-      approachHr: { lat: 43.42417, lng: 17.27095 },
+      // Anchors extended ~3× out along the road bearing so the line is not a ~0.9 km stub.
+      approachHr: { lat: 43.42781, lng: 17.26285 },
       borderPoint: { lat: 43.42235, lng: 17.27500 },
-      exitBih: { lat: 43.42054, lng: 17.27909 },
-      guard: { maxCrossingDistanceKm: 7, hardMaxCrossingDistanceKm: 18, passDistanceMeters: 1000, displayBeforeMeters: 900, displayAfterMeters: 1100 },
+      exitBih: { lat: 43.41692, lng: 17.28727 },
+      guard: { maxCrossingDistanceKm: 7, hardMaxCrossingDistanceKm: 18, passDistanceMeters: 1000, displayBeforeMeters: 1500, displayAfterMeters: 1500 },
     }),
     // FIX: k=39 ("Vinjani Donji") embeds cam.asp?id=302/303. Old 39.jpg = invalid-webcam placeholder.
     cameras: [{ id: 'vd-hak', label: 'Vinjani Donji', url: 'https://m.hak.hr/kamera.asp?g=2&k=39', imageUrls: ['https://www.hak.hr/info/kamere/302.jpg', 'https://www.hak.hr/info/kamere/303.jpg'] }],
@@ -1220,10 +1223,14 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     // column on both sides of the border. Marker (lat/lng) is unchanged.
     anchors: calibratedAnchors({
       hrLabel: 'Vinjani Gornji', bihLabel: 'Orahovlje',
-      approachHr: { lat: 43.46128, lng: 17.28063 },
+      // Anchors extended ~2.2× further out along the established NW→SE road bearing so the Google
+      // route is no longer a ~0.7 km stub that barely reaches the border. approachHr (HR) and
+      // exitBih (BiH) are pushed out; the marker and borderPoint are unchanged. Verified live that
+      // the route now threads the border and crosses into BiH like the other crossings.
+      approachHr: { lat: 43.46348, lng: 17.27407 },
       borderPoint: { lat: 43.45945, lng: 17.28610 },
-      exitBih: { lat: 43.45765, lng: 17.29155 },
-      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1000, displayAfterMeters: 1250 },
+      exitBih: { lat: 43.45549, lng: 17.29809 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1600, displayAfterMeters: 1600 },
     }),
     // FIX: k=282 ("Vinjani Gornji") embeds cam.asp?id=994/995. Old 282.jpg = invalid-webcam placeholder.
     cameras: [{ id: 'vg-hak', label: 'Vinjani Gornji', url: 'https://m.hak.hr/kamera.asp?g=2&k=282', imageUrls: ['https://www.hak.hr/info/kamere/994.jpg', 'https://www.hak.hr/info/kamere/995.jpg'] }],
@@ -1233,10 +1240,12 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     waits: { toBih: { car: 26, truck: 48, bus: 30 }, toHr: { car: 33, truck: 54, bus: 36 } },
     anchors: calibratedAnchors({
       hrLabel: 'Prolog', bihLabel: 'Crveni Grm',
-      approachHr: { lat: 43.15920, lng: 17.47690 },
+      // Anchors were extremely tight (~130 m each side → 0.3 km line); extended ~4× out along the
+      // road bearing so the rendered route reaches well into HR and crosses into BiH.
+      approachHr: { lat: 43.15575, lng: 17.47495 },
       borderPoint: { lat: 43.16035, lng: 17.47755 },
-      exitBih: { lat: 43.16154, lng: 17.47846 },
-      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 850, displayBeforeMeters: 700, displayAfterMeters: 900 },
+      exitBih: { lat: 43.16511, lng: 17.48119 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1500, displayAfterMeters: 1500 },
     }),
     cameras: [
       // FIX: k=181 ("BIH Crveni Grm") embeds cam.asp?id=410. Old 181.jpg = invalid-webcam placeholder.
@@ -2940,18 +2949,33 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     // and lower the wait to the frame's own estimate. Honours the source priority: it NEVER
     // overrides a HARD official number, a measured session or an admin value (those outrank the
     // camera). This is the "kamera prazna → reci da je prazno" behaviour, instead of only warning.
+    // HARD authority that outranks the camera: a hard (non-soft) official number OR a measured
+    // session. Soft public estimates, Google, historical and reports do NOT block the camera.
+    const hardAuthorityForCamera = hasMeasuredSession || !publicSignals.every(isSoftUpperBoundSource);
+    const cameraDisplayWait = cameraSignal ? clampWait(waitForVehicle(cameraSignal.normalizedWaitMin ?? 0, multiplier, vehicle)) : null;
     const cameraClearResult = resolveCameraClearOverride({
       visualBand,
       cameraClear: Boolean(cameraSignal) && cameraLooksClear(cameraSignal),
       cameraStale,
-      cameraWait: cameraSignal ? clampWait(waitForVehicle(cameraSignal.normalizedWaitMin ?? 0, multiplier, vehicle)) : null,
+      cameraWait: cameraDisplayWait,
       currentWait: finalWait,
-      // HARD authority that outranks the camera: a hard (non-soft) official number OR a measured
-      // session. Soft public estimates, Google, historical and reports do NOT block the override.
-      hardAuthorityPresent: hasMeasuredSession || !publicSignals.every(isSoftUpperBoundSource),
+      hardAuthorityPresent: hardAuthorityForCamera,
     });
     const cameraClearOverride = cameraClearResult.override;
     finalWait = cameraClearResult.wait;
+
+    // ── CAMERA-CONGESTION HIGH OVERRIDE (commit to a number; symmetric to clear-low) ──────────
+    // The app must give a real number, not "provjeri službene izvore". When the direction-relevant
+    // camera VISUALLY shows a queue (velika/ekstremna) but the current number is low, raise it to a
+    // camera-led estimate (camera's own wait, floored by the band). Same priority gate as above.
+    const cameraCongestionResult = resolveCameraCongestionOverride({
+      visualBand,
+      cameraWait: cameraDisplayWait,
+      currentWait: finalWait,
+      hardAuthorityPresent: hardAuthorityForCamera,
+    });
+    const cameraCongestionOverride = cameraCongestionResult.override;
+    finalWait = cameraCongestionResult.wait;
 
     // ── SMART RANGE (spec §8) ── never show false precision below high confidence.
     const range = computeSmartRange(finalWait, calibratedProfile, { agreementSpread, heavyGoogle: googleLooksHeavy(googleSignal) });
@@ -2995,11 +3019,14 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     }));
     const explanationPayload = buildEstimateExplanation(explanationDescriptors, { summary: explanation });
 
-    // ── VISUAL CONGESTION CONFLICT (Maljevac/Brod core fix) ──────────────────
-    // The camera VISUALLY shows a big queue but the fused (official/Google) wait is low —
-    // the low number is unreliable (often a lagging text source). We do NOT fabricate a
-    // number; we drop confidence to niska, force a range, and tell the user to verify.
-    const congestion = detectVisualCongestionConflict({ visualBand, fusedWait: finalWait });
+    // ── CAMERA vs WAIT (always COMMIT to a number — never "provjeri službene izvore") ────────
+    // The whole point of the app is to give a figure. When the camera has a clear read it LEADS:
+    // it raised the number on a visible queue (cameraCongestionOverride) or lowered it on an empty
+    // frame (cameraClearOverride) above. Here we only choose the wording + range; we never punt to
+    // official sources. detectVisualCongestionConflict runs on the PRE-override (base) wait so the
+    // visualCongestionConflict flag still tells the frontend the camera saw a queue.
+    const baseFusedWait = biasResult.wait;
+    const congestion = detectVisualCongestionConflict({ visualBand, fusedWait: baseFusedWait });
     const clearConflict = !congestion.conflict && detectCameraClearConflict({ visualBand, fusedWait: finalWait }).conflict;
     let outLevel = calibrated.level;
     let outPrecision = calibrated.precision;
@@ -3009,27 +3036,31 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     let outRangeMax = range.rangeMax;
     let note = capReason ? `${explanation} ${capReason}` : explanation;
     let conflictKind = null;
-    if (congestion.conflict) {
-      // Camera shows a big queue but the wait is low → "od X min" (at least), verify.
-      conflictKind = 'congestion';
-      outLevel = 'niska';
+    const bandWord = visualBand === 'ekstremna' ? 'ekstremnu' : 'veliku';
+    if (cameraCongestionOverride) {
+      // Camera led: we COMMITTED to a higher, camera-based number. Confident estimate + tight
+      // upward range. Keep the calibrated confidence (camera-heuristic, typically srednja/niska).
+      conflictKind = 'camera-congestion';
       outPrecision = 'range';
-      outHint = 'low';
-      outScore = Math.min(outScore, 30);
       outRangeMin = Math.max(0, Math.min(finalWait, range.rangeMin ?? finalWait));
-      outRangeMax = Math.max(range.rangeMax ?? finalWait, congestion.suggestedRangeMax);
-      note = `${note} Na kameri se vidi ${visualBand === 'ekstremna' ? 'ekstremna' : 'velika'} kolona, ali čekanje nije pouzdano izračunato — provjeri službene izvore.`;
-    } else if (clearConflict) {
-      // Camera shows little/no queue but the wait is very high → suspect number, warn (Šamac).
-      conflictKind = 'clear-high';
-      outLevel = 'niska';
+      outRangeMax = Math.max(range.rangeMax ?? finalWait, finalWait + (visualBand === 'ekstremna' ? 30 : 18));
+      note = `${note} Kamera pokazuje ${bandWord} kolonu — procjenu smo podigli prema slici uživo.`;
+    } else if (congestion.conflict) {
+      // Camera shows a queue but a HARD official/measured number (which outranks the camera) is
+      // low. Keep that authoritative figure, but say the camera sees more — committed number with
+      // an upward range, never "check elsewhere".
+      conflictKind = 'congestion';
       outPrecision = 'range';
-      outHint = 'low';
-      outScore = Math.min(outScore, 30);
-      note = `${note} Kamera ne pokazuje kolonu koja bi opravdala ovako visoko čekanje — provjeri službene izvore.`;
+      outRangeMin = Math.max(0, Math.min(finalWait, range.rangeMin ?? finalWait));
+      outRangeMax = Math.max(range.rangeMax ?? finalWait, finalWait + 25, congestion.suggestedRangeMax);
+      note = `${note} Kamera pokazuje ${bandWord} kolonu — stvarno čekanje može biti dulje od ${finalWait} min.`;
+    } else if (clearConflict) {
+      // A hard official/measured number is high but the camera is empty. Official outranks the
+      // camera, so we keep the number — but say plainly the camera does not show that queue.
+      conflictKind = 'clear-high';
+      outPrecision = 'range';
+      note = `${note} Kamera trenutno ne pokazuje kolonu koja bi objasnila ovako visoko čekanje.`;
     } else if (cameraClearOverride) {
-      // Camera is the lead: it plainly shows an empty/near-empty crossing, so we lowered the
-      // soft/Google number to match. Tell the user that — no "provjeri", the camera IS the check.
       note = `${note} Kamera trenutno ne pokazuje kolonu ni vozila — procjenu smo snizili prema slici uživo.`;
     }
 
@@ -3040,7 +3071,7 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     const googleTrafficSeverity = googleSignal?.metadata?.googleTrafficSeverity || 'unknown';
     const googleJamNearBorder = googleTrafficSeverity === 'jam';
     const googleSlowNearBorder = googleTrafficSeverity === 'slow';
-    const googleJamConflict = !congestion.conflict && !clearConflict && !cameraClearOverride && googleJamNearBorder && Number.isFinite(Number(finalWait)) && Number(finalWait) < 20;
+    const googleJamConflict = !congestion.conflict && !clearConflict && !cameraClearOverride && !cameraCongestionOverride && googleJamNearBorder && Number.isFinite(Number(finalWait)) && Number(finalWait) < 20;
     if (googleJamConflict) {
       conflictKind = 'google-jam';
       outLevel = 'niska';
@@ -3103,10 +3134,17 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       googleTraffic,
       googleTrafficSeverity,
       googleTrafficConflict: googleJamConflict,
-      label: (congestion.conflict || googleJamConflict) ? 'Moguća gužva — provjeri' : clearConflict ? 'Provjeri — kamera se ne slaže' : cameraClearOverride ? 'Kamera — nema kolone' : combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
-      className: cameraClearOverride ? 'camera' : combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
-      sourceType: cameraClearOverride ? 'camera-clear-override' : combined ? 'combined-estimate' : bestCandidate.sourceType,
+      label: cameraCongestionOverride ? 'Gužva — prema kameri'
+        : congestion.conflict ? 'Veća gužva (kamera)'
+        : googleJamConflict ? 'Moguća gužva na prilazu'
+        : clearConflict ? 'Kamera ne pokazuje kolonu'
+        : cameraClearOverride ? 'Kamera — nema kolone'
+        : combined ? 'Okvirna procjena'
+        : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
+      className: (cameraClearOverride || cameraCongestionOverride) ? 'camera' : combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
+      sourceType: cameraCongestionOverride ? 'camera-congestion-override' : cameraClearOverride ? 'camera-clear-override' : combined ? 'combined-estimate' : bestCandidate.sourceType,
       cameraClearOverride,
+      cameraCongestionOverride,
       confidence: outScore,
       hasGoogleSignal: Boolean(googleSignal),
       hasCameraSignal: Boolean(cameraSignal),
@@ -6749,8 +6787,15 @@ function sortCrossingRoutesByAnchorFit(routes = [], anchor = {}) {
 
 function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
   const guard = anchor.routeGuard || {};
-  const beforeMeters = Number(guard.displayBeforeMeters || process.env.ROUTE_DISPLAY_BEFORE_METERS || 850);
-  const afterMeters = Number(guard.displayAfterMeters || process.env.ROUTE_DISPLAY_AFTER_METERS || 1050);
+  let beforeMeters = Number(guard.displayBeforeMeters || process.env.ROUTE_DISPLAY_BEFORE_METERS || 850);
+  let afterMeters = Number(guard.displayAfterMeters || process.env.ROUTE_DISPLAY_AFTER_METERS || 1050);
+  // Show MORE of the Croatian approach so the rendered line does not stop ~700 m from the booth.
+  // The HR side is the APPROACH for HR→BiH (the "before" walk from the border) and the EXIT for
+  // BiH→HR (the "after" walk). We push that side out; the slice is still capped by the real route
+  // extent, so a short route is unaffected and we never draw beyond the actual road. Configurable.
+  const hrExtra = Number(process.env.ROUTE_HR_SIDE_EXTRA_METERS || 1800);
+  if (route.direction === 'toHr') afterMeters += hrExtra;
+  else beforeMeters += hrExtra;
   const slice = slicePathAroundPointIndexed(route.path || [], anchor.borderPoint, beforeMeters, afterMeters);
   const displayPath = slice.path;
   const displayDistanceMeters = pathDistanceMeters(displayPath);

@@ -35,11 +35,12 @@ export function normalizeMinutes(value) {
 export function formatWaitDisplay(wait, sourceMeta = {}) {
   if (!hasKnownWait(wait)) return 'čeka izvor';
   const n = Number(wait);
-  // Camera-vs-wait conflict (V5/V6): never present a confident number when the camera
-  // contradicts it. A visible queue with a low wait → floor "od X min" (at least this, likely
-  // more). No/small queue with a very high wait → approximate "~X min" (suspect, verify).
+  // Camera-vs-wait wording. We always COMMIT to a number (no "provjeri"): 'clear-high' keeps the
+  // official figure as "~X" (camera sees less), while 'congestion'/'google-jam' keep the
+  // authoritative low figure as a floor "od X min" (camera/Google see more). 'camera-congestion'
+  // is a camera-LED committed estimate, so it falls through to the range form ("30–60 min").
   if (sourceMeta.conflictKind === 'clear-high') return `~${formatMinutes(n)}`;
-  if (sourceMeta.visualCongestionConflict || sourceMeta.conflictKind === 'congestion' || sourceMeta.conflictKind === 'google-jam') return `od ${formatMinutes(n)}`;
+  if (sourceMeta.conflictKind === 'congestion' || sourceMeta.conflictKind === 'google-jam') return `od ${formatMinutes(n)}`;
   const hint = sourceMeta.confidenceHint || '';
   // The confidence engine's level/precision is the source of truth for honesty: we only
   // show a single exact number at HIGH confidence. Anything below shows a range (when one

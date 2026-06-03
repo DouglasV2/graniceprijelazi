@@ -113,10 +113,14 @@ describe('formatWaitDisplay', () => {
     expect(formatWaitDisplay(50, { confidenceLevel: 'niska', precision: 'range', rangeMin: 40, rangeMax: 58 })).toBe('40–58 min');
   });
 
-  it('visual congestion conflict shows a floor ("od X min"), never a confident low number', () => {
-    // Maljevac case: camera visibly shows a big queue but the computed wait is low.
-    expect(formatWaitDisplay(11, { visualCongestionConflict: true })).toBe('od 11 min');
+  it('hard-authority congestion keeps the official figure as a floor ("od X min")', () => {
+    // A hard official/measured number is low but the camera shows a queue → committed floor.
     expect(formatWaitDisplay(11, { conflictKind: 'congestion' })).toBe('od 11 min');
+  });
+
+  it('camera-led congestion COMMITS to a range (no "provjeri", no bare floor)', () => {
+    // Camera raised the estimate: show the committed range, not "od X" and never "check elsewhere".
+    expect(formatWaitDisplay(30, { conflictKind: 'camera-congestion', precision: 'range', rangeMin: 30, rangeMax: 55 })).toBe('30–55 min');
   });
 
   it('clear-high conflict shows an approximate ("~X"), never a confident high number', () => {
