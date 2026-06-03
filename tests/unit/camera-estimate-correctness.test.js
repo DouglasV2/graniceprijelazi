@@ -6,7 +6,7 @@
 //   - estimateCameraFlowFromSnapshot → the camera's minute estimate (hard-capped by evidence)
 import { describe, it, expect } from 'vitest';
 import { estimateCameraFlowFromSnapshot } from '../../server/index.js';
-import { classifyQueueBand, QUEUE_BANDS } from '../../server/intelligence.js';
+import { classifyQueueBand, QUEUE_BANDS, resolveCameraClearOverride } from '../../server/intelligence.js';
 
 const rank = (b) => QUEUE_BANDS.indexOf(b);
 
@@ -70,5 +70,48 @@ describe('estimateCameraFlowFromSnapshot never fabricates a high wait from an em
       const out = estimateCameraFlowFromSnapshot({ visibleVehicles: q, queueVehicles: q, occupancyPct: 70, laneFullnessPct: 70 });
       expect(out.wait).toBeLessThanOrEqual(caps[out.queueBand]);
     }
+  });
+});
+
+describe('resolveCameraClearOverride — empty camera lowers a weak number, never a hard authority', () => {
+  const base = { visualBand: 'nema', cameraClear: true, cameraStale: false, cameraWait: 2, currentWait: 12 };
+
+  it('empty camera + Google/soft number → overrides DOWN to the camera wait', () => {
+    const r = resolveCameraClearOverride({ ...base, hardAuthorityPresent: false });
+    expect(r.override).toBe(true);
+    expect(r.wait).toBe(2);
+  });
+
+  it('"mala" band (a car or two) also counts as clear enough to refine down', () => {
+    const r = resolveCameraClearOverride({ ...base, visualBand: 'mala', cameraWait: 4 });
+    expect(r.override).toBe(true);
+    expect(r.wait).toBe(4);
+  });
+
+  it('a HARD official number / measured session BLOCKS the override (official|measured > camera)', () => {
+    const r = resolveCameraClearOverride({ ...base, hardAuthorityPresent: true });
+    expect(r.override).toBe(false);
+    expect(r.wait).toBe(12);
+  });
+
+  it('does NOT fire when the camera shows a queue (band velika/ekstremna)', () => {
+    expect(resolveCameraClearOverride({ ...base, visualBand: 'velika' }).override).toBe(false);
+    expect(resolveCameraClearOverride({ ...base, visualBand: 'ekstremna' }).override).toBe(false);
+  });
+
+  it('does NOT fire on a stale frame or an unknown band', () => {
+    expect(resolveCameraClearOverride({ ...base, cameraStale: true }).override).toBe(false);
+    expect(resolveCameraClearOverride({ ...base, visualBand: null }).override).toBe(false);
+  });
+
+  it('never RAISES the wait — only lowers it', () => {
+    const r = resolveCameraClearOverride({ ...base, cameraWait: 20, currentWait: 8 });
+    expect(r.override).toBe(false);
+    expect(r.wait).toBe(8);
+  });
+
+  it('needs both numbers present', () => {
+    expect(resolveCameraClearOverride({ ...base, cameraWait: null }).override).toBe(false);
+    expect(resolveCameraClearOverride({ ...base, currentWait: null }).override).toBe(false);
   });
 });

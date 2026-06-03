@@ -16,6 +16,7 @@ import {
   applyRoiToDetections,
   detectVisualCongestionConflict,
   detectCameraClearConflict,
+  resolveCameraClearOverride,
   estimateWaitFromCameraSignals,
   cameraYoloEligibility,
   worstQueueBand,
@@ -2887,7 +2888,7 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     // Learned bias correction (V5 §2): nudge the fused value toward what measured waits
     // historically showed for this crossing/direction/hour. OFF until enough data + operator opt-in.
     const biasResult = applyBiasCorrection(crossing.id, direction, sanity.wait);
-    const finalWait = biasResult.wait;
+    let finalWait = biasResult.wait;
     const signalNames = uniqueSignalNames(candidates);
     const hasMultipleOfficialSources = uniqueSignalNames(candidates.filter((item) => item.sourceType === 'public-text-status')).length > 1;
     const combined = signalNames.length > 1 || hasMultipleOfficialSources;
@@ -2931,6 +2932,26 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     });
     const calibratedProfile = { level: calibrated.level, precision: calibrated.precision, score: calibrated.score };
     const confidenceHint = calibrated.level === 'visoka' ? 'high' : calibrated.level === 'srednja' ? 'medium' : 'low';
+
+    // ── CAMERA-CLEAR LOW OVERRIDE (camera > google; also refines a SOFT official estimate) ──
+    // When the direction-relevant camera frame is fresh and clearly EMPTY (band nema/mala) but
+    // the number comes only from weak signals — Google, a SOFT public estimate ("zadržavanja
+    // nisu duža od 30 min"), historical or driver reports — trust what the camera plainly shows
+    // and lower the wait to the frame's own estimate. Honours the source priority: it NEVER
+    // overrides a HARD official number, a measured session or an admin value (those outrank the
+    // camera). This is the "kamera prazna → reci da je prazno" behaviour, instead of only warning.
+    const cameraClearResult = resolveCameraClearOverride({
+      visualBand,
+      cameraClear: Boolean(cameraSignal) && cameraLooksClear(cameraSignal),
+      cameraStale,
+      cameraWait: cameraSignal ? clampWait(waitForVehicle(cameraSignal.normalizedWaitMin ?? 0, multiplier, vehicle)) : null,
+      currentWait: finalWait,
+      // HARD authority that outranks the camera: a hard (non-soft) official number OR a measured
+      // session. Soft public estimates, Google, historical and reports do NOT block the override.
+      hardAuthorityPresent: hasMeasuredSession || !publicSignals.every(isSoftUpperBoundSource),
+    });
+    const cameraClearOverride = cameraClearResult.override;
+    finalWait = cameraClearResult.wait;
 
     // ── SMART RANGE (spec §8) ── never show false precision below high confidence.
     const range = computeSmartRange(finalWait, calibratedProfile, { agreementSpread, heavyGoogle: googleLooksHeavy(googleSignal) });
@@ -3006,6 +3027,10 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       outHint = 'low';
       outScore = Math.min(outScore, 30);
       note = `${note} Kamera ne pokazuje kolonu koja bi opravdala ovako visoko čekanje — provjeri službene izvore.`;
+    } else if (cameraClearOverride) {
+      // Camera is the lead: it plainly shows an empty/near-empty crossing, so we lowered the
+      // soft/Google number to match. Tell the user that — no "provjeri", the camera IS the check.
+      note = `${note} Kamera trenutno ne pokazuje kolonu ni vozila — procjenu smo snizili prema slici uživo.`;
     }
 
     // ── GOOGLE TRAFFIC helper signal (never authority; spec Google task §7) ──
@@ -3015,7 +3040,7 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     const googleTrafficSeverity = googleSignal?.metadata?.googleTrafficSeverity || 'unknown';
     const googleJamNearBorder = googleTrafficSeverity === 'jam';
     const googleSlowNearBorder = googleTrafficSeverity === 'slow';
-    const googleJamConflict = !congestion.conflict && !clearConflict && googleJamNearBorder && Number.isFinite(Number(finalWait)) && Number(finalWait) < 20;
+    const googleJamConflict = !congestion.conflict && !clearConflict && !cameraClearOverride && googleJamNearBorder && Number.isFinite(Number(finalWait)) && Number(finalWait) < 20;
     if (googleJamConflict) {
       conflictKind = 'google-jam';
       outLevel = 'niska';
@@ -3078,9 +3103,10 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       googleTraffic,
       googleTrafficSeverity,
       googleTrafficConflict: googleJamConflict,
-      label: (congestion.conflict || googleJamConflict) ? 'Moguća gužva — provjeri' : clearConflict ? 'Provjeri — kamera se ne slaže' : combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
-      className: combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
-      sourceType: combined ? 'combined-estimate' : bestCandidate.sourceType,
+      label: (congestion.conflict || googleJamConflict) ? 'Moguća gužva — provjeri' : clearConflict ? 'Provjeri — kamera se ne slaže' : cameraClearOverride ? 'Kamera — nema kolone' : combined ? 'Okvirna procjena' : (bestCandidate.label === 'Google' ? 'Google procjena' : bestCandidate.label === 'Kamera' ? 'Kamera procjena' : `${bestCandidate.label} procjena`),
+      className: cameraClearOverride ? 'camera' : combined ? 'combined' : (bestCandidate.label === 'Google' ? 'google' : bestCandidate.label === 'Kamera' ? 'camera' : 'official'),
+      sourceType: cameraClearOverride ? 'camera-clear-override' : combined ? 'combined-estimate' : bestCandidate.sourceType,
+      cameraClearOverride,
       confidence: outScore,
       hasGoogleSignal: Boolean(googleSignal),
       hasCameraSignal: Boolean(cameraSignal),

@@ -537,6 +537,28 @@ export function detectCameraClearConflict({ visualBand = null, fusedWait = null,
   return { conflict: true, visualBand };
 }
 
+// CAMERA-CLEAR LOW OVERRIDE. The user-requested "kamera prazna → reci da je prazno" behaviour:
+// when a fresh, direction-relevant camera frame plainly shows an empty/near-empty crossing
+// (band nema/mala) but the wait number comes only from WEAK signals (Google / a soft public
+// estimate / historical / driver reports), trust the camera and lower the wait to what the frame
+// supports. Honours the source priority — `hardAuthorityPresent` (a HARD official number, a
+// measured session, or an admin value) BLOCKS the override, because those outrank the camera.
+// Pure + deterministic so it can be unit-tested away from the live store.
+export function resolveCameraClearOverride({
+  visualBand = null,
+  cameraClear = false,
+  cameraStale = false,
+  cameraWait = null,
+  currentWait = null,
+  hardAuthorityPresent = false,
+} = {}) {
+  const frameClear = Boolean(cameraClear) && !cameraStale && (visualBand === 'nema' || visualBand === 'mala');
+  if (!frameClear || hardAuthorityPresent) return { override: false, wait: currentWait };
+  if (!isNum(cameraWait) || !isNum(currentWait)) return { override: false, wait: currentWait };
+  if (Number(cameraWait) >= Number(currentWait)) return { override: false, wait: currentWait };
+  return { override: true, wait: Number(cameraWait) };
+}
+
 // Pick the worst (most congested) band from a list.
 export function worstQueueBand(bands = []) {
   let worst = null;
