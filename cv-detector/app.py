@@ -1,18 +1,22 @@
 """
-PrijelazRadar CV detector microservice.
+PrijelazRadar CV detector microservice (YOLO).
 
-A small object-detection service that the Node backend calls when
-CAMERA_CV_ENDPOINT is set. It runs a real YOLO model on the public camera
-still and returns per-class vehicle counts, which take priority over the
-built-in pixel heuristic for the displayed vehicle mix (auto / kombi /
-kamion / bus) and lane signals.
+A small object-detection service the Node backend calls when CAMERA_CV_ENDPOINT
+(or YOLO_ENDPOINT) is set. It runs a real YOLO model on the camera still and
+returns per-class vehicle counts AND detection boxes, which take priority over
+the built-in pixel heuristic for the vehicle mix, the queue band and the wait.
 
-Contract (must match server/index.js runCvDetector):
-  POST <CAMERA_CV_ENDPOINT>
+Contract (matches server/index.js runCvDetector + runYoloDetector):
+  POST <endpoint>
   Headers: Authorization: Bearer <CAMERA_CV_API_KEY>   (optional)
-  Body JSON: { cameraId, crossingId, direction, imageUrl, source }
-  Response JSON: { "counts": { "cars", "vans", "trucks", "buses" },
-                   "allowZero": true, "detections": [...], "model": "..." }
+  Body JSON: one of
+     { cameraId, crossingId, direction, imageBase64, contentType }   # preferred (Node already fetched it)
+     { cameraId, crossingId, direction, imageUrl }                   # fallback (service fetches it)
+  Response JSON:
+     { "counts": { "cars", "vans", "trucks", "buses" },
+       "detections": [ { "type", "confidence", "x","y","w","h" } ],  # PIXEL coords
+       "width", "height",            # so the Node side can normalise px -> percent
+       "allowZero": true, "model": "yolov8n.pt", "elapsedMs": 0 }
 
 Run locally:
   pip install -r requirements.txt
@@ -20,10 +24,12 @@ Run locally:
 Then on the Node side:
   CAMERA_CV_ENDPOINT=http://localhost:8000/detect
   CAMERA_CV_API_KEY=secret
+  YOLO_ENABLED=true                  # use YOLO for the wait (omit for shadow-compare only)
 """
 import os
 import io
 import time
+import base64
 import logging
 
 import requests
@@ -53,8 +59,9 @@ COCO_TO_BUCKET = {
     5: "buses",       # bus
     7: "trucks",      # truck
 }
+BUCKET_TO_TYPE = {"cars": "car", "vans": "van", "trucks": "truck", "buses": "bus"}
 
-app = FastAPI(title="PrijelazRadar CV detector", version="1.0")
+app = FastAPI(title="PrijelazRadar CV detector", version="1.1")
 _model = None
 
 
@@ -70,8 +77,30 @@ class DetectRequest(BaseModel):
     cameraId: str | None = None
     crossingId: str | None = None
     direction: str | None = None
-    imageUrl: str
+    # The Node server normally sends the bytes it already fetched (preferred — avoids a second
+    # fetch and works behind its image proxy / User-Agent). imageUrl is a fallback.
+    imageBase64: str | None = None
+    contentType: str | None = None
+    imageUrl: str | None = None
+    cameraUrl: str | None = None   # legacy alias for imageUrl
     source: str | None = None
+
+
+def _load_image(req: DetectRequest) -> Image.Image:
+    if req.imageBase64:
+        raw = base64.b64decode(req.imageBase64)
+        return Image.open(io.BytesIO(raw)).convert("RGB")
+    url = req.imageUrl or req.cameraUrl
+    if not url:
+        raise ValueError("no imageBase64 and no imageUrl/cameraUrl")
+    resp = requests.get(url, timeout=FETCH_TIMEOUT, headers={"User-Agent": USER_AGENT})
+    resp.raise_for_status()
+    return Image.open(io.BytesIO(resp.content)).convert("RGB")
+
+
+def _empty(allow_zero: bool):
+    return {"counts": {"cars": 0, "vans": 0, "trucks": 0, "buses": 0},
+            "detections": [], "width": 0, "height": 0, "allowZero": allow_zero}
 
 
 @app.get("/health")
@@ -82,25 +111,19 @@ def health():
 @app.post("/detect")
 def detect(req: DetectRequest, authorization: str | None = Header(default=None)):
     if AUTH_TOKEN:
-        expected = f"Bearer {AUTH_TOKEN}"
-        if authorization != expected:
+        if authorization != f"Bearer {AUTH_TOKEN}":
             raise HTTPException(status_code=401, detail="unauthorized")
 
     started = time.time()
     try:
-        resp = requests.get(
-            req.imageUrl,
-            timeout=FETCH_TIMEOUT,
-            headers={"User-Agent": USER_AGENT},
-        )
-        resp.raise_for_status()
-        image = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        image = _load_image(req)
     except Exception as exc:  # noqa: BLE001 - fetch/decode failures are expected occasionally
-        log.warning("image fetch/decode failed for %s: %s", req.imageUrl, exc)
-        # Returning counts=0 with allowZero=false makes the Node side ignore us
-        # and fall back to the heuristic, instead of reporting a fake-empty lane.
-        return {"counts": {"cars": 0, "vans": 0, "trucks": 0, "buses": 0}, "allowZero": False}
+        log.warning("image load failed for %s/%s: %s", req.crossingId, req.cameraId, exc)
+        # allowZero=False → the Node side ignores us and falls back to the heuristic,
+        # instead of reporting a fake-empty lane.
+        return _empty(False)
 
+    width, height = image.size
     counts = {"cars": 0, "vans": 0, "trucks": 0, "buses": 0}
     detections = []
     results = get_model().predict(image, conf=CONF_THRESHOLD, verbose=False)
@@ -113,7 +136,7 @@ def detect(req: DetectRequest, authorization: str | None = Header(default=None))
             counts[bucket] += 1
             x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
             detections.append({
-                "type": bucket[:-1],  # cars->car, trucks->truck, buses->buse(=bus below)
+                "type": BUCKET_TO_TYPE[bucket],
                 "confidence": round(float(box.conf[0]) * 100),
                 "x": round(x1, 1), "y": round(y1, 1),
                 "w": round(x2 - x1, 1), "h": round(y2 - y1, 1),
@@ -125,6 +148,8 @@ def detect(req: DetectRequest, authorization: str | None = Header(default=None))
         "counts": counts,
         "allowZero": True,   # a genuinely empty lane is a valid result for us
         "detections": detections,
+        "width": width,
+        "height": height,
         "model": MODEL_NAME,
         "elapsedMs": elapsed,
     }

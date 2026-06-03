@@ -1327,7 +1327,13 @@ const cvApiKey = process.env.CAMERA_CV_API_KEY || '';
 // REPLACES the vehicle-detection step; the wait still flows through the same evidence-cap,
 // direction/ROI gate and confidence calibration. If the model/runtime is unavailable the
 // pipeline silently falls back to the existing heuristic (system must never crash).
-const YOLO_ENABLED = process.env.YOLO_ENABLED === 'true';
+// Turn-key: when a CV/YOLO endpoint is configured, YOLO is ON by default (its detections replace
+// the pixel heuristic for counts + band). Set YOLO_ENABLED=false to force it off even with an
+// endpoint, or =true to force on. (Driving the WAIT from YOLO additionally needs per-camera ROI +
+// YOLO_FUSION_ENABLED + allowlist; without ROI, YOLO still improves the counts/band.)
+const YOLO_ENABLED = process.env.YOLO_ENABLED
+  ? process.env.YOLO_ENABLED === 'true'
+  : Boolean(process.env.YOLO_ENDPOINT || process.env.CAMERA_CV_ENDPOINT);
 // Shadow mode: run YOLO and record its result for comparison, but NEVER use it for the wait.
 // Lets us validate YOLO against the heuristic in production with zero risk before enabling it.
 // YOLO_SHADOW_ENABLED is the standardized name; YOLO_SHADOW_MODE kept as a back-compat alias.
@@ -1637,6 +1643,10 @@ const SOURCE_FETCH_TIMEOUT_MS = Math.max(1500, Number(process.env.SOURCE_FETCH_T
 // Default ON (needs the server key); set GOOGLE_TRAFFIC_ESTIMATE_ENABLED=false to disable for cost.
 const GOOGLE_TRAFFIC_ESTIMATE_ENABLED = process.env.GOOGLE_TRAFFIC_ESTIMATE_ENABLED !== 'false';
 const GOOGLE_TRAFFIC_REFRESH_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.GOOGLE_TRAFFIC_REFRESH_CONCURRENCY || 3)));
+// Automatic snapshot hygiene: prune source snapshots older than this on startup and on every
+// refresh, so stale/legacy values self-clean without anyone running DELETE on production. Fresh
+// data for active sources is re-inserted every refresh; only genuinely abandoned rows age out.
+const SOURCE_SNAPSHOT_RETENTION_MS = Math.max(1, Number(process.env.SOURCE_SNAPSHOT_RETENTION_HOURS || 6)) * 60 * 60 * 1000;
 let sourceRefreshState = { lastRunAt: 0, running: null, lastError: '' };
 
 const PUBLIC_SOURCE_TARGETS = {
@@ -2072,6 +2082,27 @@ async function insertSourceSnapshots(snapshots = []) {
   }
   await Promise.all(rows.map((row) => upsertHistoryFromSourceSnapshot(row)).map((promise) => promise.catch(() => null)));
   return rows;
+}
+
+// Delete source snapshots older than the retention window (both datastores). Runs automatically
+// on startup + each refresh so production never needs a manual DELETE to shed stale/bogus rows.
+async function pruneStaleSourceSnapshots() {
+  const cutoff = new Date(Date.now() - SOURCE_SNAPSHOT_RETENTION_MS).toISOString();
+  try {
+    if (datastoreMode === 'postgres') {
+      const res = await dbQuery('DELETE FROM borderflow_source_snapshots WHERE fetched_at < $1', [cutoff]);
+      return res.rowCount || 0;
+    }
+    const store = readStore();
+    const before = (store.sourceSnapshots || []).length;
+    store.sourceSnapshots = (store.sourceSnapshots || []).filter((item) => String(item.fetchedAt || '') >= cutoff);
+    const removed = before - store.sourceSnapshots.length;
+    if (removed) writeStore(store);
+    return removed;
+  } catch (error) {
+    console.warn('[prune-source-snapshots]', error.message);
+    return 0;
+  }
 }
 
 async function readLatestSourceSnapshots(crossingId, direction, hours = 8) {
@@ -2648,6 +2679,8 @@ async function refreshProductionSources({ force = false } = {}) {
     const snapshots = results.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
     const failures = results.filter((result) => result.status === 'rejected').map((result) => result.reason?.message || String(result.reason));
     const stored = await insertSourceSnapshots(snapshots);
+    // Auto-hygiene: shed stale/legacy snapshots every cycle so nobody has to DELETE on production.
+    await pruneStaleSourceSnapshots();
     sourceRefreshState.lastRunAt = Date.now();
     sourceRefreshState.lastError = failures.join(' | ');
     return { ok: failures.length === 0, snapshots: stored, failures, refreshedAt: new Date().toISOString() };
@@ -5493,6 +5526,9 @@ function getRecentCameraEvents(crossingId, direction, minutes = 15) {
 async function runCvDetector(camera, crossingId, direction) {
   if (!cvEndpoint) return null;
 
+  // Send the RESOLVED direct image URL (camera.url is often a page like kamera.asp). The service
+  // contract is `imageUrl`; we keep cameraUrl as a legacy alias for older detector builds.
+  const imageUrl = await resolveCameraImageUrl(camera).catch(() => camera.url || '');
   const response = await fetch(cvEndpoint, {
     method: 'POST',
     headers: {
@@ -5501,6 +5537,7 @@ async function runCvDetector(camera, crossingId, direction) {
     },
     body: JSON.stringify({
       cameraId: camera.id,
+      imageUrl,
       cameraUrl: camera.url,
       crossingId,
       direction,
@@ -8091,6 +8128,8 @@ if (process.env.NODE_ENV !== 'test') {
         console.log(`PrijelazRadar backend running on http://localhost:${port}`);
         console.log(`Datastore: ${datastoreMode}`);
         console.log(serverKey ? 'Routes API server key: configured' : 'Routes API server key: missing');
+        // Shed any stale/legacy snapshots left over from before this deploy (auto cleanup).
+        pruneStaleSourceSnapshots().then((n) => { if (n) console.log(`[prune-source-snapshots] removed ${n} stale snapshot(s) on startup`); }).catch(() => {});
         // Config-based camera sanity report (no network) — surfaces which cameras must be
         // manually configured (ROI / direction) before YOLO + ROI, and which are wait-capable.
         buildCameraAudit({ configOnly: true }).then(({ summary, all }) => {
