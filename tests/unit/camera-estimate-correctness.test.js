@@ -32,6 +32,18 @@ describe('classifyQueueBand never over-reports congestion without vehicle eviden
     expect(['velika', 'ekstremna']).toContain(classifyQueueBand({ occupancyPct: 60, laneFullnessPct: 80, queueVehicles: 9, confidence: 72 }).band);
     expect(classifyQueueBand({ occupancyPct: 90, laneFullnessPct: 92, queueVehicles: 30, confidence: 78 }).band).toBe('ekstremna');
   });
+
+  // The live over-count: 3–4 cars VISIBLE but queueVehicles ×3-inflated to 9–12 + noisy lane 100 →
+  // band must follow what is SEEN (visibleVehicles), not the inflated queue. Orašje/Brod/Šamac bug.
+  it('visibleVehicles caps the band even when the ×3-inflated queueVehicles is high', () => {
+    expect(classifyQueueBand({ laneFullnessPct: 100, queueVehicles: 9, visibleVehicles: 3, confidence: 62 }).band).toBe('srednja');
+    expect(classifyQueueBand({ laneFullnessPct: 67, queueVehicles: 12, visibleVehicles: 4, confidence: 65 }).band).toBe('srednja');
+    expect(classifyQueueBand({ laneFullnessPct: 90, queueVehicles: 6, visibleVehicles: 2, confidence: 60 }).band).toBe('mala');
+  });
+
+  it('a real queue with many VISIBLE vehicles still reads velika/ekstremna', () => {
+    expect(['velika', 'ekstremna']).toContain(classifyQueueBand({ laneFullnessPct: 85, queueVehicles: 30, visibleVehicles: 16, confidence: 70 }).band);
+  });
 });
 
 describe('estimateCameraFlowFromSnapshot never fabricates a high wait from an empty/near-empty frame', () => {

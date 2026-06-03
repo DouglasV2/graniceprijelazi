@@ -1625,7 +1625,10 @@ async function loadPersistedIntelligenceState() {
 }
 
 const SOURCE_FETCH_ENABLED = process.env.SOURCE_FETCH_ENABLED !== 'false';
-const SOURCE_REFRESH_INTERVAL_MS = Math.max(2, Number(process.env.SOURCE_REFRESH_INTERVAL_MINUTES || 10)) * 60 * 1000;
+// Refresh public sources + cameras more often so the wait estimate tracks reality (users should
+// not have to wait ~10 min for a cleared queue to disappear). Configurable; floored at 2 min to
+// stay polite to HAK/BIHAMK/Google.
+const SOURCE_REFRESH_INTERVAL_MS = Math.max(2, Number(process.env.SOURCE_REFRESH_INTERVAL_MINUTES || 4)) * 60 * 1000;
 const SOURCE_FETCH_TIMEOUT_MS = Math.max(1500, Number(process.env.SOURCE_FETCH_TIMEOUT_MS || 4500));
 let sourceRefreshState = { lastRunAt: 0, running: null, lastError: '' };
 
@@ -2426,7 +2429,11 @@ function cameraShowsQueue(signal = null) {
   return wait >= 25 || queue >= 22 || (queue >= 18 && flow15 <= 7);
 }
 
-const CAMERA_SIGNAL_MAX_AGE_MS = Math.max(5, Number(process.env.CAMERA_SIGNAL_MAX_AGE_MINUTES || 45)) * 60 * 1000;
+// How long a camera reading may drive the band / wait. Kept SHORT so a queue that has since
+// cleared cannot keep claiming "velika kolona": camera congestion is a real-time signal, not a
+// 45-minute memory. A reading older than this is ignored by the fusion (the live camera-analytics
+// card recomputes on every request, so the two stay consistent).
+const CAMERA_SIGNAL_MAX_AGE_MS = Math.max(5, Number(process.env.CAMERA_SIGNAL_MAX_AGE_MINUTES || 18)) * 60 * 1000;
 
 function isFreshCameraSourceSnapshot(item = {}) {
   const fetchedAt = item.fetchedAt || item.createdAt;
@@ -5777,6 +5784,12 @@ function estimateCameraFlowFromSnapshot({ visibleTotal = 0, visibleVehicles = nu
   else if (realVehicles <= 12 && fullness < 55) queueBand = 'srednja';
   else if (realVehicles <= 22 || fullness < 78) queueBand = 'velika';
   else queueBand = 'ekstremna';
+  // Vehicle-evidence cap (mirrors classifyQueueBand): the band can never exceed what is actually
+  // SEEN. A handful of visible cars on an open road must not read "velika/ekstremna kolona" just
+  // because the lane-fullness pixels are noisy or the queue was ×3-inflated for the wait math.
+  const QB_ORDER = ['nema', 'mala', 'srednja', 'velika', 'ekstremna'];
+  const evCap = realVehicles <= 2 ? 'mala' : realVehicles <= 5 ? 'srednja' : realVehicles <= 10 ? 'velika' : 'ekstremna';
+  if (QB_ORDER.indexOf(queueBand) > QB_ORDER.indexOf(evCap)) queueBand = evCap;
   // Hard ceiling: a camera wait may never exceed what its visual evidence supports.
   const evidenceCap = queueBand === 'nema' ? 6 : queueBand === 'mala' ? 14 : queueBand === 'srednja' ? 35 : queueBand === 'velika' ? 75 : 240;
 
@@ -6417,6 +6430,7 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
         occupancyPct: r.metadata?.occupancyPct ?? r.occupancyPct ?? 0,
         laneFullnessPct: r.metadata?.laneFullnessPct ?? 0,
         queueVehicles: r.queueVehicles ?? 0,
+        visibleVehicles: r.visibleVehicles ?? r.metadata?.visibleVehicles ?? r.visibleTotal,
         confidence: r.confidence ?? 55,
         stale: r.stale || r.metadata?.stale,
       });

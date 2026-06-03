@@ -473,7 +473,7 @@ export function cameraYoloEligibility(camera = {}, direction = null, runtime = {
 // degrades gracefully (caps at "srednja") when the frame is stale or low-confidence.
 export const QUEUE_BANDS = Object.freeze(['nema', 'mala', 'srednja', 'velika', 'ekstremna']);
 
-export function classifyQueueBand({ occupancyPct = 0, laneFullnessPct = 0, queueVehicles = 0, confidence = 60, stale = false } = {}) {
+export function classifyQueueBand({ occupancyPct = 0, laneFullnessPct = 0, queueVehicles = 0, visibleVehicles = null, confidence = 60, stale = false } = {}) {
   const fullness = Math.max(Number(occupancyPct) || 0, Number(laneFullnessPct) || 0);
   const q = Number(queueVehicles) || 0;
   let band;
@@ -483,14 +483,18 @@ export function classifyQueueBand({ occupancyPct = 0, laneFullnessPct = 0, queue
   else if (fullness < 70 && q <= 22) band = 'velika';
   else band = 'ekstremna';
 
-  // Pixel fullness (occupancy / lane) with NO vehicle evidence is sensor noise — wet asphalt,
-  // greenery, shadows, off-lane parked cars. A real "kolona" always has several vehicles, so a
-  // frame with ≤2 queued vehicles can never be more than "mala" no matter what fullness claims,
-  // and ≤5 can never exceed "srednja". This kills the empty-frame "Ekstremna kolona" bug
-  // (laneFullnessPct 99 with a single car). Real queues (q ≥ 6) keep their fullness-driven band,
-  // so the bumper-to-bumper undercount fix is untouched.
-  if (q <= 2 && QUEUE_BANDS.indexOf(band) > QUEUE_BANDS.indexOf('mala')) band = 'mala';
-  else if (q <= 5 && QUEUE_BANDS.indexOf(band) > QUEUE_BANDS.indexOf('srednja')) band = 'srednja';
+  // VEHICLE-EVIDENCE CAP. The band must reflect how many vehicles are actually SEEN, not pixel
+  // fullness (wet asphalt / shadows read 70–100 % lane on an open road) nor the ×3 area-inflated
+  // queue estimate (which is only for the wait, and turns 3 visible cars into "9 in queue" →
+  // "ekstremna"). Prefer the real detection count (visibleVehicles); fall back to queueVehicles
+  // when it is not supplied. You cannot have a "velika/ekstremna kolona" with a handful of cars.
+  const hasVisible = visibleVehicles !== null && visibleVehicles !== undefined && Number.isFinite(Number(visibleVehicles));
+  const evidence = hasVisible ? Number(visibleVehicles) : q;
+  let cap = 'ekstremna';
+  if (evidence <= 2) cap = 'mala';
+  else if (evidence <= 5) cap = 'srednja';
+  else if (evidence <= 10) cap = 'velika';
+  if (QUEUE_BANDS.indexOf(band) > QUEUE_BANDS.indexOf(cap)) band = cap;
 
   // An unreliable frame must not scream "ekstremna". Cap the claim.
   if ((stale || confidence < 45) && QUEUE_BANDS.indexOf(band) > 2) band = 'srednja';
@@ -644,7 +648,7 @@ export function buildCameraAnalysis(raw = {}) {
   const queueVehicles = round(raw.queueVehicles ?? 0);
   const stale = Boolean(raw.stale);
   const confidence = round(clamp(raw.confidence ?? 55, 0, 100));
-  const bandInfo = classifyQueueBand({ occupancyPct, laneFullnessPct, queueVehicles, confidence, stale });
+  const bandInfo = classifyQueueBand({ occupancyPct, laneFullnessPct, queueVehicles, visibleVehicles: raw.visibleVehicles ?? raw.visibleTotal, confidence, stale });
   // A camera that is stale or low-confidence must NOT emit an aggressive minute
   // estimate — it can still report a qualitative band. visualOnly never emits wait.
   const reliable = !stale && confidence >= 45 && !raw.visualOnly;
