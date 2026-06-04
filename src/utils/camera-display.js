@@ -30,3 +30,51 @@ export function freshnessLabelFromAge(ageSeconds, { staleAfterSeconds = 15 * 60 
   if (sec < 3600) return { label: `ažurirano prije ${Math.round(sec / 60)} min`, stale };
   return { label: `stara procjena (${Math.round(sec / 3600)} h)`, stale: true };
 }
+
+function normalizeText(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function cautiousBandLabel(rawLabel = '') {
+  const label = String(rawLabel || 'Vizualna provjera').trim();
+  if (!label || /^vizualna/i.test(label)) return 'Vizualna provjera';
+  if (/^djeluje kao/i.test(label)) return label;
+  return `Vizualno djeluje kao ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+}
+
+// Camera queue labels must not fake certainty. "Mala/Srednja/Velika kolona" is only confident
+// when we have an actual camera-driven estimate, or an ROI-calibrated YOLO signal. Heuristic/no-ROI
+// states are deliberately phrased as visual assistance, not a precise AI queue verdict.
+export function buildCameraQueueLabel(analytics = {}, { estimateUsable = false } = {}) {
+  const raw = analytics.queueBandLabel || analytics.finalVisualBand || 'Vizualna provjera';
+  const cvUsed = analytics.cvUsed === true || analytics.yoloUsed === true;
+  const roiFeatures = analytics.roiFeaturesPrimary || analytics.roiFeatures || analytics.yoloCamera || null;
+  const roiCalibrated = Boolean(roiFeatures?.roiCalibrated || analytics.roiCalibrated);
+  const queueVehicles = Number(roiFeatures?.vehiclesInQueueRoi ?? analytics.queueVehicles ?? NaN);
+  const noDetections = normalizeText(analytics.cvFallbackReason).includes('no-detections') || queueVehicles === 0;
+
+  if (estimateUsable) {
+    if (roiCalibrated && Number.isFinite(queueVehicles)) return `${queueVehicles} vozila u koloni`;
+    return raw;
+  }
+  if (cvUsed && roiCalibrated && Number.isFinite(queueVehicles)) {
+    if (queueVehicles <= 1 || noDetections) return 'AI kamera ne vidi kolonu';
+    return `AI kamera vidi ${queueVehicles} vozila u koloni`;
+  }
+  if (cvUsed && !roiCalibrated) return 'AI signal niže pouzdanosti';
+  return cautiousBandLabel(raw);
+}
+
+export function buildCameraTrustText(analytics = {}, { estimateUsable = false, contradictsOfficial = false } = {}) {
+  const cvUsed = analytics.cvUsed === true || analytics.yoloUsed === true;
+  const roiFeatures = analytics.roiFeaturesPrimary || analytics.roiFeatures || analytics.yoloCamera || null;
+  const roiCalibrated = Boolean(roiFeatures?.roiCalibrated || analytics.roiCalibrated);
+  const fallback = analytics.cvFallbackReason || roiFeatures?.fallbackReason || null;
+
+  if (estimateUsable && cvUsed && roiCalibrated) return 'Procjena koristi AI detekciju vozila unutar kalibrirane zone kolone.';
+  if (estimateUsable) return analytics.message || 'Procjena iz kamere koristi svježi signal, ali i dalje je uspoređujemo s javnim izvorima.';
+  if (contradictsOfficial) return 'Kamera se ne slaže dovoljno sa službenim izvorom, zato ju prikazujemo samo kao vizualnu provjeru.';
+  if (!cvUsed && fallback) return `Kamera trenutno služi kao vizualna pomoć — YOLO nije dostupan (${fallback}).`;
+  if (cvUsed && !roiCalibrated) return 'AI kamera vidi vozila, ali bez kalibrirane ROI zone signal je niže pouzdanosti.';
+  return 'Kamera trenutno služi kao vizualna provjera — čekanje ne izvodimo iz same slike.';
+}

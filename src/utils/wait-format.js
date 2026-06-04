@@ -29,43 +29,119 @@ export function normalizeMinutes(value) {
   return Math.round(n);
 }
 
-// User-facing wait label. Never returns "0–15 min"; collapses zero-low ranges to "do X min".
-// For mid-range bands renders the compact form "30–45 min" rather than the
-// duplicated "30 min–45 min".
-export function formatWaitDisplay(wait, sourceMeta = {}) {
-  if (!hasKnownWait(wait)) return 'čeka izvor';
+function roundToStep(value, step = 5) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.round(n / step) * step);
+}
+
+function displayStepForWait(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 5;
+  if (n >= 90) return 15;
+  if (n >= 30) return 5;
+  return 5;
+}
+
+function normalizedConfidence(sourceMeta = {}) {
+  const label = String(sourceMeta.confidenceLabel || sourceMeta.confidenceLevel || sourceMeta.confidenceHint || '').toLowerCase();
+  if (label.includes('visok') || label === 'high') return 'high';
+  if (label.includes('sred') || label === 'medium' || label === 'low-medium') return 'medium';
+  if (label.includes('nisk') || label === 'low') return 'low';
+  if (sourceMeta.hasSoftUpperBoundPublic) return 'low';
+  return 'high';
+}
+
+function rangeGuardFor(confidence) {
+  if (confidence === 'high') return 10;
+  if (confidence === 'medium') return 15;
+  return 20;
+}
+
+function displayBand(min, max) {
+  const lo = Math.max(0, Math.round(Number(min)));
+  const hi = Math.max(lo, Math.round(Number(max)));
+  if (hi < 60) return `${lo}–${hi} min`;
+  return `${formatMinutes(lo)}–${formatMinutes(hi)}`;
+}
+
+// Production display shaping layer. The raw fusion model may keep a wide uncertainty range for
+// backtesting/debug, but the public UI must be actionable. This function turns raw ranges into a
+// compact label and never leaks unhelpful bands like "32 min–1 h 10 min" to drivers.
+export function shapeWaitDisplay(wait, sourceMeta = {}) {
+  if (!hasKnownWait(wait)) {
+    return {
+      primaryLabel: 'čeka izvor',
+      displayRangeLabel: null,
+      confidence: normalizedConfidence(sourceMeta),
+      broadRangeCollapsed: false,
+      reason: 'unknown-wait',
+    };
+  }
   const n = Number(wait);
-  // Camera-vs-wait wording. We always COMMIT to a number (no "provjeri"): 'clear-high' keeps the
-  // official figure as "~X" (camera sees less), while 'congestion'/'google-jam' keep the
-  // authoritative low figure as a floor "od X min" (camera/Google see more). 'camera-congestion'
-  // is a camera-LED committed estimate, so it falls through to the range form ("30–60 min").
-  if (sourceMeta.conflictKind === 'clear-high') return `~${formatMinutes(n)}`;
-  if (sourceMeta.conflictKind === 'congestion' || sourceMeta.conflictKind === 'google-jam') return `od ${formatMinutes(n)}`;
-  const hint = sourceMeta.confidenceHint || '';
-  // The confidence engine's level/precision is the source of truth for honesty: we only
-  // show a single exact number at HIGH confidence. Anything below shows a range (when one
-  // is available) or a "~" approximation, so we never present false precision (spec §8, §13).
-  const level = sourceMeta.confidenceLevel || '';
-  const precision = sourceMeta.precision || '';
+  const confidence = normalizedConfidence(sourceMeta);
   const isSoftBound = sourceMeta.hasSoftUpperBoundPublic === true;
-  const isLowConf = hint === 'low' || hint === 'low-medium' || level === 'niska';
-  const isMediumConf = hint === 'medium' || level === 'srednja';
-  const wantRange = isSoftBound || isLowConf || isMediumConf || precision === 'range';
-  if (wantRange && hasKnownWait(sourceMeta.rangeMin) && hasKnownWait(sourceMeta.rangeMax)) {
-    const rMin = Math.max(0, Number(sourceMeta.rangeMin));
-    const rMax = Number(sourceMeta.rangeMax);
-    // A very wide spread ("7–21 min") from a SOFT/low-confidence official estimate is unhelpful to a
-    // driver — collapse it to a single actionable upper bound ("do 21 min"). Do NOT collapse a
-    // camera-led/conflict range (camera-congestion etc.), where the explicit band is meaningful.
-    const allowWideCollapse = isSoftBound || (isLowConf && !sourceMeta.conflictKind);
-    if (rMax - rMin >= 5) {
-      // Collapse only when the floor is near zero (so "7–21" reads as "maybe nothing" → unhelpful);
-      // keep informative high bands like "30–45 min" / "40–58 min" verbatim.
-      if (rMin === 0 || (allowWideCollapse && rMax - rMin >= 12 && rMin <= 8)) return `do ${formatMinutes(rMax)}`;
-      if (rMax < 60) return `${Math.round(rMin)}–${Math.round(rMax)} min`;
-      return `${formatMinutes(rMin)}–${formatMinutes(rMax)}`;
+  const kind = sourceMeta.conflictKind;
+  const hasRange = hasKnownWait(sourceMeta.rangeMin) && hasKnownWait(sourceMeta.rangeMax);
+  const approx = (value = n) => `oko ${formatMinutes(roundToStep(value, displayStepForWait(value)))}`;
+
+  // Conflict copy is intentionally conservative: a low official number + camera/Google jam is a
+  // floor, not a fake precise number.
+  if (kind === 'clear-high') return { primaryLabel: `~${formatMinutes(n)}`, displayRangeLabel: null, confidence, broadRangeCollapsed: false, reason: 'clear-high-conflict' };
+  if (kind === 'congestion' || kind === 'google-jam') return { primaryLabel: `od ${formatMinutes(n)}`, displayRangeLabel: null, confidence, broadRangeCollapsed: false, reason: 'congestion-floor' };
+
+  if (hasRange) {
+    const rawMin = Math.max(0, Number(sourceMeta.rangeMin));
+    const rawMax = Math.max(rawMin, Number(sourceMeta.rangeMax));
+    const width = rawMax - rawMin;
+    const guard = rangeGuardFor(confidence);
+    const step = displayStepForWait((rawMin + rawMax) / 2);
+    const roundedMin = roundToStep(rawMin, step);
+    const roundedMax = Math.max(roundedMin, roundToStep(rawMax, step));
+    const roundedWidth = roundedMax - roundedMin;
+    const lowFloor = rawMin <= 8;
+
+    if (rawMin === 0 || (lowFloor && (isSoftBound || confidence === 'low') && width >= 10)) {
+      return {
+        primaryLabel: `do ${formatMinutes(roundedMax)}`,
+        displayRangeLabel: null,
+        confidence,
+        broadRangeCollapsed: true,
+        reason: 'low-floor-upper-bound',
+      };
+    }
+
+    // Medium/low ranges wider than ~12 minutes are technically honest but not useful as the
+    // headline (e.g. 15–29, 32–70). Collapse to an approximate, rounded estimate and let the
+    // explanation/confidence text carry the uncertainty.
+    if (width > guard || (confidence !== 'high' && width >= 12)) {
+      return {
+        primaryLabel: approx(n || ((rawMin + rawMax) / 2)),
+        displayRangeLabel: `${displayBand(roundedMin, roundedMax)} · manje sigurno`,
+        confidence,
+        broadRangeCollapsed: true,
+        reason: width > guard ? 'range-over-guardrail' : 'medium-wide-range',
+      };
+    }
+
+    if (roundedWidth >= 5) {
+      return {
+        primaryLabel: displayBand(roundedMin, roundedMax),
+        displayRangeLabel: displayBand(roundedMin, roundedMax),
+        confidence,
+        broadRangeCollapsed: false,
+        reason: 'range-ok',
+      };
     }
   }
-  if (isSoftBound || isLowConf) return `~${formatMinutes(n)}`;
-  return formatMinutes(n);
+
+  if (isSoftBound || confidence === 'low') return { primaryLabel: `~${formatMinutes(n)}`, displayRangeLabel: null, confidence, broadRangeCollapsed: false, reason: 'low-approx' };
+  if (confidence === 'medium') return { primaryLabel: approx(n), displayRangeLabel: null, confidence, broadRangeCollapsed: false, reason: 'medium-approx' };
+  return { primaryLabel: formatMinutes(n), displayRangeLabel: null, confidence, broadRangeCollapsed: false, reason: 'exact-high' };
+}
+
+// User-facing wait label. Goes through the production shaping layer so raw broad model ranges do
+// not appear in the app as if they were actionable precision.
+export function formatWaitDisplay(wait, sourceMeta = {}) {
+  return shapeWaitDisplay(wait, sourceMeta).primaryLabel;
 }

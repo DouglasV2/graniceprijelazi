@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cameraEstimateDecision, freshnessLabelFromAge } from '../../src/utils/camera-display.js';
+import { cameraEstimateDecision, freshnessLabelFromAge, buildCameraQueueLabel, buildCameraTrustText } from '../../src/utils/camera-display.js';
 
 describe('cameraEstimateDecision (UI must not show false camera estimates)', () => {
   it('a visual-only / not-camera-driven camera is NOT usable', () => {
@@ -38,5 +38,20 @@ describe('freshnessLabelFromAge (stale must read as stale)', () => {
   });
   it('null age → waiting, not stale', () => {
     expect(freshnessLabelFromAge(null)).toEqual({ label: 'čeka osvježenje', stale: false });
+  });
+});
+
+
+describe('camera queue label honesty', () => {
+  it('does not show confident medium queue when camera is heuristic/no ROI', () => {
+    expect(buildCameraQueueLabel({ queueBandLabel: 'Srednja kolona', cvUsed: false }, { estimateUsable: false })).toBe('Vizualno djeluje kao srednja kolona');
+  });
+
+  it('shows a precise queue label only for calibrated AI signal', () => {
+    expect(buildCameraQueueLabel({ cvUsed: true, roiFeatures: { roiCalibrated: true, vehiclesInQueueRoi: 7 } }, { estimateUsable: false })).toBe('AI kamera vidi 7 vozila u koloni');
+  });
+
+  it('explains no-ROI as lower confidence', () => {
+    expect(buildCameraTrustText({ cvUsed: true, roiFeatures: { roiCalibrated: false } })).toMatch(/niže pouzdanosti/);
   });
 });

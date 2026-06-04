@@ -21,8 +21,8 @@ import {
   Truck,
   User,
 } from 'lucide-react';
-import { formatMinutes, hasKnownWait, isUsableMinuteValue, normalizeMinutes, formatWaitDisplay } from './utils/wait-format.js';
-import { cameraEstimateDecision } from './utils/camera-display.js';
+import { formatMinutes, hasKnownWait, isUsableMinuteValue, normalizeMinutes, formatWaitDisplay, shapeWaitDisplay } from './utils/wait-format.js';
+import { cameraEstimateDecision, buildCameraQueueLabel, buildCameraTrustText } from './utils/camera-display.js';
 import { loadGoogleMaps, mapsConstructorsReady } from './utils/google-maps-loader.js';
 
 
@@ -3032,7 +3032,7 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
           routePolylinesRef.current.push(trafficPolyline);
         });
 
-        const mid = path[Math.floor(path.length / 2)] || path[0];
+        const mid = route.labelPosition || route.borderPoint || path[Math.floor(path.length / 2)] || path[0];
         if (mid) {
           const labelEl = makeRouteLabelElement(route);
           labelEl.addEventListener('click', () => { setSelectedRoute(route); setRouteInspectorOpen(true); });
@@ -3355,12 +3355,19 @@ function PredictionBreakdown({ sourceMeta = {} }) {
   }
   if (!rows.length) return null;
   const confLabel = p.confidenceLabel === 'high' ? 'visoka' : p.confidenceLabel === 'medium' ? 'srednja' : 'niska';
+  const shaped = shapeWaitDisplay(p.expectedWaitMin, {
+    confidenceLabel: p.confidenceLabel,
+    rangeMin: p.rangeMin,
+    rangeMax: p.rangeMax,
+    precision: p.rangeMin !== undefined && p.rangeMax !== undefined ? 'range' : undefined,
+  });
   return (
     <div className={`prediction-breakdown conf-${p.confidenceLabel || 'low'}`}>
       <div className="prediction-breakdown-head">
-        <span>Procjena: oko {formatMinutes(p.expectedWaitMin)}</span>
+        <span>Procjena: {shaped.primaryLabel}</span>
         <span className="prediction-conf">Pouzdanost: {confLabel}</span>
       </div>
+      {shaped.displayRangeLabel && <p className="prediction-display-note">Sirovi raspon je sažet za korisnički prikaz: {shaped.displayRangeLabel}</p>}
       <ul className="prediction-breakdown-list">
         {rows.map((r, i) => <li key={i}><span aria-hidden="true">{r.icon}</span> {r.text}</li>)}
       </ul>
@@ -3568,6 +3575,9 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
     );
   }
 
+  const displayCameraQueueLabel = buildCameraQueueLabel(analytics, { estimateUsable: cameraEstimateUsable });
+  const cameraTrustText = buildCameraTrustText(analytics, { estimateUsable: cameraEstimateUsable, contradictsOfficial: cameraContradictsOfficial });
+
   return (
     <div className="active-camera-section">
       <div className="camera-toolbar">
@@ -3584,7 +3594,7 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
       {(liveCongestionConflict || liveClearConflict) && (
         <div className="camera-conflict-banner">
           ⚠️ {liveCongestionConflict
-            ? `Kamera pokazuje ${analytics.queueBandLabel || 'veliku kolonu'} — procjenu čekanja podigli smo prema slici uživo (kamera ima prednost pred starijom službenom procjenom).`
+            ? `Kamera pokazuje ${displayCameraQueueLabel || 'vidljivu kolonu'} — procjenu čekanja podigli smo prema slici uživo, ali uz kontrolu pouzdanosti.`
             : `Kamera trenutno ne pokazuje veću kolonu, pa je procjena niža nego što bi sugerirao stariji službeni podatak — prikazujemo ono što kamera vidi uživo.`}
         </div>
       )}
@@ -3594,15 +3604,11 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
           <div className="camera-intelligence-head">
             <div>
               <span>{cameraEstimateUsable ? 'Procjena iz kamera' : 'Kamera — vizualna provjera'}</span>
-              <strong>{cameraEstimateUsable ? formatMinutes(analytics.wait) : (analytics.queueBandLabel || 'Vizualna provjera')}</strong>
+              <strong>{cameraEstimateUsable ? formatMinutes(analytics.wait) : displayCameraQueueLabel}</strong>
             </div>
             <b className={`status ${state.className}`}>{state.label}</b>
           </div>
-          <p>{cameraEstimateUsable
-            ? analytics.message
-            : cameraContradictsOfficial
-              ? `Kamera pokazuje ~${formatMinutes(analytics.wait)}, ali službeni izvor pokazuje ${formatMinutes(cameraHeadlineWait)} — prikazujemo službenu procjenu, a kamera služi za vizualnu provjeru.`
-              : 'Za ovaj smjer kamera trenutno služi samo za vizualnu provjeru — čekanje nije izvedeno iz kamere.'}</p>
+          <p>{cameraEstimateUsable ? (analytics.message || cameraTrustText) : cameraTrustText}</p>
           {cameraEstimateUsable ? (
             <div className="camera-stat-grid">
               <div><span>Zadnjih 15 min</span><strong>{analytics.passed15}</strong><small>vozila</small></div>
@@ -3613,8 +3619,8 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
           ) : (
             // Visual-only / not-camera-driven: never present pseudo-precise counts as fact.
             <div className="camera-visual-summary">
-              <strong>{analytics.queueBandLabel || 'Vizualna provjera'}</strong>
-              <span>Broj vozila i protok nisu pouzdano izmjereni za ovaj smjer — vrijednosti se ne prikazuju kao točan broj. Koristi sliku za vizualnu provjeru, a čekanje s glavne kartice.</span>
+              <strong>{displayCameraQueueLabel}</strong>
+              <span>{cameraTrustText} Broj vozila i protok nisu prikazani kao točan broj dok signal nije dovoljno kalibriran.</span>
             </div>
           )}
           {cameraEstimateUsable && (
@@ -3639,8 +3645,8 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
           {analytics.cvEnabled ? (
             <p className="camera-source-note">
               Detekcija vozila: {analytics.cvUsed
-                ? 'YOLO model (cv-detector) — broji vozila na slici'
-                : `heuristika (procjena iz piksela)${analytics.cvFallbackReason ? ` — YOLO trenutno nedostupan: ${analytics.cvFallbackReason}` : ''}`}
+                ? 'YOLO model (cv-detector) — broji vozila unutar kalibrirane zone kad je ROI dostupan'
+                : `heuristika / vizualna pomoć${analytics.cvFallbackReason ? ` — YOLO trenutno nedostupan: ${analytics.cvFallbackReason}` : ''}`}
             </p>
           ) : null}
         </article>

@@ -218,7 +218,7 @@ export function computeRoiCameraFeatures(detections = [], roiConfig = null, imag
 // class + nearest normalized center; a small movement = stopped, larger = moving. Pure + safe.
 const DEFAULT_MOVE_THRESHOLD = 0.015; // normalized distance
 
-export function trackStoppedMoving(frames = [], { moveThreshold = DEFAULT_MOVE_THRESHOLD, roiConfig = null, imageMeta = {} } = {}) {
+export function trackStoppedMoving(frames = [], { moveThreshold = DEFAULT_MOVE_THRESHOLD, roiConfig = null, imageMeta = {}, frameHashes = [] } = {}) {
   const out = {
     multiFrameUsed: true,
     multiFrameFrameCount: Array.isArray(frames) ? frames.length : 0,
@@ -227,8 +227,20 @@ export function trackStoppedMoving(frames = [], { moveThreshold = DEFAULT_MOVE_T
     queueMovingSlowly: null,
     flowDirectionValid: null,
     matchedCount: 0,
+    duplicateFrameRatio: 0,
+    multiFrameEligible: true,
     multiFrameFallbackReason: null,
   };
+  const hashes = Array.isArray(frameHashes) ? frameHashes.filter(Boolean) : [];
+  if (hashes.length >= 2) {
+    const duplicates = hashes.slice(1).filter((h) => h === hashes[0]).length;
+    out.duplicateFrameRatio = round2(duplicates / Math.max(1, hashes.length - 1));
+    if (out.duplicateFrameRatio >= 0.75) {
+      out.multiFrameEligible = false;
+      out.multiFrameFallbackReason = 'DUPLICATE_OR_CACHED_FRAMES';
+      return out;
+    }
+  }
   const valid = (Array.isArray(frames) ? frames : []).filter((f) => Array.isArray(f));
   if (valid.length < 2) { out.multiFrameFallbackReason = 'INSUFFICIENT_FRAMES'; return out; }
   const width = Number(imageMeta.width || 0);

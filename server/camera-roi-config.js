@@ -14,8 +14,56 @@ const OVERRIDES_PATH = join(__dir, '..', 'data', 'camera-roi-overrides.json');
 // Committed ROI configs (cameraId → config). Add finalised polygons here after calibrating in the
 // editor (Export JSON → paste). Coordinates are normalized 0..1.
 export const STATIC_ROI_CONFIGS = {
-  // 'mal-hak-hr-exit': { crossingId: 'maljevac', direction: 'toBih', roiVersion: '2026-06-roi-1',
-  //   queuePolygon: [...], ignorePolygons: [...], cameraReliability: 0.75, nightReliability: 0.45, isActive: true },
+  // Production seed ROIs for the key cameras visible in the app. These are conservative: queue
+  // polygons cover the actual approach lanes, while parking/shoulder areas from the screenshots are
+  // ignored so a parked car or opposite-side vehicle cannot inflate a wait. Operators can refine
+  // them in /internal/roi-editor and commit the exported snippet here.
+  'mal-hak-hr-entry': {
+    cameraId: 'mal-hak-hr-entry', crossingId: 'maljevac', direction: 'toHr', roiVersion: '2026-06-production-seed-1',
+    queuePolygon: [
+      { x: 0.32, y: 0.28 }, { x: 0.72, y: 0.29 }, { x: 0.79, y: 0.93 }, { x: 0.39, y: 0.96 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.00, y: 0.55 }, { x: 0.28, y: 0.55 }, { x: 0.33, y: 1.00 }, { x: 0.00, y: 1.00 }],
+      [{ x: 0.74, y: 0.30 }, { x: 1.00, y: 0.28 }, { x: 1.00, y: 0.75 }, { x: 0.82, y: 0.68 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.62, nightReliability: 0.42, isActive: true, metadata: { seededFrom: '2026-06-04 screenshot', needsEditorReview: true },
+  },
+  'mal-hak-hr-exit': {
+    cameraId: 'mal-hak-hr-exit', crossingId: 'maljevac', direction: 'toBih', roiVersion: '2026-06-production-seed-1',
+    queuePolygon: [
+      { x: 0.28, y: 0.18 }, { x: 0.58, y: 0.17 }, { x: 0.78, y: 0.95 }, { x: 0.40, y: 0.98 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.70, y: 0.18 }, { x: 1.00, y: 0.15 }, { x: 1.00, y: 0.55 }, { x: 0.76, y: 0.50 }],
+      [{ x: 0.00, y: 0.00 }, { x: 0.18, y: 0.00 }, { x: 0.26, y: 0.60 }, { x: 0.00, y: 0.75 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.64, nightReliability: 0.43, isActive: true, metadata: { seededFrom: '2026-06-04 screenshot', needsEditorReview: true },
+  },
+  'gv-hak-queue-9': {
+    cameraId: 'gv-hak-queue-9', crossingId: 'gornji-varos', direction: 'toHr', roiVersion: '2026-06-production-seed-1',
+    queuePolygon: [
+      { x: 0.06, y: 0.18 }, { x: 0.88, y: 0.18 }, { x: 0.88, y: 0.86 }, { x: 0.06, y: 0.86 },
+    ],
+    ignorePolygons: [],
+    lanePolygons: [
+      [{ x: 0.07, y: 0.25 }, { x: 0.45, y: 0.25 }, { x: 0.45, y: 0.82 }, { x: 0.07, y: 0.82 }],
+      [{ x: 0.42, y: 0.24 }, { x: 0.72, y: 0.24 }, { x: 0.72, y: 0.79 }, { x: 0.42, y: 0.79 }],
+    ],
+    cameraReliability: 0.72, nightReliability: 0.48, isActive: true, metadata: { seededFrom: 'legacy calibration rect', needsEditorReview: true },
+  },
+  'gv-hak-plaza-4': {
+    cameraId: 'gv-hak-plaza-4', crossingId: 'gornji-varos', direction: 'toHr', roiVersion: '2026-06-production-seed-1',
+    queuePolygon: [
+      { x: 0.08, y: 0.18 }, { x: 0.90, y: 0.18 }, { x: 0.90, y: 0.88 }, { x: 0.08, y: 0.88 },
+    ],
+    ignorePolygons: [],
+    lanePolygons: [
+      [{ x: 0.09, y: 0.28 }, { x: 0.44, y: 0.28 }, { x: 0.44, y: 0.82 }, { x: 0.09, y: 0.82 }],
+      [{ x: 0.44, y: 0.22 }, { x: 0.72, y: 0.22 }, { x: 0.72, y: 0.80 }, { x: 0.44, y: 0.80 }],
+    ],
+    cameraReliability: 0.72, nightReliability: 0.48, isActive: true, metadata: { seededFrom: 'legacy calibration rect', needsEditorReview: true },
+  },
 };
 
 let _overridesCache = null;

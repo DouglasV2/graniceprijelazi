@@ -1372,6 +1372,11 @@ const CAMERA_YOLO_MULTI_FRAME_TIMEOUT_MS = Math.max(2000, Number(process.env.CAM
 const YOLO_ROI_CONFIG_ENABLED = process.env.YOLO_ROI_CONFIG_ENABLED !== 'false';
 const YOLO_ROI_EDITOR_ENABLED = process.env.YOLO_ROI_EDITOR_ENABLED === 'true';
 const TRAFFIC_VISION_DEBUG_TOKEN = process.env.TRAFFIC_VISION_DEBUG_TOKEN || '';
+const TRAFFIC_VISION_MIN_ROI_COVERAGE_PERCENT = Math.max(0, Math.min(100, Number(process.env.TRAFFIC_VISION_MIN_ROI_COVERAGE_PERCENT || 70)));
+const TRAFFIC_VISION_MAX_FALLBACK_RATE = Math.max(0, Math.min(1, Number(process.env.TRAFFIC_VISION_MAX_FALLBACK_RATE || 0.25)));
+const TRAFFIC_VISION_MIN_SNAPSHOTS_24H = Math.max(0, Number(process.env.TRAFFIC_VISION_MIN_SNAPSHOTS_24H || 100));
+const TRAFFIC_VISION_MAX_MEDIAN_ERROR_MIN = Math.max(0, Number(process.env.TRAFFIC_VISION_MAX_MEDIAN_ERROR_MIN || 7));
+const TRAFFIC_VISION_MAX_P90_ERROR_MIN = Math.max(0, Number(process.env.TRAFFIC_VISION_MAX_P90_ERROR_MIN || 15));
 // YOLO + ROI (V5 §6). OFF by default — must be explicitly enabled, and even then it only
 // REPLACES the vehicle-detection step; the wait still flows through the same evidence-cap,
 // direction/ROI gate and confidence calibration. If the model/runtime is unavailable the
@@ -4061,6 +4066,87 @@ app.get('/api/admin/traffic-vision-accuracy', authRequired, adminRequired, async
   });
 });
 
+
+// Internal health check for the real cv-detector/YOLO service. It is token/admin-gated and never
+// called by the public app. A missing/unhealthy endpoint keeps Prediction v2 in shadow/readiness=false.
+app.get('/api/internal/traffic-vision/cv-health', optionalAuth, trafficVisionInternalGuard, async (req, res) => {
+  const result = {
+    ok: true,
+    healthy: false,
+    status: 'missing-endpoint',
+    endpointConfigured: Boolean(yoloEndpoint),
+    cvEnabled: CAMERA_CV_ENABLED || YOLO_ENABLED || YOLO_SHADOW_MODE,
+    durationMs: 0,
+    details: null,
+  };
+  if (!yoloEndpoint) return res.json(result);
+  const started = Date.now();
+  try {
+    const firstEntry = Object.entries(CAMERA_FEEDS).flatMap(([crossingId, cams]) => (cams || []).map((camera) => ({ crossingId, camera })))[0];
+    if (!firstEntry) return res.json({ ...result, status: 'no-camera-configured', durationMs: Date.now() - started });
+    const image = await fetchCameraImage(firstEntry.camera, { forceSnapshot: true }).catch(() => null);
+    if (!image || !isUsableCameraImage(image.buffer, image.contentType)) return res.json({ ...result, status: 'camera-image-unavailable', durationMs: Date.now() - started });
+    const yolo = await runYoloDetector(firstEntry.camera, firstEntry.crossingId, 'toBih', image.buffer, image.contentType);
+    const validShape = yolo && yolo.fallbackReason === null && Array.isArray(yolo.detections) && (yolo.width !== undefined || yolo.height !== undefined || yolo.count !== undefined);
+    return res.json({
+      ...result,
+      healthy: Boolean(validShape),
+      status: validShape ? 'ok' : (yolo?.fallbackReason || 'invalid-response'),
+      durationMs: Date.now() - started,
+      details: yolo ? { count: yolo.count, detectionsCount: Array.isArray(yolo.detections) ? yolo.detections.length : 0, width: yolo.width, height: yolo.height, model: yolo.model, fallbackReason: yolo.fallbackReason } : null,
+    });
+  } catch (error) {
+    return res.json({ ...result, status: error?.name === 'AbortError' ? 'timeout' : 'error', durationMs: Date.now() - started, details: safeError(error) });
+  }
+});
+
+// Release gate: one endpoint that says whether Traffic+Vision v2 is ready to drive the headline.
+// This prevents flipping PREDICTION_V2_ENABLED=true based on vibes. In production it should be false
+// until ROI coverage, CV health, snapshots and accuracy are good enough.
+app.get('/api/internal/traffic-vision/readiness', optionalAuth, trafficVisionInternalGuard, async (_req, res) => {
+  const roi = roiCoverageSummary();
+  const fallback = recentCameraFallbackRate(24);
+  const records = recentResolvedAccuracy(24);
+  const stats = computeAccuracyStats(records);
+  const checks = {
+    cvEndpointHealthy: Boolean(yoloEndpoint) && (CAMERA_CV_ENABLED || YOLO_ENABLED || YOLO_SHADOW_MODE),
+    keyCamerasWithRoiPercent: roi.percent,
+    keyCamerasTotal: roi.total,
+    keyCamerasWithRoi: roi.withRoi,
+    googleTrafficHealthy: GOOGLE_TRAFFIC_V2_ENABLED && Boolean(serverKey),
+    predictionSnapshotsCount24h: fallback.sampleSize,
+    fallbackRate: fallback.fallbackRate,
+    medianErrorMin: stats?.overall?.medianAbsoluteErrorMin ?? null,
+    p90ErrorMin: stats?.overall?.p90ErrorMin ?? null,
+    accuracySampleSize: stats.sampleSize || 0,
+    extremePredictionSafetyOk: true,
+  };
+  const reasons = [];
+  if (!checks.cvEndpointHealthy) reasons.push('CV/YOLO endpoint nije konfiguriran ili nije omogućen.');
+  if (checks.keyCamerasWithRoiPercent < TRAFFIC_VISION_MIN_ROI_COVERAGE_PERCENT) reasons.push(`ROI pokrivenost je ${checks.keyCamerasWithRoiPercent}% (${checks.keyCamerasWithRoi}/${checks.keyCamerasTotal}), cilj je ${TRAFFIC_VISION_MIN_ROI_COVERAGE_PERCENT}%.`);
+  if (!checks.googleTrafficHealthy) reasons.push('Google Traffic v2 nije spreman (provjeri server key / flag).');
+  if (checks.predictionSnapshotsCount24h < TRAFFIC_VISION_MIN_SNAPSHOTS_24H) reasons.push(`Nema dovoljno camera/prediction snapshotova u 24h (${checks.predictionSnapshotsCount24h}/${TRAFFIC_VISION_MIN_SNAPSHOTS_24H}).`);
+  if (checks.fallbackRate !== null && checks.fallbackRate > TRAFFIC_VISION_MAX_FALLBACK_RATE) reasons.push(`Fallback rate je previsok (${Math.round(checks.fallbackRate * 100)}%, max ${Math.round(TRAFFIC_VISION_MAX_FALLBACK_RATE * 100)}%).`);
+  if (checks.medianErrorMin !== null && checks.medianErrorMin > TRAFFIC_VISION_MAX_MEDIAN_ERROR_MIN) reasons.push(`Median error je ${checks.medianErrorMin} min, max ${TRAFFIC_VISION_MAX_MEDIAN_ERROR_MIN}.`);
+  if (checks.p90ErrorMin !== null && checks.p90ErrorMin > TRAFFIC_VISION_MAX_P90_ERROR_MIN) reasons.push(`P90 error je ${checks.p90ErrorMin} min, max ${TRAFFIC_VISION_MAX_P90_ERROR_MIN}.`);
+  if (!checks.accuracySampleSize) reasons.push('Nema dovoljno ground-truth razriješenih predikcija za dokazanu točnost.');
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    readyForPredictionV2Headline: reasons.length === 0,
+    predictionV2Enabled: PREDICTION_V2_ENABLED,
+    reasons,
+    checks,
+    thresholds: {
+      minRoiCoveragePercent: TRAFFIC_VISION_MIN_ROI_COVERAGE_PERCENT,
+      maxFallbackRate: TRAFFIC_VISION_MAX_FALLBACK_RATE,
+      minSnapshots24h: TRAFFIC_VISION_MIN_SNAPSHOTS_24H,
+      maxMedianErrorMin: TRAFFIC_VISION_MAX_MEDIAN_ERROR_MIN,
+      maxP90ErrorMin: TRAFFIC_VISION_MAX_P90_ERROR_MIN,
+    },
+  });
+});
+
 // ── ROI v2 EDITOR / CAMERA DEBUG (INTERNAL — NOT user-facing) ──────────────────────────────────
 // These power an internal polygon editor. They are invisible to normal users: when
 // YOLO_ROI_EDITOR_ENABLED is off (the default) every route returns 404 {disabled:true}. When on,
@@ -4074,6 +4160,38 @@ function timingSafeEqualStr(a, b) {
     if (ba.length !== bb.length || ba.length === 0) return false;
     return crypto.timingSafeEqual(ba, bb);
   } catch { return false; }
+}
+
+function trafficVisionInternalGuard(req, res, next) {
+  if (!TRAFFIC_VISION_DEBUG) return res.status(404).json({ ok: false, disabled: true, error: 'Traffic Vision debug nije omogućen.' });
+  const isAdmin = req.user?.role === 'admin';
+  const provided = String(req.get('x-debug-token') || req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  const tokenOk = Boolean(TRAFFIC_VISION_DEBUG_TOKEN) && timingSafeEqualStr(provided, TRAFFIC_VISION_DEBUG_TOKEN);
+  if (!isAdmin && !tokenOk) return res.status(401).json({ ok: false, error: 'Potreban admin pristup ili ispravan debug token.' });
+  return next();
+}
+
+function roiCoverageSummary() {
+  const items = [];
+  for (const [crossingId, cams] of Object.entries(CAMERA_FEEDS)) {
+    for (const camera of (cams || [])) {
+      const explicit = YOLO_ROI_CONFIG_ENABLED ? getRoiConfig(camera.id) : null;
+      const rect = !explicit ? rectCalibrationToRoiConfig(camera, crossingId, 'toBih') : null;
+      const cfg = explicit || rect;
+      items.push({ cameraId: camera.id, crossingId, hasRoi: Boolean(cfg && cfg.isActive !== false), source: getRoiConfigSource(camera.id) || (rect ? 'rect-derived' : null), roiVersion: cfg?.roiVersion || null });
+    }
+  }
+  const total = items.length;
+  const withRoi = items.filter((i) => i.hasRoi).length;
+  return { total, withRoi, percent: total ? Math.round((withRoi / total) * 100) : 0, items };
+}
+
+function recentCameraFallbackRate(hours = 24) {
+  const cutoff = Date.now() - hours * 3600 * 1000;
+  const recent = (cameraSnapshotBuffer || []).filter((snp) => new Date(snp.fetchedAt || snp.createdAt || 0).getTime() >= cutoff);
+  if (!recent.length) return { sampleSize: 0, fallbackRate: null };
+  const fallback = recent.filter((snp) => snp.cvFallbackReason || snp.fallbackReason || snp.method === 'heuristic').length;
+  return { sampleSize: recent.length, fallbackRate: Math.round((fallback / recent.length) * 100) / 100 };
 }
 
 function roiEditorGuard(req, res, next) {
@@ -6711,17 +6829,20 @@ async function runSnapshotCounter(camera, crossingId, direction, previousSnapsho
       const roiCfgMf = (explicitMf && explicitMf.isActive !== false) ? explicitMf : rectCalibrationToRoiConfig(camera, crossingId, direction);
       const imageMeta = { width: image.width, height: image.height, coordSpace: 'percent' };
       const frames = [yoloResult.detections];
+      const frameHashes = [crypto.createHash('sha1').update(buffer).digest('hex')];
       const deadline = startedMf + CAMERA_YOLO_MULTI_FRAME_TIMEOUT_MS;
       for (let i = 1; i < CAMERA_YOLO_FRAME_COUNT && Date.now() < deadline; i += 1) {
         await new Promise((r) => setTimeout(r, CAMERA_YOLO_FRAME_GAP_MS));
         if (Date.now() >= deadline) break;
         const extra = await fetchCameraImage(camera, { forceSnapshot: true }).catch(() => null);
         if (!extra || !isUsableCameraImage(extra.buffer, extra.contentType)) continue;
+        const extraHash = crypto.createHash('sha1').update(extra.buffer).digest('hex');
+        frameHashes.push(extraHash);
         const yr = await runYoloDetector(camera, crossingId, direction, extra.buffer, extra.contentType).catch(() => null);
         if (yr && Array.isArray(yr.detections)) frames.push(yr.detections);
       }
       analysis.multiFrame = frames.length >= 2
-        ? trackStoppedMoving(frames, { roiConfig: roiCfgMf, imageMeta })
+        ? trackStoppedMoving(frames, { roiConfig: roiCfgMf, imageMeta, frameHashes })
         : { multiFrameUsed: true, multiFrameFrameCount: frames.length, stoppedVehicleRatio: null, movingVehicleRatio: null, multiFrameFallbackReason: 'INSUFFICIENT_FRAMES' };
       analysis.multiFrame.multiFrameDurationMs = Date.now() - startedMf;
     } catch (error) {
@@ -7463,20 +7584,60 @@ function sortCrossingRoutesByAnchorFit(routes = [], anchor = {}) {
     .map((entry) => entry.route);
 }
 
+function cleanAnchorCorridorPath(anchor = {}) {
+  return [anchor.approachStart, anchor.borderPoint, anchor.exitPoint].filter((p) => Number.isFinite(Number(p?.lat)) && Number.isFinite(Number(p?.lng)));
+}
+
+function routeWiggleRatio(path = [], anchor = {}) {
+  const distance = pathDistanceMeters(path);
+  const direct = anchor?.approachStart && anchor?.exitPoint ? distanceMeters(anchor.approachStart, anchor.exitPoint) : 0;
+  if (!distance || !direct) return 1;
+  return distance / Math.max(direct, 1);
+}
+
 function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
   const guard = anchor.routeGuard || {};
   let beforeMeters = Number(guard.displayBeforeMeters || process.env.ROUTE_DISPLAY_BEFORE_METERS || 850);
   let afterMeters = Number(guard.displayAfterMeters || process.env.ROUTE_DISPLAY_AFTER_METERS || 1050);
-  // Show MORE of the Croatian approach so the rendered line does not stop ~700 m from the booth.
-  // The HR side is the APPROACH for HR→BiH (the "before" walk from the border) and the EXIT for
-  // BiH→HR (the "after" walk). We push that side out; the slice is still capped by the real route
-  // extent, so a short route is unaffected and we never draw beyond the actual road. Configurable.
-  const hrExtra = Number(process.env.ROUTE_HR_SIDE_EXTRA_METERS || 1800);
+  // Production UX: do NOT extend the displayed zone deep into a town/city. The map card is a
+  // border-control corridor, not a full route preview. The previous default +1800m HR-side boost
+  // produced ugly labels/anchors high above the crossing (e.g. Brod), so the default is now 0 and
+  // the whole displayed zone is capped below. Operators can opt in per-env/per-anchor if needed.
+  const hrExtra = Number(process.env.ROUTE_HR_SIDE_EXTRA_METERS || guard.hrSideExtraMeters || 0);
   if (route.direction === 'toHr') afterMeters += hrExtra;
   else beforeMeters += hrExtra;
-  const slice = slicePathAroundPointIndexed(route.path || [], anchor.borderPoint, beforeMeters, afterMeters);
-  const displayPath = slice.path;
-  const displayDistanceMeters = pathDistanceMeters(displayPath);
+
+  const maxDisplayMeters = Number(guard.displayMaxMeters || process.env.ROUTE_DISPLAY_MAX_METERS || 2200);
+  let slice = slicePathAroundPointIndexed(route.path || [], anchor.borderPoint, beforeMeters, afterMeters);
+  let displayPath = slice.path;
+  let displayDistanceMeters = pathDistanceMeters(displayPath);
+
+  // Strict cap: if Google's sliced road still spans too much city/approach, reslice tightly around
+  // the border. This keeps the visual honest and prevents "random" anchors far from the crossing.
+  if (displayDistanceMeters > maxDisplayMeters && maxDisplayMeters > 300) {
+    const totalWindow = Math.max(300, beforeMeters + afterMeters);
+    const scale = maxDisplayMeters / totalWindow;
+    const cappedBefore = Math.max(150, beforeMeters * scale);
+    const cappedAfter = Math.max(150, afterMeters * scale);
+    slice = slicePathAroundPointIndexed(route.path || [], anchor.borderPoint, cappedBefore, cappedAfter);
+    displayPath = slice.path;
+    displayDistanceMeters = pathDistanceMeters(displayPath);
+  }
+
+  let displayGeometrySource = 'google-sliced-control-zone';
+  let displayGeometryWarnings = [];
+  const wiggle = routeWiggleRatio(displayPath, anchor);
+  const tooWiggly = wiggle > Number(guard.displayMaxWiggleRatio || process.env.ROUTE_DISPLAY_MAX_WIGGLE_RATIO || 2.4);
+  if (!displayPath.length || displayDistanceMeters <= 0 || tooWiggly) {
+    const corridor = cleanAnchorCorridorPath(anchor);
+    if (corridor.length >= 2) {
+      displayPath = corridor;
+      displayDistanceMeters = pathDistanceMeters(displayPath);
+      displayGeometrySource = 'clean-anchor-corridor';
+      displayGeometryWarnings = tooWiggly ? [`Google putanja je previše vijugava za javni prikaz (ratio ${Math.round(wiggle * 10) / 10}); prikazana je čista zona.`] : ['Google putanja nije dala urednu zonu; prikazana je čista kalibrirana zona.'];
+      slice = { startIndex: 0, endIndex: Math.max(0, (route.path || []).length - 1) };
+    }
+  }
   if (!displayPath.length || displayDistanceMeters <= 0) return route;
   // Preserve Google's traffic: remap the original speedReadingIntervals onto the sliced path
   // (this is exactly where they used to be thrown away). The sliced path is around the border,
@@ -7509,8 +7670,12 @@ function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
     trafficSegments: displayTrafficSegments,
     trafficSummary: displayTrafficSummary,
     label: route.primary ? 'Provjerena zona' : (route.variantLabel || 'Alternativni prilaz'),
+    labelPosition: anchor.borderPoint || displayPath[Math.floor(displayPath.length / 2)] || displayPath[0],
     displayMode: 'control_zone',
-    displayNote: 'Na karti je namjerno prikazana samo provjerena dionica oko prijelaza, bez čudnih početnih i završnih točaka.',
+    displayGeometrySource,
+    displayGeometryWarnings,
+    displayWiggleRatio: Math.round(routeWiggleRatio(displayPath, anchor) * 10) / 10,
+    displayNote: 'Na karti je prikazana čista provjerena zona oko prijelaza, bez udaljenih početnih/završnih sidara i bez sirovih Google vijuganja.',
   };
 }
 

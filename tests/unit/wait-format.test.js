@@ -5,6 +5,7 @@ import {
   isUsableMinuteValue,
   normalizeMinutes,
   formatWaitDisplay,
+  shapeWaitDisplay,
 } from '../../src/utils/wait-format.js';
 
 describe('hasKnownWait', () => {
@@ -68,23 +69,23 @@ describe('formatWaitDisplay', () => {
     expect(out).toBe('do 15 min');
   });
 
-  it('renders mid-range bands like "30–45 min" verbatim', () => {
+  it('shapes mid-range soft bands into an actionable approximate headline', () => {
     const out = formatWaitDisplay(38, {
       hasSoftUpperBoundPublic: true,
       rangeMin: 30,
       rangeMax: 45,
     });
-    expect(out).toBe('30–45 min');
+    expect(out).toBe('oko 40 min');
   });
 
   it('collapses a wide low-floor soft range ("7–21") to an actionable upper bound ("do 21 min")', () => {
     // The driver-confusing case: a wide range starting near zero reads as "maybe nothing, maybe a lot".
-    expect(formatWaitDisplay(14, { hasSoftUpperBoundPublic: true, rangeMin: 7, rangeMax: 21 })).toBe('do 21 min');
+    expect(formatWaitDisplay(14, { hasSoftUpperBoundPublic: true, rangeMin: 7, rangeMax: 21 })).toBe('do 20 min');
     expect(formatWaitDisplay(14, { confidenceLevel: 'niska', precision: 'range', rangeMin: 6, rangeMax: 20 })).toBe('do 20 min');
   });
 
-  it('does NOT collapse a camera-led congestion range (explicit band is meaningful)', () => {
-    expect(formatWaitDisplay(30, { conflictKind: 'camera-congestion', precision: 'range', rangeMin: 4, rangeMax: 40 })).toBe('4–40 min');
+  it('collapses a too-wide camera-led congestion range into an actionable headline', () => {
+    expect(formatWaitDisplay(30, { conflictKind: 'camera-congestion', precision: 'range', rangeMin: 4, rangeMax: 40 })).toBe('oko 30 min');
   });
 
   it('returns a human fallback (not "null"/"NaN") when wait is unknown', () => {
@@ -115,12 +116,12 @@ describe('formatWaitDisplay', () => {
     expect(formatWaitDisplay(40, { confidenceLevel: 'visoka' })).toBe('40 min');
   });
 
-  it('medium confidence (srednja) surfaces a range instead of a single number', () => {
-    expect(formatWaitDisplay(45, { confidenceLevel: 'srednja', rangeMin: 35, rangeMax: 55 })).toBe('35–55 min');
+  it('medium confidence collapses broad ranges to an approximate headline', () => {
+    expect(formatWaitDisplay(45, { confidenceLevel: 'srednja', rangeMin: 35, rangeMax: 55 })).toBe('oko 45 min');
   });
 
-  it('low confidence (niska) with a range shows the band', () => {
-    expect(formatWaitDisplay(50, { confidenceLevel: 'niska', precision: 'range', rangeMin: 40, rangeMax: 58 })).toBe('40–58 min');
+  it('low confidence with a broad range does not leak raw wide bands', () => {
+    expect(formatWaitDisplay(50, { confidenceLevel: 'niska', precision: 'range', rangeMin: 40, rangeMax: 58 })).toBe('oko 50 min');
   });
 
   it('hard-authority congestion keeps the official figure as a floor ("od X min")', () => {
@@ -128,9 +129,9 @@ describe('formatWaitDisplay', () => {
     expect(formatWaitDisplay(11, { conflictKind: 'congestion' })).toBe('od 11 min');
   });
 
-  it('camera-led congestion COMMITS to a range (no "provjeri", no bare floor)', () => {
+  it('camera-led congestion avoids unhelpful broad ranges', () => {
     // Camera raised the estimate: show the committed range, not "od X" and never "check elsewhere".
-    expect(formatWaitDisplay(30, { conflictKind: 'camera-congestion', precision: 'range', rangeMin: 30, rangeMax: 55 })).toBe('30–55 min');
+    expect(formatWaitDisplay(30, { conflictKind: 'camera-congestion', precision: 'range', rangeMin: 30, rangeMax: 55 })).toBe('oko 30 min');
   });
 
   it('clear-high conflict shows an approximate ("~X"), never a confident high number', () => {
@@ -149,5 +150,21 @@ describe('formatWaitDisplay', () => {
       expect(out).not.toMatch(/\bundefined\b/);
       expect(out).not.toMatch(/\bNaN\b/);
     }
+  });
+});
+
+
+describe('shapeWaitDisplay production guardrails', () => {
+  it('does not leak a 32–70 minute raw range to users', () => {
+    const shaped = shapeWaitDisplay(48, { confidenceLevel: 'srednja', rangeMin: 32, rangeMax: 70 });
+    expect(shaped.primaryLabel).toBe('oko 50 min');
+    expect(shaped.broadRangeCollapsed).toBe(true);
+    expect(shaped.displayRangeLabel).toContain('manje sigurno');
+  });
+
+  it('does not leak a 15–29 minute raw range to users', () => {
+    const shaped = shapeWaitDisplay(22, { confidenceLevel: 'srednja', rangeMin: 15, rangeMax: 29 });
+    expect(shaped.primaryLabel).toBe('oko 20 min');
+    expect(shaped.broadRangeCollapsed).toBe(true);
   });
 });
