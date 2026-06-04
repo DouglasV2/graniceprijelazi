@@ -1329,7 +1329,9 @@ const cvApiKey = process.env.CAMERA_CV_API_KEY || '';
 const CAMERA_CV_ENABLED = process.env.CAMERA_CV_ENABLED
   ? process.env.CAMERA_CV_ENABLED === 'true'
   : Boolean(cvEndpoint);
-const CAMERA_CV_TIMEOUT_MS = Math.max(800, Number(process.env.CAMERA_CV_TIMEOUT_MS || 2800));
+// On Railway/CPU the first YOLO inference is slow even with a pre-warmed model, so give it room
+// before falling back to the heuristic. Once warm, inference is well under a second.
+const CAMERA_CV_TIMEOUT_MS = Math.max(800, Number(process.env.CAMERA_CV_TIMEOUT_MS || 6000));
 // YOLO + ROI (V5 §6). OFF by default — must be explicitly enabled, and even then it only
 // REPLACES the vehicle-detection step; the wait still flows through the same evidence-cap,
 // direction/ROI gate and confidence calibration. If the model/runtime is unavailable the

@@ -3587,6 +3587,13 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
             <span>{cameraEstimateUsable ? 'Prema kameri' : 'Procjena nije iz kamere'}</span>
           </div>
           {cameraEstimateUsable && analytics.cameraSnapshots?.length ? <p className="camera-source-note">Procjena iz kamera pomaže orijentaciji, ali službene obavijesti i dalje imaju prednost.</p> : null}
+          {analytics.cvEnabled ? (
+            <p className="camera-source-note">
+              Detekcija vozila: {analytics.cvUsed
+                ? 'YOLO model (cv-detector) — broji vozila na slici'
+                : `heuristika (procjena iz piksela)${analytics.cvFallbackReason ? ` — YOLO trenutno nedostupan: ${analytics.cvFallbackReason}` : ''}`}
+            </p>
+          ) : null}
         </article>
 
         <article className="camera-flow-card">

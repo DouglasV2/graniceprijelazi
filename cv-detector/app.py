@@ -103,9 +103,20 @@ def _empty(allow_zero: bool):
             "detections": [], "width": 0, "height": 0, "allowZero": allow_zero}
 
 
+@app.on_event("startup")
+def _warm_model():
+    # Load the model at boot so the FIRST /detect is fast (no cold inference that would time out the
+    # Node client and force a heuristic fallback). On CPU/Railway the first inference is the slow one.
+    try:
+        get_model()
+        log.info("model warmed at startup: %s", MODEL_NAME)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("model warm failed (will retry on first request): %s", exc)
+
+
 @app.get("/health")
 def health():
-    return {"ok": True, "model": MODEL_NAME, "conf": CONF_THRESHOLD}
+    return {"ok": True, "model": MODEL_NAME, "conf": CONF_THRESHOLD, "warm": _model is not None}
 
 
 @app.post("/detect")

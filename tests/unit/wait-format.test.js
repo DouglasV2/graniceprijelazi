@@ -77,6 +77,16 @@ describe('formatWaitDisplay', () => {
     expect(out).toBe('30–45 min');
   });
 
+  it('collapses a wide low-floor soft range ("7–21") to an actionable upper bound ("do 21 min")', () => {
+    // The driver-confusing case: a wide range starting near zero reads as "maybe nothing, maybe a lot".
+    expect(formatWaitDisplay(14, { hasSoftUpperBoundPublic: true, rangeMin: 7, rangeMax: 21 })).toBe('do 21 min');
+    expect(formatWaitDisplay(14, { confidenceLevel: 'niska', precision: 'range', rangeMin: 6, rangeMax: 20 })).toBe('do 20 min');
+  });
+
+  it('does NOT collapse a camera-led congestion range (explicit band is meaningful)', () => {
+    expect(formatWaitDisplay(30, { conflictKind: 'camera-congestion', precision: 'range', rangeMin: 4, rangeMax: 40 })).toBe('4–40 min');
+  });
+
   it('returns a human fallback (not "null"/"NaN") when wait is unknown', () => {
     expect(formatWaitDisplay(null)).toBe('čeka izvor');
     expect(formatWaitDisplay(undefined)).toBe('čeka izvor');

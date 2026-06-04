@@ -54,8 +54,14 @@ export function formatWaitDisplay(wait, sourceMeta = {}) {
   if (wantRange && hasKnownWait(sourceMeta.rangeMin) && hasKnownWait(sourceMeta.rangeMax)) {
     const rMin = Math.max(0, Number(sourceMeta.rangeMin));
     const rMax = Number(sourceMeta.rangeMax);
+    // A very wide spread ("7–21 min") from a SOFT/low-confidence official estimate is unhelpful to a
+    // driver — collapse it to a single actionable upper bound ("do 21 min"). Do NOT collapse a
+    // camera-led/conflict range (camera-congestion etc.), where the explicit band is meaningful.
+    const allowWideCollapse = isSoftBound || (isLowConf && !sourceMeta.conflictKind);
     if (rMax - rMin >= 5) {
-      if (rMin === 0) return `do ${formatMinutes(rMax)}`;
+      // Collapse only when the floor is near zero (so "7–21" reads as "maybe nothing" → unhelpful);
+      // keep informative high bands like "30–45 min" / "40–58 min" verbatim.
+      if (rMin === 0 || (allowWideCollapse && rMax - rMin >= 12 && rMin <= 8)) return `do ${formatMinutes(rMax)}`;
       if (rMax < 60) return `${Math.round(rMin)}–${Math.round(rMax)} min`;
       return `${formatMinutes(rMin)}–${formatMinutes(rMax)}`;
     }
