@@ -1323,6 +1323,13 @@ const cameraEvents = [];
 const cameraSnapshotBuffer = [];
 const cvEndpoint = process.env.CAMERA_CV_ENDPOINT || '';
 const cvApiKey = process.env.CAMERA_CV_API_KEY || '';
+// CV/YOLO is ENABLED by default whenever an endpoint is configured (set CAMERA_CV_ENABLED=false to
+// force off). Timeout is short so a slow model never blocks the camera pipeline — on timeout/error
+// we always fall back to the heuristic.
+const CAMERA_CV_ENABLED = process.env.CAMERA_CV_ENABLED
+  ? process.env.CAMERA_CV_ENABLED === 'true'
+  : Boolean(cvEndpoint);
+const CAMERA_CV_TIMEOUT_MS = Math.max(800, Number(process.env.CAMERA_CV_TIMEOUT_MS || 2800));
 // YOLO + ROI (V5 §6). OFF by default — must be explicitly enabled, and even then it only
 // REPLACES the vehicle-detection step; the wait still flows through the same evidence-cap,
 // direction/ROI gate and confidence calibration. If the model/runtime is unavailable the
@@ -1647,7 +1654,29 @@ const GOOGLE_TRAFFIC_REFRESH_CONCURRENCY = Math.max(1, Math.min(8, Number(proces
 // refresh, so stale/legacy values self-clean without anyone running DELETE on production. Fresh
 // data for active sources is re-inserted every refresh; only genuinely abandoned rows age out.
 const SOURCE_SNAPSHOT_RETENTION_MS = Math.max(1, Number(process.env.SOURCE_SNAPSHOT_RETENTION_HOURS || 6)) * 60 * 60 * 1000;
+// Legacy/suspicious public-text cleanup: the OLD parser (pre section-boundary fix) inserted bleed
+// artifacts (120/180/240/360 min) that age-based pruning leaves alive for up to 6h and which can
+// still drive the estimate. Every snapshot the NEW parser writes carries metadata.parserVersion +
+// cleanupSafe; any public-text-status row with wait ≥ threshold and NO parserVersion is legacy and
+// gets removed. We NEVER touch google/camera/routing snapshots — only public-text-status legacy.
+const PUBLIC_PARSER_VERSION = 'public-text-v2-boundary-2026-06';
+const PRUNE_SUSPICIOUS_PUBLIC_SNAPSHOTS = process.env.PRUNE_SUSPICIOUS_PUBLIC_SNAPSHOTS !== 'false';
+const PUBLIC_SNAPSHOT_SUSPECT_WAIT_MIN = Math.max(30, Number(process.env.PUBLIC_SNAPSHOT_SUSPECT_WAIT_MIN || 120));
+const PUBLIC_SNAPSHOT_CLEANUP_DRY_RUN = process.env.PUBLIC_SNAPSHOT_CLEANUP_DRY_RUN === 'true';
 let sourceRefreshState = { lastRunAt: 0, running: null, lastError: '' };
+
+// Stamp the new-parser provenance on a public-text snapshot so the suspicious cleanup can tell a
+// freshly-parsed high wait (legitimate) from a legacy bleed artifact (no parserVersion).
+function publicParserMeta(fullText, section, parserName) {
+  const start = section ? String(fullText).indexOf(section) : -1;
+  return {
+    parserVersion: PUBLIC_PARSER_VERSION,
+    parserName,
+    extractedSectionStart: start,
+    extractedSectionEnd: start >= 0 ? start + section.length : -1,
+    cleanupSafe: true,
+  };
+}
 
 const PUBLIC_SOURCE_TARGETS = {
   maljevac: {
@@ -2105,6 +2134,68 @@ async function pruneStaleSourceSnapshots() {
   }
 }
 
+// Remove LEGACY/SUSPICIOUS public-text-status snapshots: high waits (≥ threshold) written by the
+// OLD parser (no metadata.parserVersion), which age-based pruning leaves alive for hours and which
+// can still drive the estimate. STRICTLY scoped — only source_type='public-text-status' AND missing
+// parserVersion AND wait ≥ threshold. Google/camera/routing snapshots are never touched, and fresh
+// public snapshots from the new parser (which carry parserVersion + cleanupSafe) are kept. Returns
+// { found, removed, dryRun, samples }.
+// Pure predicate (exported for tests): a LEGACY/suspicious public-text snapshot is ONLY a
+// public-text-status row with wait ≥ threshold and NO parserVersion (i.e. written by the old
+// parser). Google/camera/routing snapshots and new-parser public rows are never suspicious.
+function isSuspiciousLegacyPublicSnapshot(item = {}, threshold = PUBLIC_SNAPSHOT_SUSPECT_WAIT_MIN) {
+  return item.sourceType === 'public-text-status'
+    && Number(item.normalizedWaitMin || 0) >= threshold
+    && !(item.metadata && item.metadata.parserVersion);
+}
+
+async function pruneSuspiciousPublicSourceSnapshots({ dryRun = PUBLIC_SNAPSHOT_CLEANUP_DRY_RUN } = {}) {
+  const threshold = PUBLIC_SNAPSHOT_SUSPECT_WAIT_MIN;
+  const result = { found: 0, removed: 0, dryRun: Boolean(dryRun), threshold, samples: [] };
+  try {
+    if (datastoreMode === 'postgres') {
+      const sel = await dbQuery(
+        `SELECT id, crossing_id, direction, source_name, normalized_wait_min
+           FROM borderflow_source_snapshots
+          WHERE source_type='public-text-status'
+            AND normalized_wait_min >= $1
+            AND (metadata->>'parserVersion') IS NULL`,
+        [threshold]
+      );
+      result.found = sel.rows.length;
+      result.samples = sel.rows.slice(0, 25).map((r) => ({ id: r.id, crossingId: r.crossing_id, direction: r.direction, sourceName: r.source_name, wait: r.normalized_wait_min }));
+      if (!dryRun && result.found) {
+        const del = await dbQuery(
+          `DELETE FROM borderflow_source_snapshots
+            WHERE source_type='public-text-status'
+              AND normalized_wait_min >= $1
+              AND (metadata->>'parserVersion') IS NULL`,
+          [threshold]
+        );
+        result.removed = del.rowCount || 0;
+      }
+    } else {
+      const store = readStore();
+      const all = store.sourceSnapshots || [];
+      const isSuspect = (item) => isSuspiciousLegacyPublicSnapshot(item, threshold);
+      const suspects = all.filter(isSuspect);
+      result.found = suspects.length;
+      result.samples = suspects.slice(0, 25).map((s) => ({ id: s.id, crossingId: s.crossingId, direction: s.direction, sourceName: s.sourceName, wait: s.normalizedWaitMin }));
+      if (!dryRun && result.found) {
+        store.sourceSnapshots = all.filter((item) => !isSuspect(item));
+        result.removed = result.found;
+        writeStore(store);
+      }
+    }
+    if (result.found) {
+      console.log(`[prune-suspicious-public] threshold=${threshold} found=${result.found} removed=${result.removed}${result.dryRun ? ' (dry-run, nothing deleted)' : ''}`);
+    }
+  } catch (error) {
+    console.warn('[prune-suspicious-public]', error.message);
+  }
+  return result;
+}
+
 async function readLatestSourceSnapshots(crossingId, direction, hours = 8) {
   const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
   if (datastoreMode === 'postgres') {
@@ -2151,7 +2242,7 @@ async function fetchBihamkSnapshots() {
         normalizedWaitMin: signal.wait,
         confidence: signal.confidence,
         weight: signal.weight,
-        metadata: { adapter: 'bihamk-border-status', crossingNames: config.bihamkNames || [], ...(signal.metadata || {}) },
+        metadata: { adapter: 'bihamk-border-status', crossingNames: config.bihamkNames || [], ...publicParserMeta(text, section, 'bihamk-border-status'), ...(signal.metadata || {}) },
         fetchedAt: new Date().toISOString(),
       });
     });
@@ -2184,7 +2275,7 @@ async function fetchHakSnapshots() {
         normalizedWaitMin: signal.wait,
         confidence: signal.confidence,
         weight: Math.max(1, signal.weight || 1),
-        metadata: { adapter: 'hak-border-status', crossingNames: names, sourceSide: 'hr', ...(signal.metadata || {}) },
+        metadata: { adapter: 'hak-border-status', crossingNames: names, sourceSide: 'hr', ...publicParserMeta(text, section, 'hak-border-status'), ...(signal.metadata || {}) },
         fetchedAt: new Date().toISOString(),
       });
     });
@@ -2210,7 +2301,7 @@ async function fetchAmsRsSnapshots() {
       normalizedWaitMin: signal.wait,
       confidence: Math.max(70, signal.confidence),
       weight: Math.max(1.05, signal.weight),
-      metadata: { adapter: 'ams-rs-border-status', crossingNames: config.bihamkNames || [], sourceSide: 'bih-rs', scopeNote: 'AMS RS signal is treated as RS-side only, not a full BiH-wide official status.', ...(signal.metadata || {}) },
+      metadata: { adapter: 'ams-rs-border-status', crossingNames: config.bihamkNames || [], sourceSide: 'bih-rs', scopeNote: 'AMS RS signal is treated as RS-side only, not a full BiH-wide official status.', ...publicParserMeta(text, text.slice(0, 1200), 'ams-rs-border-status'), ...(signal.metadata || {}) },
       fetchedAt: new Date().toISOString(),
     })) : [];
 
@@ -2238,14 +2329,15 @@ async function fetchAmsRsSnapshots() {
   return results.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
 }
 
-async function buildCameraSourceSnapshots() {
+async function buildCameraSourceSnapshots({ forceSnapshot = false } = {}) {
   const targets = Object.values(BORDER_CROSSINGS).filter((crossing) => (CAMERA_FEEDS[crossing.id] || []).length);
   const jobs = [];
   for (const crossing of targets) {
     for (const direction of ['toBih', 'toHr']) jobs.push({ crossingId: crossing.id, direction });
   }
   const results = await Promise.allSettled(jobs.map(async ({ crossingId, direction }) => {
-    const payload = await buildCameraAnalyticsPayload(crossingId, direction, { storeScan: true });
+    // forceSnapshot (from an admin/forced refresh) bypasses the cached camera frame and re-fetches.
+    const payload = await buildCameraAnalyticsPayload(crossingId, direction, { storeScan: true, forceSnapshot });
     const analytics = payload.analytics || {};
     const actualSnapshots = analytics.cameraSnapshots || [];
     const hasActualSnapshot = actualSnapshots.some((item) => item?.method && String(item.method).includes('snapshot-counter'));
@@ -2673,14 +2765,17 @@ async function refreshProductionSources({ force = false } = {}) {
       fetchHakSnapshots(),
       fetchBihamkSnapshots(),
       fetchAmsRsSnapshots(),
-      buildCameraSourceSnapshots(),
+      // A forced refresh (admin button) must re-fetch the live camera frame, not reuse a cached one.
+      buildCameraSourceSnapshots({ forceSnapshot: force }),
       buildGoogleTrafficSnapshots(),
     ]);
     const snapshots = results.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
     const failures = results.filter((result) => result.status === 'rejected').map((result) => result.reason?.message || String(result.reason));
     const stored = await insertSourceSnapshots(snapshots);
-    // Auto-hygiene: shed stale/legacy snapshots every cycle so nobody has to DELETE on production.
+    // Auto-hygiene: shed stale snapshots (age) + legacy/suspicious public-text bleed artifacts
+    // (content) every cycle, so nobody has to DELETE on production.
     await pruneStaleSourceSnapshots();
+    if (PRUNE_SUSPICIOUS_PUBLIC_SNAPSHOTS) await pruneSuspiciousPublicSourceSnapshots();
     sourceRefreshState.lastRunAt = Date.now();
     sourceRefreshState.lastError = failures.join(' | ');
     return { ok: failures.length === 0, snapshots: stored, failures, refreshedAt: new Date().toISOString() };
@@ -3773,6 +3868,20 @@ app.post('/api/admin/sources/refresh', authRequired, adminRequired, writeLimiter
   } catch (error) {
     console.error('[admin-sources-refresh]', error);
     res.status(500).json({ ok: false, error: 'Osvježavanje javnih izvora nije uspjelo.', detail: safeError(error) });
+  }
+});
+
+// Inspect / clean legacy-suspicious public-text snapshots. Default DRY-RUN (shows what would go);
+// pass ?dryRun=false to actually delete. Scoped to public-text-status legacy rows only.
+app.post('/api/admin/sources/prune-suspicious', authRequired, adminRequired, writeLimiter, async (req, res) => {
+  try {
+    const dryRun = String(req.query.dryRun ?? req.body?.dryRun ?? 'true') !== 'false';
+    const result = await pruneSuspiciousPublicSourceSnapshots({ dryRun });
+    if (!dryRun) await audit('sources_prune_suspicious', req.user, { found: result.found, removed: result.removed, threshold: result.threshold });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('[admin-prune-suspicious]', error);
+    res.status(500).json({ ok: false, error: 'Čišćenje sumnjivih snapshotova nije uspjelo.', detail: safeError(error) });
   }
 });
 
@@ -5552,14 +5661,18 @@ async function runCvDetector(camera, crossingId, direction) {
 }
 
 // YOLO detector (V5 §6). Sends the JPEG to the model and returns per-vehicle DETECTION BOXES
-// (so the ROI layer can decide which vehicles are in the queue). Fully resilient: a timeout,
-// a non-200, a malformed body or a thrown error all return null → the caller falls back to the
-// heuristic. Detections are normalised to PERCENT coordinates (0-100) of the frame.
+// (so the ROI layer can decide which vehicles are in the queue). PRODUCTION-SAFE: it NEVER throws —
+// a missing endpoint, disabled flag, timeout, non-200, invalid JSON or any thrown error returns a
+// diagnostic object WITHOUT detections, so the caller transparently falls back to the heuristic.
+// Always returns { detections|null, fallbackReason, durationMs, count, width, height, model }.
 async function runYoloDetector(camera, crossingId, direction, buffer, contentType) {
-  // Runs when YOLO is enabled OR in shadow mode (shadow result is recorded but not used).
-  if ((!YOLO_ENABLED && !YOLO_SHADOW_MODE) || !yoloEndpoint || !buffer) return null;
+  const started = Date.now();
+  const fail = (fallbackReason) => ({ detections: null, fallbackReason, durationMs: Date.now() - started, count: 0 });
+  if (!yoloEndpoint) return fail('no-endpoint');
+  if (!YOLO_ENABLED && !YOLO_SHADOW_MODE) return fail('disabled');
+  if (!buffer) return fail('no-image');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), YOLO_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), CAMERA_CV_TIMEOUT_MS);
   try {
     const response = await fetch(yoloEndpoint, {
       method: 'POST',
@@ -5578,8 +5691,9 @@ async function runYoloDetector(camera, crossingId, direction, buffer, contentTyp
         timestamp: new Date().toISOString(),
       }),
     });
-    if (!response.ok) return null;
-    const payload = await response.json();
+    if (!response.ok) return fail(`http-${response.status}`);
+    let payload;
+    try { payload = await response.json(); } catch { return fail('invalid-json'); }
     const raw = Array.isArray(payload?.detections) ? payload.detections : [];
     const w = Number(payload?.width || 0);
     const h = Number(payload?.height || 0);
@@ -5599,9 +5713,9 @@ async function runYoloDetector(camera, crossingId, direction, buffer, contentTyp
         confidence: Math.round(Number(d.confidence ?? d.score ?? 0) * (Number(d.confidence ?? d.score ?? 0) <= 1 ? 100 : 1)),
       };
     }).filter((d) => Number.isFinite(d.x) && Number.isFinite(d.y));
-    return { detections, width: w || null, height: h || null, model: payload?.model || 'yolo' };
-  } catch {
-    return null; // network/timeout/parse failure → heuristic fallback
+    return { detections, width: w || null, height: h || null, model: payload?.model || 'yolo', fallbackReason: null, durationMs: Date.now() - started, count: detections.length };
+  } catch (error) {
+    return fail(error?.name === 'AbortError' ? 'timeout' : 'error'); // never crash → heuristic fallback
   } finally {
     clearTimeout(timer);
   }
@@ -5782,7 +5896,10 @@ async function fetchCameraImage(camera = {}, options = {}) {
   let lastError = null;
   for (const url of candidates) {
     try {
-      const image = await fetchBinaryWithTimeout(url, options);
+      // On a forced snapshot, append a cache-buster so a CDN/origin can't hand back a stale frame
+      // (the no-cache header alone is not always honoured by the camera hosts).
+      const fetchUrl = options.forceSnapshot ? `${url}${url.includes('?') ? '&' : '?'}_cb=${Date.now()}` : url;
+      const image = await fetchBinaryWithTimeout(fetchUrl, options);
       if (String(image.contentType || '').startsWith('image/')) return { ...image, url };
       lastError = new Error(`${url} nije vratio sliku (${image.contentType || 'bez Content-Type'})`);
     } catch (error) {
@@ -6168,9 +6285,9 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null,
   };
 }
 
-async function runSnapshotCounter(camera, crossingId, direction, previousSnapshot = null) {
+async function runSnapshotCounter(camera, crossingId, direction, previousSnapshot = null, options = {}) {
   if (!CAMERA_SNAPSHOT_COUNTING_ENABLED) return null;
-  const { buffer, contentType, url: resolvedImageUrl } = await fetchCameraImage(camera);
+  const { buffer, contentType, url: resolvedImageUrl } = await fetchCameraImage(camera, { forceSnapshot: Boolean(options.forceSnapshot) });
 
   // Some public camera endpoints occasionally return HTML, an empty payload, a HAK
   // "invalid webcam" PNG/GIF placeholder, or a protected/redirect response. We skip
@@ -6182,10 +6299,18 @@ async function runSnapshotCounter(camera, crossingId, direction, previousSnapsho
   // YOLO (when enabled) replaces the heuristic vehicle detection; on any failure it returns
   // null and analyzeSnapshotImage falls back to the connected-components heuristic. In SHADOW
   // mode YOLO runs but is NOT applied to the wait — its ROI result is attached for comparison.
-  const yoloResult = await runYoloDetector(camera, crossingId, direction, buffer, contentType).catch(() => null);
+  const yoloResult = await runYoloDetector(camera, crossingId, direction, buffer, contentType).catch(() => ({ detections: null, fallbackReason: 'error', durationMs: 0, count: 0 }));
   const yoloForWait = YOLO_ENABLED ? yoloResult : null;
   const analysis = analyzeSnapshotImage(image, camera, direction, previousSnapshot, yoloForWait);
-  if (!YOLO_ENABLED && YOLO_SHADOW_MODE && yoloResult) {
+  // CV/YOLO diagnostics (surfaced in the camera payload so the UI/debug can show whether the real
+  // detector or the heuristic was used, and WHY it fell back).
+  analysis.cvEnabled = CAMERA_CV_ENABLED || YOLO_ENABLED || YOLO_SHADOW_MODE;
+  analysis.cvUsed = Boolean(analysis.yoloUsed);
+  analysis.cvSource = analysis.yoloUsed ? 'cv-detector' : 'heuristic';
+  analysis.cvFallbackReason = analysis.yoloUsed ? null : (yoloResult?.fallbackReason || (YOLO_ENABLED ? 'no-detections' : 'disabled'));
+  analysis.cvDurationMs = Number(yoloResult?.durationMs || 0);
+  analysis.cvDetectionsCount = Number(yoloResult?.count || (Array.isArray(yoloResult?.detections) ? yoloResult.detections.length : 0));
+  if (!YOLO_ENABLED && YOLO_SHADOW_MODE && Array.isArray(yoloResult?.detections)) {
     const shadow = applyRoiToDetections(yoloResult.detections, camera.calibration || {}, { minConfidence: YOLO_MIN_CONFIDENCE });
     // Compute the v6 wait estimate from the YOLO signals (shadow only — never used for the
     // displayed wait) so the admin can compare it against the legacy heuristic + official.
@@ -6424,13 +6549,26 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
     const cached = cachedByCamera.get(camera.id);
     const cachedFresh = cached && nowMs - new Date(cached.fetchedAt).getTime() < CAMERA_SNAPSHOT_REFRESH_INTERVAL_MS;
     if (!options.forceSnapshot && cachedFresh) return cached;
-    return runSnapshotCounter(camera, crossing.id, direction, cached || null);
+    return runSnapshotCounter(camera, crossing.id, direction, cached || null, { forceSnapshot: Boolean(options.forceSnapshot) });
   }));
   const snapshotAnalyses = snapshotResults.map((result, index) => {
     if (result.status === 'fulfilled') return result.value;
     if (options.storeScan || options.forceSnapshot) console.warn('[snapshot-counter]', feeds[index]?.id, result.reason?.message || String(result.reason));
     return cachedByCamera.get(feeds[index]?.id) || null;
   });
+  // CV/YOLO usage summary across this direction's cameras (for the UI/debug panel: is the real
+  // detector actually driving, or did we fall back to the heuristic, and why).
+  const cvAnalyses = snapshotAnalyses.filter((a) => a && (a.cvUsed !== undefined || a.cvFallbackReason !== undefined));
+  const cvUsedAny = cvAnalyses.some((a) => a.cvUsed);
+  const cvDurations = cvAnalyses.map((a) => Number(a.cvDurationMs || 0)).filter((n) => n > 0);
+  const cvSummary = {
+    cvEnabled: CAMERA_CV_ENABLED || YOLO_ENABLED || YOLO_SHADOW_MODE,
+    cvUsed: cvUsedAny,
+    cvSource: cvUsedAny ? 'cv-detector' : 'heuristic',
+    cvFallbackReason: cvUsedAny ? null : (cvAnalyses.find((a) => a.cvFallbackReason)?.cvFallbackReason || (cvEndpoint ? 'no-detections' : 'no-endpoint')),
+    cvDurationMs: cvDurations.length ? Math.max(...cvDurations) : 0,
+    cvDetectionsCount: cvAnalyses.reduce((sum, a) => sum + Number(a.cvDetectionsCount || 0), 0),
+  };
   const snapshotRows = snapshotAnalyses
     .filter(Boolean)
     .map((snapshot) => ({ ...snapshot, crossingId: crossing.id, direction, metadata: { ...(snapshot.metadata || {}), roi: snapshot.roi, occupancyPct: snapshot.occupancyPct, componentCount: snapshot.componentCount, rawCounts: snapshot.rawCounts } }));
@@ -6579,7 +6717,15 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
       laneSignals,
       history,
       dailyTotals: sumCounts(history),
-      source: hasIngest ? 'camera-ingest' : (cvEndpoint ? 'cv-detector' : (hasSnapshotCounter ? 'snapshot-counter' : 'baseline-camera-model')),
+      // source reflects ACTUAL usage: cv-detector only when YOLO truly drove a frame this cycle.
+      source: hasIngest ? 'camera-ingest' : (cvSummary.cvUsed ? 'cv-detector' : (hasSnapshotCounter ? 'snapshot-counter' : 'baseline-camera-model')),
+      // CV/YOLO diagnostics (flat, for UI/debug): is YOLO enabled, did it run, fallback reason, timing.
+      cvEnabled: cvSummary.cvEnabled,
+      cvUsed: cvSummary.cvUsed,
+      cvSource: cvSummary.cvSource,
+      cvFallbackReason: cvSummary.cvFallbackReason,
+      cvDurationMs: cvSummary.cvDurationMs,
+      cvDetectionsCount: cvSummary.cvDetectionsCount,
       cameraSnapshots: (displayAggregate?.snapshots || []).map((item) => {
         const camera = feedById.get(item.cameraId);
         const snapshotAgeSec = item.fetchedAt ? Math.max(0, Math.round((Date.now() - new Date(item.fetchedAt).getTime()) / 1000)) : null;
@@ -7822,7 +7968,8 @@ app.post('/api/camera-scan/:crossingId', authRequired, adminRequired, writeLimit
   }
 
   try {
-    const payload = await buildCameraAnalyticsPayload(crossingId, direction, { storeScan: true });
+    // A manual scan must re-fetch the live frame, never reuse a 2–5 min cached snapshot.
+    const payload = await buildCameraAnalyticsPayload(crossingId, direction, { storeScan: true, forceSnapshot: true });
     res.json({ ...payload, stored: true });
   } catch (error) {
     console.error('[camera-scan]', error);
@@ -8080,6 +8227,10 @@ export {
   // Public-source text parsing (exposed for unit tests — the HAK/BIHAMK blob bleed bug).
   extractBihamkSection,
   allPublicSourceNames,
+  // Snapshot hygiene + CV/YOLO (exposed for unit tests).
+  isSuspiciousLegacyPublicSnapshot,
+  pruneSuspiciousPublicSourceSnapshots,
+  runYoloDetector,
   // Google traffic-aware route helpers (exposed for unit tests).
   buildTrafficSegments,
   buildTrafficSummary,
@@ -8128,8 +8279,10 @@ if (process.env.NODE_ENV !== 'test') {
         console.log(`PrijelazRadar backend running on http://localhost:${port}`);
         console.log(`Datastore: ${datastoreMode}`);
         console.log(serverKey ? 'Routes API server key: configured' : 'Routes API server key: missing');
-        // Shed any stale/legacy snapshots left over from before this deploy (auto cleanup).
+        // Shed any stale/legacy snapshots left over from before this deploy (auto cleanup):
+        // age-based prune + the suspicious legacy public-text bleed artifacts from the old parser.
         pruneStaleSourceSnapshots().then((n) => { if (n) console.log(`[prune-source-snapshots] removed ${n} stale snapshot(s) on startup`); }).catch(() => {});
+        if (PRUNE_SUSPICIOUS_PUBLIC_SNAPSHOTS) pruneSuspiciousPublicSourceSnapshots().catch(() => {});
         // Config-based camera sanity report (no network) — surfaces which cameras must be
         // manually configured (ROI / direction) before YOLO + ROI, and which are wait-capable.
         buildCameraAudit({ configOnly: true }).then(({ summary, all }) => {

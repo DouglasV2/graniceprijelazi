@@ -3416,6 +3416,9 @@ function LaneSplitCard({ profile }) {
 
 function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
   const [refreshKey, setRefreshKey] = useState(Date.now());
+  // Manual "Osvježi prikaz" forces a fresh camera frame on the backend (force=true); the 45 s
+  // auto-poll does not (it may use the short server-side cache to stay polite to the camera hosts).
+  const forceNextFetchRef = useRef(false);
   const [selectedSignal, setSelectedSignal] = useState(() => getDefaultCameraId(crossing));
   const baselineAnalytics = useMemo(() => getCameraAnalytics(crossing, selectedDirection), [crossing, selectedDirection, refreshKey]);
   const [apiAnalytics, setApiAnalytics] = useState(null);
@@ -3450,7 +3453,9 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetchJson(`/api/camera-analytics/${crossing.id}?direction=${selectedDirection}&t=${refreshKey}`)
+    const force = forceNextFetchRef.current;
+    forceNextFetchRef.current = false;
+    fetchJson(`/api/camera-analytics/${crossing.id}?direction=${selectedDirection}&t=${refreshKey}${force ? '&force=true' : ''}`)
       .then((payload) => {
         if (!cancelled && payload?.ok && payload.analytics) {
           setApiAnalytics(payload.analytics);
@@ -3517,7 +3522,7 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
           <p className="camera-direction-note">Smjer: {selectedDirection === 'toBih' ? 'HR → BiH' : 'BiH → HR'} · prikaz kamera pomaže brzoj provjeri kolone i protoka po odabranom smjeru.</p>
         </div>
         <div className="camera-toolbar-actions">
-          <button type="button" className="ghost-button active" onClick={() => setRefreshKey(Date.now())}>Osvježi prikaz</button>
+          <button type="button" className="ghost-button active" onClick={() => { forceNextFetchRef.current = true; setRefreshKey(Date.now()); }}>Osvježi prikaz</button>
         </div>
       </div>
 

@@ -6,3 +6,5 @@ dist/
 data/runtime-store.json
 data/*.tmp
 .DS_Store
+__pycache__/
+*.pyc

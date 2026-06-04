@@ -1,0 +1,62 @@
+# LOCAL DEVELOPMENT ONLY — runs the Node app + cv-detector (YOLO) + Postgres together with one
+# command. This is NOT the production deployment path: on Railway each of these is a SEPARATE
+# service (see cv-detector/README.md → "Production: Railway (3 services)").
+#
+#   docker compose up --build
+#   open http://localhost:5050
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: borderflow
+      POSTGRES_PASSWORD: borderflow
+      POSTGRES_DB: borderflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U borderflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  cv-detector:
+    build: ./cv-detector
+    environment:
+      CV_AUTH_TOKEN: local-dev-secret
+      CV_MODEL: yolov8n.pt
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  app:
+    build:
+      context: .
+    environment:
+      NODE_ENV: production
+      PORT: "5050"
+      DATABASE_URL: postgresql://borderflow:borderflow@postgres:5432/borderflow
+      DATABASE_SSL: "false"
+      # YOLO turns on automatically once the endpoint is set.
+      CAMERA_CV_ENDPOINT: http://cv-detector:8000/detect
+      CAMERA_CV_API_KEY: local-dev-secret
+      # Put your real keys here for local testing (or use an .env file).
+      GOOGLE_MAPS_SERVER_KEY: ${GOOGLE_MAPS_SERVER_KEY:-}
+      SESSION_SECRET: local-dev-session-secret
+    ports:
+      - "5050:5050"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cv-detector:
+        condition: service_started
+
+volumes:
+  pgdata:
