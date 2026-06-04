@@ -1,78 +1,129 @@
 // @vitest-environment jsdom
-// Real DOM test of the Google Maps async loader. Reproduces the "google.maps.LatLngBounds is not a
-// constructor" bug: with loading=async the script's load event fires before the constructors are
-// attached, so loadGoogleMaps MUST await importLibrary before resolving.
+// Real DOM test of the Google Maps async loader. Reproduces the production crash
+// "google.maps.LatLngBounds is not a constructor": with loading=async the load event fires before
+// the classic constructors are attached, AND importLibrary RETURNS the classes without always
+// setting the google.maps.X globals the app uses. loadGoogleMaps must attach them and only resolve
+// once EVERY required constructor is a real function.
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { loadGoogleMaps, ensureMapsLibraries } from '../../src/utils/google-maps-loader.js';
+import { loadGoogleMaps, ensureMapsLibraries, mapsConstructorsReady, REQUIRED_MAPS_CONSTRUCTORS } from '../../src/utils/google-maps-loader.js';
 
 beforeEach(() => {
   delete window.google;
   delete window.__borderFlowGoogleMapsPromise;
   document.head.innerHTML = '';
-  document.querySelectorAll('script[data-borderflow-google-maps]').forEach((s) => s.remove());
+});
+
+const ctor = (name) => { const f = function () {}; Object.defineProperty(f, 'name', { value: name }); return f; };
+
+describe('mapsConstructorsReady', () => {
+  it('requires ALL constructors the app uses, not just Map', () => {
+    window.google = { maps: { Map: ctor('Map') } };
+    expect(mapsConstructorsReady()).toBe(false); // Map alone is NOT ready
+    for (const k of REQUIRED_MAPS_CONSTRUCTORS) window.google.maps[k] = ctor(k);
+    expect(mapsConstructorsReady()).toBe(true);
+  });
+  it('is false when google/maps is missing', () => {
+    expect(mapsConstructorsReady()).toBe(false);
+  });
 });
 
 describe('loadGoogleMaps with loading=async', () => {
-  it('injects the script with loading=async + marker library', async () => {
+  it('injects the script with loading=async + marker library', () => {
     const p = loadGoogleMaps('TEST_KEY');
     const script = document.querySelector('script[data-borderflow-google-maps="true"]');
     expect(script).toBeTruthy();
     expect(script.src).toContain('loading=async');
     expect(script.src).toContain('libraries=marker');
     expect(script.src).toContain('key=TEST_KEY');
-    // Avoid an unhandled rejection if the test ends before onload; settle the promise.
     p.catch(() => {});
   });
 
-  it('does NOT resolve until importLibrary has run (constructors attached)', async () => {
-    let importLibraryCalled = false;
+  it('REGRESSION: importLibrary returns LatLngBounds but does NOT attach the global → loader attaches it and resolves only when it is a real constructor', async () => {
+    const LatLngBounds = ctor('LatLngBounds');
+    const Size = ctor('Size');
+    const MapCtor = ctor('Map');
+    const Polyline = ctor('Polyline');
+    const InfoWindow = ctor('InfoWindow');
+    const TrafficLayer = ctor('TrafficLayer');
+
     const promise = loadGoogleMaps('K');
     const script = document.querySelector('script[data-borderflow-google-maps="true"]');
 
-    // Simulate async loading: on load, only importLibrary exists; classic constructors come later.
+    // loading=async state at `load`: importLibrary exists, Map MAY be attached (the old early-return
+    // would have wrongly resolved here), but LatLngBounds is NOT a global, and importLibrary only
+    // RETURNS the classes (does not set google.maps.X) — exactly the production bug.
     window.google = {
       maps: {
+        Map: MapCtor,
         importLibrary: vi.fn(async (name) => {
-          importLibraryCalled = true;
-          // Attach the constructors only once a library has been imported.
-          window.google.maps.Map = function Map() {};
-          window.google.maps.LatLngBounds = function LatLngBounds() {};
-          return { name };
+          if (name === 'core') return { LatLngBounds, Size, LatLng: ctor('LatLng') };
+          if (name === 'maps') return { Map: MapCtor, Polyline, InfoWindow, TrafficLayer };
+          return { AdvancedMarkerElement: ctor('AdvancedMarkerElement') };
         }),
       },
     };
-    script.onload();
+    // Pre-resolve, the global the app uses is NOT yet a constructor.
+    expect(typeof window.google.maps.LatLngBounds).not.toBe('function');
 
+    script.onload();
     const google = await promise;
-    expect(importLibraryCalled).toBe(true);
+
+    // Post-resolve, every required constructor is attached and usable — no crash.
+    expect(() => new google.maps.LatLngBounds()).not.toThrow();
+    for (const name of REQUIRED_MAPS_CONSTRUCTORS) {
+      expect(typeof google.maps[name], `${name} must be a constructor after load`).toBe('function');
+    }
     expect(window.google.maps.importLibrary).toHaveBeenCalledWith('core');
     expect(window.google.maps.importLibrary).toHaveBeenCalledWith('maps');
     expect(window.google.maps.importLibrary).toHaveBeenCalledWith('marker');
-    // After resolve the classic constructors are usable — no "is not a constructor".
-    expect(() => new google.maps.LatLngBounds()).not.toThrow();
-    expect(typeof google.maps.Map).toBe('function');
   });
 
-  it('treats the API as ready only when the Map constructor is attached', async () => {
-    // google.maps exists but WITHOUT Map (the async pre-import state) → must not short-circuit.
-    window.google = { maps: { importLibrary: vi.fn(async () => { window.google.maps.Map = function () {}; }) } };
+  it('does NOT resolve while only Map is attached (LatLngBounds missing) — it injects a script and waits', () => {
+    window.google = { maps: { Map: ctor('Map') } }; // no importLibrary, no LatLngBounds
     const p = loadGoogleMaps('K');
-    // Since Map was missing, it should have injected a script (not resolved immediately).
     expect(document.querySelector('script[data-borderflow-google-maps="true"]')).toBeTruthy();
     p.catch(() => {});
   });
 
-  it('resolves immediately when Map is already attached (no duplicate script)', async () => {
-    window.google = { maps: { Map: function () {}, importLibrary: vi.fn() } };
+  it('resolves immediately (no script) when ALL constructors are already attached', async () => {
+    window.google = { maps: {} };
+    for (const k of REQUIRED_MAPS_CONSTRUCTORS) window.google.maps[k] = ctor(k);
     const google = await loadGoogleMaps('K');
     expect(google).toBe(window.google);
     expect(document.querySelector('script[data-borderflow-google-maps="true"]')).toBeNull();
   });
 
-  it('ensureMapsLibraries imports core+maps+marker when importLibrary is present', async () => {
-    window.google = { maps: { importLibrary: vi.fn(async (n) => ({ n })) } };
+  it('dedupes: reuses an existing maps.googleapis.com script tag instead of injecting a second', () => {
+    const stray = document.createElement('script');
+    stray.src = 'https://maps.googleapis.com/maps/api/js?key=OLD';
+    document.head.appendChild(stray);
+    const p = loadGoogleMaps('K');
+    const scripts = document.querySelectorAll('script[src*="maps.googleapis.com/maps/api/js"]');
+    expect(scripts.length).toBe(1); // no second loader injected
+    p.catch(() => {});
+  });
+
+  it('rejects (and clears the cached promise) if constructors never attach, so a retry can work', async () => {
+    const promise = loadGoogleMaps('K');
+    const script = document.querySelector('script[data-borderflow-google-maps="true"]');
+    window.google = { maps: { importLibrary: vi.fn(async () => ({})) } }; // returns nothing useful
+    script.onload();
+    await expect(promise).rejects.toThrow();
+    expect(window.__borderFlowGoogleMapsPromise).toBeNull(); // cleared → retryable
+  });
+});
+
+describe('ensureMapsLibraries', () => {
+  it('imports core+maps+marker and attaches returned constructors onto google.maps', async () => {
+    const LatLngBounds = ctor('LatLngBounds');
+    window.google = {
+      maps: {
+        importLibrary: vi.fn(async (name) => (name === 'core' ? { LatLngBounds } : {})),
+      },
+    };
     await ensureMapsLibraries();
     const names = window.google.maps.importLibrary.mock.calls.map((c) => c[0]);
     expect(names).toEqual(expect.arrayContaining(['core', 'maps', 'marker']));
+    expect(window.google.maps.LatLngBounds).toBe(LatLngBounds); // attached from the returned bundle
   });
 });

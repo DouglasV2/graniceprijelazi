@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { formatMinutes, hasKnownWait, isUsableMinuteValue, normalizeMinutes, formatWaitDisplay } from './utils/wait-format.js';
 import { cameraEstimateDecision } from './utils/camera-display.js';
-import { loadGoogleMaps } from './utils/google-maps-loader.js';
+import { loadGoogleMaps, mapsConstructorsReady } from './utils/google-maps-loader.js';
 
 
 function makeCrossingHistory(baseCars, baseTrucks, baseBuses, baseWait) {
@@ -2756,7 +2756,11 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
     setMapError('');
     loadGoogleMaps(apiKey)
       .then(() => {
-        if (!cancelled) setMapsReady(true);
+        if (cancelled) return;
+        // Defensive: only flip mapsReady when every constructor the render uses is truly attached,
+        // so the map effect can never hit "LatLngBounds is not a constructor".
+        if (mapsConstructorsReady()) setMapsReady(true);
+        else setMapError('Karta se nije uspjela učitati (Google Maps nije potpuno spreman).');
       })
       .catch(() => {
         if (!cancelled) setMapError('Karta se nije uspjela učitati.');
@@ -2767,7 +2771,8 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   }, [apiKey]);
 
   useEffect(() => {
-    if (!apiKey || !mapsReady || !mapEl.current || !window.google?.maps) return;
+    // Hard guard: never touch google.maps constructors unless they are ALL really attached.
+    if (!apiKey || !mapsReady || !mapEl.current || !mapsConstructorsReady()) return;
 
     const google = window.google;
     const mapCrossings = visibleCrossings.length ? visibleCrossings : [selectedCrossing];
@@ -2877,7 +2882,7 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   }, [stateVersion, overrides, selectedDirection, selectedCrossing.id]);
 
   useEffect(() => {
-    if (!mapRef.current || !window.google?.maps) return;
+    if (!mapRef.current || !mapsConstructorsReady()) return;
     const google = window.google;
 
     if (trafficLayerRef.current) {
@@ -2938,7 +2943,8 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   }, [focusTraffic, selectedDirection, selectedCrossing.id, overrides]);
 
   useEffect(() => {
-    if (!mapRef.current || !window.google?.maps) return;
+    // Route polylines use google.maps.Polyline/LatLngBounds — guard on the full constructor set.
+    if (!mapRef.current || !mapsConstructorsReady()) return;
     const google = window.google;
     const map = mapRef.current;
 

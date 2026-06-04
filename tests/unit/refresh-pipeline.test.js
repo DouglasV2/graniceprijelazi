@@ -61,15 +61,26 @@ describe('Google Maps loader best practice (src/utils/google-maps-loader.js)', (
   it('loads the Maps JS API with loading=async', () => {
     expect(mapsLoader).toMatch(/maps\.googleapis\.com\/maps\/api\/js\?key=\$\{apiKey\}&loading=async&libraries=marker&v=weekly/);
   });
-  it('awaits importLibrary before resolving (async loading attaches constructors lazily)', () => {
-    // Prevents the "google.maps.LatLngBounds is not a constructor" regression that loading=async
-    // causes if the classic constructors are used before the bundles are imported.
+  it('awaits importLibrary AND attaches the returned constructors before resolving', () => {
+    // Prevents the production "google.maps.LatLngBounds is not a constructor" crash: loading=async
+    // returns the classes from importLibrary without always setting the google.maps.X globals.
     expect(mapsLoader).toMatch(/importLibrary\('core'\)/);
     expect(mapsLoader).toMatch(/importLibrary\('maps'\)/);
-    // "ready" must mean the constructors are attached, not just that google.maps exists.
-    expect(mapsLoader).toMatch(/window\.google\?\.maps\?\.Map/);
+    expect(mapsLoader).toMatch(/importLibrary\('marker'\)/);
+    expect(mapsLoader).toMatch(/attachReturnedConstructors/);
   });
-  it('App.jsx uses the extracted loader', () => {
-    expect(app).toMatch(/import \{ loadGoogleMaps \} from '\.\/utils\/google-maps-loader\.js'/);
+  it('readiness requires EVERY constructor the app uses (not just Map)', () => {
+    expect(mapsLoader).toMatch(/REQUIRED_MAPS_CONSTRUCTORS\s*=\s*\[[^\]]*'LatLngBounds'[^\]]*'TrafficLayer'[^\]]*\]/);
+    expect(mapsLoader).toMatch(/function mapsConstructorsReady\(\)/);
+    expect(mapsLoader).toMatch(/if \(mapsConstructorsReady\(\)\) return Promise\.resolve\(window\.google\)/);
+  });
+  it('dedupes any existing maps.googleapis.com script tag', () => {
+    expect(mapsLoader).toMatch(/script\[src\*="maps\.googleapis\.com\/maps\/api\/js"\]/);
+  });
+  it('App.jsx uses the extracted loader and guards map init on full constructor readiness', () => {
+    expect(app).toMatch(/import \{ loadGoogleMaps, mapsConstructorsReady \} from '\.\/utils\/google-maps-loader\.js'/);
+    // Every effect that builds google.maps objects must guard on mapsConstructorsReady().
+    const guards = app.match(/mapsConstructorsReady\(\)/g) || [];
+    expect(guards.length).toBeGreaterThanOrEqual(3);
   });
 });
