@@ -102,6 +102,52 @@ describe('serviceRateFor + estimateCameraWaitV2 — queue → wait', () => {
   });
 });
 
+describe('estimateCameraWaitV2 — multi-frame stopped-vs-moving modifier', () => {
+  const base = { vehiclesInQueueRoi: 10, roiCalibrated: true, averageDetectionConfidence: 80 };
+  it('a standing queue (most stopped) raises confidence and keeps the queue-based wait', () => {
+    const noMf = estimateCameraWaitV2(base, { serviceRate: 1.5 });
+    const stopped = estimateCameraWaitV2({ ...base, multiFrame: { multiFrameUsed: true, stoppedVehicleRatio: 0.9, movingVehicleRatio: 0.1, queueMovingSlowly: true } }, { serviceRate: 1.5 });
+    expect(stopped.cameraConfidence).toBeGreaterThan(noMf.cameraConfidence);
+    expect(stopped.estimatedCameraWaitMin).toBe(noMf.estimatedCameraWaitMin);
+    expect(stopped.multiFrameUsed).toBe(true);
+  });
+  it('a clearly moving queue shaves the wait estimate', () => {
+    const noMf = estimateCameraWaitV2(base, { serviceRate: 1.5 });
+    const moving = estimateCameraWaitV2({ ...base, multiFrame: { multiFrameUsed: true, stoppedVehicleRatio: 0.1, movingVehicleRatio: 0.9, queueMovingSlowly: false } }, { serviceRate: 1.5 });
+    expect(moving.estimatedCameraWaitMin).toBeLessThan(noMf.estimatedCameraWaitMin);
+    expect(moving.multiFrameDraining).toBe(true);
+  });
+  it('an unused / fallback multi-frame result does not change the estimate', () => {
+    const noMf = estimateCameraWaitV2(base, { serviceRate: 1.5 });
+    const fb = estimateCameraWaitV2({ ...base, multiFrame: { multiFrameUsed: false, multiFrameFallbackReason: 'INSUFFICIENT_MATCHES' } }, { serviceRate: 1.5 });
+    expect(fb.estimatedCameraWaitMin).toBe(noMf.estimatedCameraWaitMin);
+    expect(fb.cameraConfidence).toBe(noMf.cameraConfidence);
+  });
+});
+
+describe('fuseTrafficVision — ROI-calibration confidence + no-ROI safety', () => {
+  const g = (delayMin) => ({ delayMin, delayRatio: 1 + delayMin / 5, routeCrossesBorder: true, confidence: 0.8, worstTrafficLevel: delayMin >= 5 ? 'SLOW' : 'NORMAL' });
+  it('a no-ROI camera alone cannot create an extreme committed wait', () => {
+    const noRoiCam = estimateCameraWaitV2({ queueVehicles: 40, roiCalibrated: false, averageDetectionConfidence: 80 }, { serviceRate: 1.5 });
+    const r = fuseTrafficVision({ camera: noRoiCam });
+    // no Google corroboration + no ROI → must not commit a confident extreme number
+    expect(r.confidenceLabel).not.toBe('high');
+    expect(r.expectedWaitMin).toBeLessThanOrEqual(noRoiCam.estimatedCameraWaitMin + 1);
+  });
+  it('a ROI-calibrated camera yields higher fusion confidence than a no-ROI one at the same queue', () => {
+    const roiCam = estimateCameraWaitV2({ vehiclesInQueueRoi: 12, roiCalibrated: true, averageDetectionConfidence: 80 }, { serviceRate: 1.5 });
+    const noRoiCam = estimateCameraWaitV2({ queueVehicles: 12, roiCalibrated: false, averageDetectionConfidence: 80 }, { serviceRate: 1.5 });
+    const rRoi = fuseTrafficVision({ camera: roiCam, google: g(10) });
+    const rNo = fuseTrafficVision({ camera: noRoiCam, google: g(10) });
+    expect(rRoi.confidenceScore).toBeGreaterThanOrEqual(rNo.confidenceScore);
+  });
+  it('the moving-queue phrase surfaces in the camera explanation', () => {
+    const movingCam = estimateCameraWaitV2({ vehiclesInQueueRoi: 12, roiCalibrated: true, averageDetectionConfidence: 80, multiFrame: { multiFrameUsed: true, movingVehicleRatio: 0.9, stoppedVehicleRatio: 0.1, queueMovingSlowly: false } }, { serviceRate: 1.5 });
+    const r = fuseTrafficVision({ camera: movingCam });
+    expect(r.explanation).toMatch(/pomiče/);
+  });
+});
+
 describe('fuseTrafficVision — scenario matrix', () => {
   const g = (delayMin, over = {}) => ({ delayMin, delayRatio: 1 + delayMin / 5, routeCrossesBorder: true, confidence: 0.8, worstTrafficLevel: delayMin >= 5 ? 'SLOW' : 'NORMAL', ...over });
   const c = (waitMin, queue, over = {}) => ({ estimatedCameraWaitMin: waitMin, estimatedQueueVehicles: queue, cameraConfidence: 0.7, cameraWaitRangeMin: Math.max(0, waitMin - 4), cameraWaitRangeMax: waitMin + 5, roiCalibrated: true, ...over });
@@ -190,5 +236,36 @@ describe('v2 wiring (server + UI) is in place and safe', () => {
     expect(app).toMatch(/AI kamera:/);
     expect(app).toMatch(/Google promet:/);
     expect(app).toMatch(/<PredictionBreakdown sourceMeta=/);
+  });
+  it('UI shows ROI-calibration + multi-frame wording (real queue / stopped / moving)', () => {
+    expect(app).toMatch(/u stvarnoj koloni/);
+    expect(app).toMatch(/većina stoji/);
+    expect(app).toMatch(/kolona se pomiče/);
+  });
+});
+
+describe('ROI v2 editor + feature wiring is present and flag/token gated', () => {
+  it('internal ROI editor endpoints exist (audit/debug/test/config)', () => {
+    expect(server).toMatch(/\/api\/internal\/traffic-vision\/roi-audit/);
+    expect(server).toMatch(/\/api\/internal\/traffic-vision\/roi-debug\/:cameraId/);
+    expect(server).toMatch(/\/api\/internal\/traffic-vision\/roi-test\/:cameraId/);
+    expect(server).toMatch(/\/api\/internal\/traffic-vision\/roi-config\/:cameraId/);
+    expect(server).toMatch(/\/internal\/roi-editor/);
+  });
+  it('the editor guard returns 404 when the flag is off and requires admin OR debug token', () => {
+    expect(server).toMatch(/function roiEditorGuard/);
+    expect(server).toMatch(/if \(!YOLO_ROI_EDITOR_ENABLED\) return res\.status\(404\)/);
+    expect(server).toMatch(/timingSafeEqualStr\(provided, TRAFFIC_VISION_DEBUG_TOKEN\)/);
+  });
+  it('ROI features + multi-frame are wired into the camera source snapshot metadata + fusion', () => {
+    expect(server).toMatch(/roiFeatures: analytics\.roiFeatures/);
+    expect(server).toMatch(/multiFrame: analytics\.multiFrame/);
+    expect(server).toMatch(/const roiFeatures = cameraSignal\?\.metadata\?\.roiFeatures/);
+    expect(server).toMatch(/computeRoiCameraFeatures\(/);
+    expect(server).toMatch(/trackStoppedMoving\(frames/);
+  });
+  it('ROI v2 stays fallback-safe: editor + config flags default safe', () => {
+    expect(server).toMatch(/YOLO_ROI_EDITOR_ENABLED = process\.env\.YOLO_ROI_EDITOR_ENABLED === 'true'/);
+    expect(server).toMatch(/YOLO_ROI_CONFIG_ENABLED = process\.env\.YOLO_ROI_CONFIG_ENABLED !== 'false'/);
   });
 });

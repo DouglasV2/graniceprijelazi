@@ -191,7 +191,28 @@ export function estimateCameraWaitV2(yolo = {}, { crossingId, direction, service
   out.estimatedServiceRateVehiclesPerMinute = round1(rate);
 
   // queue / serviceRate, plus a small fixed booth handling time.
-  const wait = queue <= 0 ? 0 : queue / rate + (queue <= 2 ? 1 : 2);
+  let wait = queue <= 0 ? 0 : queue / rate + (queue <= 2 ? 1 : 2);
+
+  // ── Multi-frame stopped-vs-moving modifier (flag-gated upstream; fallback-safe here) ──────────
+  // A standing queue (most vehicles stopped / moving slowly) means the full queue/rate wait holds
+  // and we trust it more. A queue that is clearly moving is draining → trim the wait a touch and
+  // flag it. Only applies when the tracker actually matched vehicles across frames.
+  const mf = yolo.multiFrame && yolo.multiFrame.multiFrameUsed ? yolo.multiFrame : null;
+  let multiFrameConfBonus = 0;
+  if (mf && queue > 2) {
+    out.stoppedVehicleRatio = mf.stoppedVehicleRatio ?? null;
+    out.movingVehicleRatio = mf.movingVehicleRatio ?? null;
+    out.queueMovingSlowly = Boolean(mf.queueMovingSlowly);
+    out.multiFrameUsed = true;
+    if (mf.queueMovingSlowly || Number(mf.stoppedVehicleRatio || 0) >= 0.6) {
+      multiFrameConfBonus = 0.1; // standing queue → the queue-based wait is more trustworthy
+    } else if (Number(mf.movingVehicleRatio || 0) >= 0.6) {
+      wait = wait * 0.8; // queue is visibly draining → shave the estimate a bit
+      out.multiFrameDraining = true;
+    }
+  } else {
+    out.multiFrameUsed = false;
+  }
   out.estimatedCameraWaitMin = clamp(round(wait), 0, 240);
 
   // Confidence: calibrated ROI + good detection + daylight → high; else lower.
@@ -200,6 +221,7 @@ export function estimateCameraWaitV2(yolo = {}, { crossingId, direction, service
   if (Number(yolo.averageDetectionConfidence || 0) >= 55) conf += 0.15;
   if (yolo.isNightOrLowLight) conf -= 0.2;
   if (Number(yolo.cameraImageQualityScore ?? 100) < 40) conf -= 0.15;
+  conf += multiFrameConfBonus;
   if (queue <= 1) conf = Math.min(conf, 0.5); // a single car carries little certainty either way
   out.cameraConfidence = round1(clamp(conf, 0.05, 0.95));
 
@@ -244,6 +266,12 @@ export function fuseTrafficVision({ google = null, camera = null, publicSig = nu
 
   const cameraWait = camera && isNum(camera.estimatedCameraWaitMin) ? Number(camera.estimatedCameraWaitMin) : null;
   const cameraConf = camera ? Number(camera.cameraConfidence || 0) : 0;
+  // Plain-language multi-frame phrase, appended to camera explanations when the tracker ran.
+  const mfPhrase = camera && camera.multiFrameUsed
+    ? (camera.queueMovingSlowly || Number(camera.stoppedVehicleRatio || 0) >= 0.6
+        ? ' Većina vozila stoji (kolona stoji).'
+        : (Number(camera.movingVehicleRatio || 0) >= 0.6 ? ' Kolona se pomiče.' : ''))
+    : '';
   const googleWait = googleDelayToWait(google);
   const googleConf = google ? Number(google.confidence || 0) : 0;
   const googleUsable = googleWait !== null && google && google.routeCrossesBorder && googleConf >= 0.45;
@@ -265,7 +293,7 @@ export function fuseTrafficVision({ google = null, camera = null, publicSig = nu
     }
     if (agreeHigh) {
       return result(blended, Math.min(cameraWait, googleWait) - 3, Math.max(cameraWait, googleWait) + 5, 86, 'high',
-        `AI kamera vidi ${camera.estimatedQueueVehicles} vozila u koloni, Google promet pokazuje +${google.delayMin} min — izvori se slažu.`, 'camera+google');
+        `AI kamera vidi ${camera.estimatedQueueVehicles} vozila u koloni, Google promet pokazuje +${google.delayMin} min — izvori se slažu.${mfPhrase}`, 'camera+google');
     }
     // disagree → medium confidence, wider range, conflict explanation (§6.3/§6.4)
     const lo = Math.min(cameraWait, googleWait);
@@ -281,7 +309,7 @@ export function fuseTrafficVision({ google = null, camera = null, publicSig = nu
   if (cameraUsable) {
     const conf = clamp(round(40 + cameraConf * 45), 20, 80);
     return result(cameraWait, camera.cameraWaitRangeMin ?? Math.max(0, cameraWait - 4), camera.cameraWaitRangeMax ?? cameraWait + 6, conf, conf >= 65 ? 'medium' : 'low',
-      `AI kamera vidi ${camera.estimatedQueueVehicles} vozila u koloni.`, 'camera');
+      `AI kamera vidi ${camera.estimatedQueueVehicles} vozila u koloni.${mfPhrase}`, 'camera');
   }
   // 5) Only Google usable.
   if (googleUsable) {

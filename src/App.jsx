@@ -3326,10 +3326,20 @@ function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, se
 function PredictionBreakdown({ sourceMeta = {} }) {
   const p = sourceMeta.predictionV2;
   if (!p || p.error || !p.sourceBreakdown) return null;
-  const b = p.sourceBreakdown;
+  const b = p.sourceBreakdown || {};
   const rows = [];
-  if (b.yoloCamera && b.yoloCamera.estimatedQueueVehicles !== null && b.yoloCamera.estimatedQueueVehicles !== undefined) {
-    rows.push({ icon: '📷', text: `AI kamera: ${b.yoloCamera.estimatedQueueVehicles} vozila u koloni${b.yoloCamera.roiCalibrated ? '' : ' (orijentacijski)'}` });
+  const cam = b.yoloCamera || null;
+  const camQueue = cam ? (cam.estimatedQueueVehicles ?? cam.vehiclesInQueueRoi) : null;
+  if (cam && camQueue !== null && camQueue !== undefined) {
+    // ROI-calibrated → "u stvarnoj koloni" (we counted only the queue lane); else orientational.
+    const roiPart = cam.roiCalibrated ? ' u stvarnoj koloni' : ' u koloni (orijentacijski, niža pouzdanost)';
+    // Multi-frame stopped-vs-moving (only when the tracker actually ran across frames).
+    let movePart = '';
+    if (cam.multiFrameUsed) {
+      if (cam.queueMovingSlowly || Number(cam.stoppedVehicleRatio || 0) >= 0.6) movePart = ' — većina stoji';
+      else if (Number(cam.movingVehicleRatio || 0) >= 0.6) movePart = ' — kolona se pomiče';
+    }
+    rows.push({ icon: '📷', text: `AI kamera: ${camQueue} vozila${roiPart}${movePart}` });
   }
   if (b.googleTraffic && b.googleTraffic.delayMin !== null && b.googleTraffic.delayMin !== undefined) {
     rows.push({ icon: '🚗', text: `Google promet: ${b.googleTraffic.delayMin > 0 ? `+${b.googleTraffic.delayMin} min usporenja` : 'bez zastoja'} na prilazu` });

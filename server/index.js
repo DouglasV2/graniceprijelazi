@@ -55,6 +55,21 @@ import {
   serviceRateFor,
   fuseTrafficVision,
 } from './traffic-vision.js';
+import {
+  computeRoiCameraFeatures,
+  classifyDetectionsByRoi,
+  trackStoppedMoving,
+  validateRoiConfig,
+} from './traffic-vision-roi.js';
+import {
+  getRoiConfig,
+  getRoiConfigSource,
+  rectCalibrationToRoiConfig,
+  saveRoiConfig,
+  listRoiConfigIds,
+  STATIC_ROI_CONFIGS,
+} from './camera-roi-config.js';
+import { ROI_EDITOR_HTML } from './roi-editor-page.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1351,6 +1366,12 @@ const TRAFFIC_VISION_DEBUG = process.env.TRAFFIC_VISION_DEBUG === 'true';
 const CAMERA_YOLO_MULTI_FRAME_ENABLED = process.env.CAMERA_YOLO_MULTI_FRAME_ENABLED === 'true';
 const CAMERA_YOLO_FRAME_COUNT = Math.max(1, Math.min(5, Number(process.env.CAMERA_YOLO_FRAME_COUNT || 3)));
 const CAMERA_YOLO_FRAME_GAP_MS = Math.max(500, Number(process.env.CAMERA_YOLO_FRAME_GAP_MS || 2500));
+const CAMERA_YOLO_MULTI_FRAME_TIMEOUT_MS = Math.max(2000, Number(process.env.CAMERA_YOLO_MULTI_FRAME_TIMEOUT_MS || 12000));
+// ROI v2 config + internal editor/debug tools (NOT user-facing). Editor endpoints answer 404/disabled
+// unless TRAFFIC_VISION_DEBUG=true (+ optional x-debug-token). Reading ROI config is on by default.
+const YOLO_ROI_CONFIG_ENABLED = process.env.YOLO_ROI_CONFIG_ENABLED !== 'false';
+const YOLO_ROI_EDITOR_ENABLED = process.env.YOLO_ROI_EDITOR_ENABLED === 'true';
+const TRAFFIC_VISION_DEBUG_TOKEN = process.env.TRAFFIC_VISION_DEBUG_TOKEN || '';
 // YOLO + ROI (V5 §6). OFF by default — must be explicitly enabled, and even then it only
 // REPLACES the vehicle-detection step; the wait still flows through the same evidence-cap,
 // direction/ROI gate and confidence calibration. If the model/runtime is unavailable the
@@ -2391,7 +2412,11 @@ async function buildCameraSourceSnapshots({ forceSnapshot = false } = {}) {
           waitRangeMin: analytics.waitRangeMin,
           waitRangeMax: analytics.waitRangeMax,
           vehicleMix15: analytics.vehicleMix15,
+          visibleVehicles: analytics.roiFeatures?.visibleVehicleCount ?? analytics.queueVehicles,
           source: analytics.source,
+          // ROI v2 + multi-frame features so the v2 fusion (effectiveBorderSignal) can consume them.
+          roiFeatures: analytics.roiFeatures || null,
+          multiFrame: analytics.multiFrame || null,
           snapshots: actualSnapshots.map((item) => ({ cameraId: item.cameraId, method: item.method, confidence: item.confidence, fetchedAt: item.fetchedAt })),
         },
         fetchedAt: new Date().toISOString(),
@@ -3316,19 +3341,35 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       const gV2 = googleSignal?.metadata?.googleTrafficV2 || null;
       const allDirCams = CAMERA_FEEDS[crossing.id] || [];
       const dirCameras = allDirCams.filter((cam) => cameraRelevantForDirection(cam, direction, allDirCams));
-      const roiCalibrated = YOLO_ROI_V2_ENABLED && dirCameras.some((cam) => cameraHasQueueRoi(cam));
-      const mix = cameraSignal?.metadata?.vehicleMix15 || {};
+      const roiFeatures = cameraSignal?.metadata?.roiFeatures || null;
+      const multiFrame = cameraSignal?.metadata?.multiFrame || null;
+      const roiCalibrated = YOLO_ROI_V2_ENABLED && (Boolean(roiFeatures?.roiCalibrated) || dirCameras.some((cam) => cameraHasQueueRoi(cam)));
+      const mix = roiFeatures?.vehicleCountByClass || cameraSignal?.metadata?.vehicleMix15 || {};
       const heavy = Number(mix.trucks || 0) + Number(mix.buses || 0);
       const truckRatio = heavy / Math.max(1, heavy + Number(mix.cars || 0) + Number(mix.vans || 0));
-      const cameraV2 = cameraSignal && !cameraStale ? estimateCameraWaitV2({
-        vehiclesInQueueRoi: roiCalibrated ? cameraSignal.metadata?.queueVehicles : null,
-        queueVehicles: cameraSignal.metadata?.queueVehicles,
-        visibleVehicleCount: cameraSignal.metadata?.visibleVehicles ?? cameraSignal.metadata?.queueVehicles,
+      const cameraV2base = cameraSignal && !cameraStale ? estimateCameraWaitV2({
+        vehiclesInQueueRoi: roiFeatures?.roiCalibrated ? roiFeatures.vehiclesInQueueRoi : (roiCalibrated ? cameraSignal.metadata?.queueVehicles : null),
+        queueVehicles: roiFeatures?.vehiclesInQueueRoi ?? cameraSignal.metadata?.queueVehicles,
+        visibleVehicleCount: roiFeatures?.visibleVehicleCount ?? cameraSignal.metadata?.visibleVehicles ?? cameraSignal.metadata?.queueVehicles,
         vehicleCountByClass: mix,
-        roiCalibrated,
-        averageDetectionConfidence: cameraSignal.confidence,
-        isNightOrLowLight: Boolean(cameraSignal.metadata?.isNightOrLowLight),
+        roiCalibrated: Boolean(roiFeatures?.roiCalibrated || roiCalibrated),
+        averageDetectionConfidence: roiFeatures?.averageDetectionConfidence != null ? roiFeatures.averageDetectionConfidence * 100 : cameraSignal.confidence,
+        isNightOrLowLight: Boolean(roiFeatures?.isNightOrLowLight || cameraSignal.metadata?.isNightOrLowLight),
+        multiFrame,
       }, { crossingId: crossing.id, direction, truckRatio }) : null;
+      // Rich camera object for the source breakdown = ROI features + wait estimate + multi-frame.
+      const cameraV2 = cameraV2base ? {
+        ...(roiFeatures || {}),
+        ...cameraV2base,
+        ...(multiFrame ? {
+          multiFrameUsed: multiFrame.multiFrameUsed,
+          stoppedVehicleRatio: multiFrame.stoppedVehicleRatio,
+          movingVehicleRatio: multiFrame.movingVehicleRatio,
+          queueMovingSlowly: multiFrame.queueMovingSlowly,
+          flowDirectionValid: multiFrame.flowDirectionValid,
+          multiFrameFallbackReason: multiFrame.multiFrameFallbackReason,
+        } : {}),
+      } : null;
       const measuredReport = reports.filter((r) => r.measured && r.gpsVerified).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
       const chatReports = reports.filter((r) => !r.measured);
       const chatAvg = chatReports.length ? Math.round(chatReports.reduce((s, r) => s + Number(r.wait || 0), 0) / chatReports.length) : null;
@@ -4017,6 +4058,200 @@ app.get('/api/admin/traffic-vision-accuracy', authRequired, adminRequired, async
     note: records.length
       ? 'Točnost na temelju razriješenih predikcija (verified/chat-confirmed). Per-source (Google-only / YOLO-only / fusion) raspodjela puni se kako se v2 predikcije akumuliraju.'
       : 'Još nema razriješenih predikcija — metrike se popunjavaju kad stignu verified/chat potvrde.',
+  });
+});
+
+// ── ROI v2 EDITOR / CAMERA DEBUG (INTERNAL — NOT user-facing) ──────────────────────────────────
+// These power an internal polygon editor. They are invisible to normal users: when
+// YOLO_ROI_EDITOR_ENABLED is off (the default) every route returns 404 {disabled:true}. When on,
+// access still requires either an admin session OR a matching TRAFFIC_VISION_DEBUG_TOKEN
+// (x-debug-token / Bearer header). Nothing here changes a user-facing estimate on its own — saved
+// ROI configs only take effect through the flag-gated ROI v2 counting path.
+function timingSafeEqualStr(a, b) {
+  try {
+    const ba = Buffer.from(String(a));
+    const bb = Buffer.from(String(b));
+    if (ba.length !== bb.length || ba.length === 0) return false;
+    return crypto.timingSafeEqual(ba, bb);
+  } catch { return false; }
+}
+
+function roiEditorGuard(req, res, next) {
+  if (!YOLO_ROI_EDITOR_ENABLED) return res.status(404).json({ ok: false, disabled: true, error: 'ROI editor nije omogućen.' });
+  const isAdmin = req.user?.role === 'admin';
+  const provided = String(req.get('x-debug-token') || req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  const tokenOk = Boolean(TRAFFIC_VISION_DEBUG_TOKEN) && timingSafeEqualStr(provided, TRAFFIC_VISION_DEBUG_TOKEN);
+  if (!isAdmin && !tokenOk) return res.status(401).json({ ok: false, error: 'Potreban admin pristup ili ispravan debug token.' });
+  return next();
+}
+
+function findCameraEntry(cameraId) {
+  const id = String(cameraId || '').trim();
+  if (!id) return null;
+  for (const [crossingId, cams] of Object.entries(CAMERA_FEEDS)) {
+    const camera = (cams || []).find((c) => c.id === id);
+    if (camera) return { camera, crossingId };
+  }
+  return null;
+}
+
+// Serve the standalone editor shell ONLY when the flag is on (404 otherwise → invisible to users).
+// The shell carries no data; every data call it makes is token/admin gated by roiEditorGuard.
+app.get('/internal/roi-editor', (req, res) => {
+  if (!YOLO_ROI_EDITOR_ENABLED) return res.status(404).type('text/plain').send('Not found');
+  res.set('Cache-Control', 'no-store');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.type('html').send(ROI_EDITOR_HTML);
+});
+
+// List every camera + whether it has an ROI config (static/override/rect-derived/none). Powers the
+// editor's camera picker and a quick "what still needs calibrating" audit.
+app.get('/api/internal/traffic-vision/roi-audit', optionalAuth, roiEditorGuard, (req, res) => {
+  const cameras = [];
+  for (const [crossingId, cams] of Object.entries(CAMERA_FEEDS)) {
+    for (const camera of (cams || [])) {
+      const source = getRoiConfigSource(camera.id);
+      const explicit = getRoiConfig(camera.id);
+      const rectDerived = !explicit ? rectCalibrationToRoiConfig(camera, crossingId, 'toBih') : null;
+      const cfg = explicit || rectDerived;
+      cameras.push({
+        cameraId: camera.id,
+        crossingId,
+        label: camera.label || camera.id,
+        feed: camera.source || null,
+        roiSource: source || (rectDerived ? 'rect-derived' : null),
+        hasExplicitRoi: Boolean(explicit),
+        roiVersion: cfg?.roiVersion || null,
+        isActive: cfg ? cfg.isActive !== false : false,
+        queuePolygonPoints: Array.isArray(cfg?.queuePolygon) ? cfg.queuePolygon.length : 0,
+        ignorePolygons: Array.isArray(cfg?.ignorePolygons) ? cfg.ignorePolygons.length : 0,
+      });
+    }
+  }
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    roiV2Enabled: YOLO_ROI_V2_ENABLED,
+    roiConfigEnabled: YOLO_ROI_CONFIG_ENABLED,
+    predictionV2Enabled: PREDICTION_V2_ENABLED,
+    configuredIds: listRoiConfigIds(),
+    cameras,
+  });
+});
+
+// Fresh snapshot + YOLO boxes + ROI classification for one camera. Returns a base64 image data URL
+// (avoids the editor hitting the camera host directly / CORS) so the canvas can draw polygons over
+// the exact frame the detector saw, plus the current config and per-bucket counts.
+app.get('/api/internal/traffic-vision/roi-debug/:cameraId', optionalAuth, roiEditorGuard, async (req, res) => {
+  const entry = findCameraEntry(req.params.cameraId);
+  if (!entry) return res.status(404).json({ ok: false, error: 'Kamera nije pronađena.' });
+  const { camera, crossingId } = entry;
+  const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
+  try {
+    const roiConfig = getRoiConfig(camera.id) || rectCalibrationToRoiConfig(camera, crossingId, direction);
+    let image = null;
+    try { image = await fetchCameraImage(camera, { forceSnapshot: true }); } catch { image = null; }
+    const usable = image && isUsableCameraImage(image.buffer, image.contentType);
+    let yolo = null;
+    let imageMeta = null;
+    let imageDataUrl = null;
+    let roiFeatures = null;
+    let classification = null;
+    if (usable) {
+      imageDataUrl = `data:${image.contentType};base64,${Buffer.from(image.buffer).toString('base64')}`;
+      yolo = await runYoloDetector(camera, crossingId, direction, image.buffer, image.contentType);
+      imageMeta = { width: yolo?.width || null, height: yolo?.height || null, coordSpace: 'percent' };
+      if (Array.isArray(yolo?.detections)) {
+        roiFeatures = computeRoiCameraFeatures(yolo.detections, roiConfig, imageMeta);
+        const cls = classifyDetectionsByRoi(yolo.detections, roiConfig, imageMeta.width || 0, imageMeta.height || 0, 'percent');
+        classification = { insideQueueRoi: cls.insideQueueRoi.length, ignored: cls.ignored.length, outsideQueueRoi: cls.outsideQueueRoi.length, invalid: cls.invalid.length };
+      }
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      cameraId: camera.id,
+      crossingId,
+      direction,
+      roiV2Enabled: YOLO_ROI_V2_ENABLED,
+      roiConfig: roiConfig || null,
+      roiConfigSource: getRoiConfigSource(camera.id) || (roiConfig?.derivedFromRect ? 'rect-derived' : null),
+      imageUrl: image?.url || null,
+      imageDataUrl,
+      imageMeta,
+      imageUnavailable: !usable,
+      yolo: yolo ? { count: yolo.count, fallbackReason: yolo.fallbackReason, durationMs: yolo.durationMs, model: yolo.model, detections: yolo.detections || [] } : null,
+      roiFeatures,
+      classification,
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'ROI debug nije uspio.', detail: safeError(error) });
+  }
+});
+
+// Preview a CANDIDATE ROI config (not saved). Classifies either provided detections or a fresh YOLO
+// run against the candidate polygon so the editor can show "this polygon would count N in queue".
+app.post('/api/internal/traffic-vision/roi-test/:cameraId', optionalAuth, roiEditorGuard, async (req, res) => {
+  const entry = findCameraEntry(req.params.cameraId);
+  if (!entry) return res.status(404).json({ ok: false, error: 'Kamera nije pronađena.' });
+  const { camera, crossingId } = entry;
+  const direction = req.body?.direction === 'toHr' ? 'toHr' : 'toBih';
+  const candidate = req.body?.roiConfig || {};
+  const { valid, errors } = validateRoiConfig(candidate);
+  if (!valid) return res.status(400).json({ ok: false, errors });
+  try {
+    const provided = Array.isArray(req.body?.detections) ? req.body.detections : null;
+    let detections = provided;
+    let imageMeta = req.body?.imageMeta || { width: 0, height: 0, coordSpace: req.body?.coordSpace || 'percent' };
+    let yolo = null;
+    if (!detections) {
+      const image = await fetchCameraImage(camera, { forceSnapshot: true }).catch(() => null);
+      if (image && isUsableCameraImage(image.buffer, image.contentType)) {
+        yolo = await runYoloDetector(camera, crossingId, direction, image.buffer, image.contentType);
+        detections = yolo?.detections || [];
+        imageMeta = { width: yolo?.width || 0, height: yolo?.height || 0, coordSpace: 'percent' };
+      } else {
+        detections = [];
+      }
+    }
+    const roiFeatures = computeRoiCameraFeatures(detections, candidate, imageMeta);
+    res.set('Cache-Control', 'no-store');
+    res.json({ ok: true, cameraId: camera.id, crossingId, direction, usedProvidedDetections: Boolean(provided), roiFeatures, yolo: yolo ? { count: yolo.count, fallbackReason: yolo.fallbackReason } : null });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'ROI test nije uspio.', detail: safeError(error) });
+  }
+});
+
+// Save a runtime ROI override (validated) + return a STATIC_ROI_CONFIGS snippet to commit (Railway's
+// FS is ephemeral, so the durable home is the committed static map).
+app.put('/api/internal/traffic-vision/roi-config/:cameraId', optionalAuth, roiEditorGuard, writeLimiter, (req, res) => {
+  const entry = findCameraEntry(req.params.cameraId);
+  if (!entry) return res.status(404).json({ ok: false, error: 'Kamera nije pronađena.' });
+  const body = req.body || {};
+  const config = {
+    crossingId: body.crossingId || entry.crossingId,
+    direction: body.direction === 'toHr' ? 'toHr' : 'toBih',
+    roiVersion: String(body.roiVersion || `editor-${new Date().toISOString().slice(0, 10)}`).slice(0, 60),
+    queuePolygon: body.queuePolygon,
+    ignorePolygons: Array.isArray(body.ignorePolygons) ? body.ignorePolygons : [],
+    lanePolygons: Array.isArray(body.lanePolygons) ? body.lanePolygons : [],
+    boothLine: body.boothLine || null,
+    borderLine: body.borderLine || null,
+    metersPerPixel: Number.isFinite(Number(body.metersPerPixel)) ? Number(body.metersPerPixel) : null,
+    cameraReliability: Number.isFinite(Number(body.cameraReliability)) ? Number(body.cameraReliability) : 0.7,
+    nightReliability: Number.isFinite(Number(body.nightReliability)) ? Number(body.nightReliability) : 0.45,
+    savedVia: 'roi-editor',
+    isActive: body.isActive !== false,
+  };
+  const result = saveRoiConfig(req.params.cameraId, config);
+  if (!result.ok) return res.status(400).json({ ok: false, errors: result.errors });
+  res.json({
+    ok: true,
+    cameraId: req.params.cameraId,
+    config: result.config,
+    persistence: 'runtime-override',
+    staticSnippet: { [req.params.cameraId]: result.config },
+    note: 'Spremljeno u runtime override (data/camera-roi-overrides.json). Na efemernoj PaaS FS (Railway) override se gubi na redeploy — kopiraj `staticSnippet` u STATIC_ROI_CONFIGS u server/camera-roi-config.js i commitaj za trajnu pohranu.',
   });
 });
 
@@ -6372,8 +6607,26 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null,
   const yolo = (yoloResult && Array.isArray(yoloResult.detections))
     ? applyRoiToDetections(yoloResult.detections, camera.calibration || {}, { minConfidence: YOLO_MIN_CONFIDENCE })
     : null;
-  const effVisible = yolo ? yolo.visibleVehicles : visibleTotal;
-  const effQueue = yolo ? yolo.queueVehicles : queueEstimate;
+  // ── YOLO ROI v2 (polygon queue/ignore) ──────────────────────────────────────────────────────
+  // Classify the RAW YOLO detections against the per-camera polygon ROI (explicit config, or one
+  // derived from the legacy rect calibration). When calibrated, the QUEUE count comes from vehicles
+  // inside the queue polygon (parking / opposite side / off-lane are excluded). Never throws.
+  let roiFeaturesV2 = null;
+  if (YOLO_ROI_V2_ENABLED && yoloResult && Array.isArray(yoloResult.detections)) {
+    try {
+      const explicit = YOLO_ROI_CONFIG_ENABLED ? getRoiConfig(camera.id) : null;
+      const v2cfg = (explicit && explicit.isActive !== false) ? explicit : rectCalibrationToRoiConfig(camera, camera.crossingId, direction);
+      roiFeaturesV2 = computeRoiCameraFeatures(yoloResult.detections, (v2cfg && v2cfg.isActive !== false) ? v2cfg : null, {
+        width: image.width, height: image.height, coordSpace: 'percent', isNightOrLowLight: false, qualityScore: null,
+      });
+    } catch (error) {
+      roiFeaturesV2 = { roiCalibrated: false, fallbackReason: `ROI_V2_ERROR:${String(error.message).slice(0, 60)}` };
+    }
+  }
+  const roiCalibratedV2 = Boolean(roiFeaturesV2 && roiFeaturesV2.roiCalibrated);
+  // When the v2 polygon ROI is calibrated it is the source of truth for visible/queue counts.
+  const effVisible = roiCalibratedV2 ? roiFeaturesV2.visibleVehicleCount : (yolo ? yolo.visibleVehicles : visibleTotal);
+  const effQueue = roiCalibratedV2 ? roiFeaturesV2.vehiclesInQueueRoi : (yolo ? yolo.queueVehicles : queueEstimate);
   const effCounts = yolo ? yolo.counts : blendedCounts;
 
   const flowEstimate = estimateCameraFlowFromSnapshot({ visibleVehicles: effVisible, queueVehicles: effQueue, occupancyPct, laneFullnessPct, componentDensity, direction, previousSnapshot });
@@ -6416,7 +6669,10 @@ function analyzeSnapshotImage(image, camera, direction, previousSnapshot = null,
     ignoredDetections: yolo ? yolo.ignored.map((d) => ({ type: d.type, x: d.x, y: d.y, reason: d.reason })) : null,
     passedVehicles: yolo ? yolo.passedVehicles : null,
     countLineCrossings: yolo ? yolo.countLineCrossings : null,
-    method: yolo ? `yolo-roi${flowEstimate.method.includes('single') ? '-single-frame' : ''}` : flowEstimate.method,
+    // ROI v2 polygon features (visible/queue/ignored/outside, roiCalibrated, roiVersion, …) — the
+    // rich object surfaced into sourceBreakdown.yoloCamera. null when ROI v2 is off / no detections.
+    roiFeatures: roiFeaturesV2,
+    method: roiCalibratedV2 ? `yolo-roi-v2${flowEstimate.method.includes('single') ? '-single-frame' : ''}` : (yolo ? `yolo-roi${flowEstimate.method.includes('single') ? '-single-frame' : ''}` : flowEstimate.method),
   };
 }
 
@@ -6445,6 +6701,34 @@ async function runSnapshotCounter(camera, crossingId, direction, previousSnapsho
   analysis.cvFallbackReason = analysis.yoloUsed ? null : (yoloResult?.fallbackReason || (YOLO_ENABLED ? 'no-detections' : 'disabled'));
   analysis.cvDurationMs = Number(yoloResult?.durationMs || 0);
   analysis.cvDetectionsCount = Number(yoloResult?.count || (Array.isArray(yoloResult?.detections) ? yoloResult.detections.length : 0));
+
+  // ── MULTI-FRAME stopped-vs-moving (§4) — flag-gated, timeout-bounded, single-frame fallback ──
+  analysis.multiFrame = { multiFrameUsed: false, multiFrameFallbackReason: CAMERA_YOLO_MULTI_FRAME_ENABLED ? null : 'DISABLED' };
+  if (CAMERA_YOLO_MULTI_FRAME_ENABLED && Array.isArray(yoloResult?.detections)) {
+    const startedMf = Date.now();
+    try {
+      const explicitMf = YOLO_ROI_CONFIG_ENABLED ? getRoiConfig(camera.id) : null;
+      const roiCfgMf = (explicitMf && explicitMf.isActive !== false) ? explicitMf : rectCalibrationToRoiConfig(camera, crossingId, direction);
+      const imageMeta = { width: image.width, height: image.height, coordSpace: 'percent' };
+      const frames = [yoloResult.detections];
+      const deadline = startedMf + CAMERA_YOLO_MULTI_FRAME_TIMEOUT_MS;
+      for (let i = 1; i < CAMERA_YOLO_FRAME_COUNT && Date.now() < deadline; i += 1) {
+        await new Promise((r) => setTimeout(r, CAMERA_YOLO_FRAME_GAP_MS));
+        if (Date.now() >= deadline) break;
+        const extra = await fetchCameraImage(camera, { forceSnapshot: true }).catch(() => null);
+        if (!extra || !isUsableCameraImage(extra.buffer, extra.contentType)) continue;
+        const yr = await runYoloDetector(camera, crossingId, direction, extra.buffer, extra.contentType).catch(() => null);
+        if (yr && Array.isArray(yr.detections)) frames.push(yr.detections);
+      }
+      analysis.multiFrame = frames.length >= 2
+        ? trackStoppedMoving(frames, { roiConfig: roiCfgMf, imageMeta })
+        : { multiFrameUsed: true, multiFrameFrameCount: frames.length, stoppedVehicleRatio: null, movingVehicleRatio: null, multiFrameFallbackReason: 'INSUFFICIENT_FRAMES' };
+      analysis.multiFrame.multiFrameDurationMs = Date.now() - startedMf;
+    } catch (error) {
+      analysis.multiFrame = { multiFrameUsed: false, multiFrameFallbackReason: `ERROR:${String(error.message).slice(0, 50)}`, multiFrameDurationMs: Date.now() - startedMf };
+    }
+  }
+
   if (!YOLO_ENABLED && YOLO_SHADOW_MODE && Array.isArray(yoloResult?.detections)) {
     const shadow = applyRoiToDetections(yoloResult.detections, camera.calibration || {}, { minConfidence: YOLO_MIN_CONFIDENCE });
     // Compute the v6 wait estimate from the YOLO signals (shadow only — never used for the
@@ -6704,6 +6988,12 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
     cvDurationMs: cvDurations.length ? Math.max(...cvDurations) : 0,
     cvDetectionsCount: cvAnalyses.reduce((sum, a) => sum + Number(a.cvDetectionsCount || 0), 0),
   };
+  // ROI v2 + multi-frame features from the direction's wait-driving camera (prefer a roiCalibrated
+  // one) — surfaced on analytics so the camera source snapshot + the v2 fusion can consume them.
+  const roiFeaturesPrimary = snapshotAnalyses.find((a) => a && a.roiFeatures && a.roiFeatures.roiCalibrated)?.roiFeatures
+    || snapshotAnalyses.find((a) => a && a.roiFeatures)?.roiFeatures || null;
+  const multiFramePrimary = snapshotAnalyses.find((a) => a && a.multiFrame && a.multiFrame.multiFrameUsed && a.multiFrame.stoppedVehicleRatio !== null)?.multiFrame
+    || snapshotAnalyses.find((a) => a && a.multiFrame)?.multiFrame || null;
   const snapshotRows = snapshotAnalyses
     .filter(Boolean)
     .map((snapshot) => ({ ...snapshot, crossingId: crossing.id, direction, metadata: { ...(snapshot.metadata || {}), roi: snapshot.roi, occupancyPct: snapshot.occupancyPct, componentCount: snapshot.componentCount, rawCounts: snapshot.rawCounts } }));
@@ -6854,6 +7144,9 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
       dailyTotals: sumCounts(history),
       // source reflects ACTUAL usage: cv-detector only when YOLO truly drove a frame this cycle.
       source: hasIngest ? 'camera-ingest' : (cvSummary.cvUsed ? 'cv-detector' : (hasSnapshotCounter ? 'snapshot-counter' : 'baseline-camera-model')),
+      // ROI v2 + multi-frame features (rich) for the v2 fusion + admin debug.
+      roiFeatures: roiFeaturesPrimary,
+      multiFrame: multiFramePrimary,
       // CV/YOLO diagnostics (flat, for UI/debug): is YOLO enabled, did it run, fallback reason, timing.
       cvEnabled: cvSummary.cvEnabled,
       cvUsed: cvSummary.cvUsed,
