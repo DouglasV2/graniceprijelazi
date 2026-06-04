@@ -3308,6 +3308,7 @@ function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, se
             <p>{selectedCrossing.cause}</p>
             <p>{direction.bottleneckText}</p>
           </div>
+          <PredictionBreakdown sourceMeta={getWaitSourceMeta(selectedCrossing, selectedDirection, overrides)} />
           <div className="zone-card">
             <span>Zona mjerenja</span>
             <strong>{getZone(selectedCrossing, selectedDirection).from}</strong>
@@ -3317,6 +3318,44 @@ function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, se
         </aside>
       </div>
     </section>
+  );
+}
+
+// Traffic + Vision v2 source breakdown — shows WHY we are better than a plain HAK/BIHAMK reprint:
+// our own estimate computed from the AI camera (YOLO queue) + Google border traffic + ground truth.
+function PredictionBreakdown({ sourceMeta = {} }) {
+  const p = sourceMeta.predictionV2;
+  if (!p || p.error || !p.sourceBreakdown) return null;
+  const b = p.sourceBreakdown;
+  const rows = [];
+  if (b.yoloCamera && b.yoloCamera.estimatedQueueVehicles !== null && b.yoloCamera.estimatedQueueVehicles !== undefined) {
+    rows.push({ icon: '📷', text: `AI kamera: ${b.yoloCamera.estimatedQueueVehicles} vozila u koloni${b.yoloCamera.roiCalibrated ? '' : ' (orijentacijski)'}` });
+  }
+  if (b.googleTraffic && b.googleTraffic.delayMin !== null && b.googleTraffic.delayMin !== undefined) {
+    rows.push({ icon: '🚗', text: `Google promet: ${b.googleTraffic.delayMin > 0 ? `+${b.googleTraffic.delayMin} min usporenja` : 'bez zastoja'} na prilazu` });
+  }
+  if (b.verifiedLocation && b.verifiedLocation.waitMin !== null && b.verifiedLocation.waitMin !== undefined) {
+    rows.push({ icon: '✅', text: `Provjereno na terenu: ${formatMinutes(b.verifiedLocation.waitMin)}` });
+  }
+  if (b.chatReports && b.chatReports.waitMin !== null && b.chatReports.waitMin !== undefined) {
+    rows.push({ icon: '💬', text: `Dojave vozača: ${formatMinutes(b.chatReports.waitMin)} (${b.chatReports.count})` });
+  }
+  if (b.publicSource && b.publicSource.waitMin !== null && b.publicSource.waitMin !== undefined) {
+    rows.push({ icon: '🏛️', text: `Javni izvor: ${formatMinutes(b.publicSource.waitMin)}` });
+  }
+  if (!rows.length) return null;
+  const confLabel = p.confidenceLabel === 'high' ? 'visoka' : p.confidenceLabel === 'medium' ? 'srednja' : 'niska';
+  return (
+    <div className={`prediction-breakdown conf-${p.confidenceLabel || 'low'}`}>
+      <div className="prediction-breakdown-head">
+        <span>Procjena: oko {formatMinutes(p.expectedWaitMin)}</span>
+        <span className="prediction-conf">Pouzdanost: {confLabel}</span>
+      </div>
+      <ul className="prediction-breakdown-list">
+        {rows.map((r, i) => <li key={i}><span aria-hidden="true">{r.icon}</span> {r.text}</li>)}
+      </ul>
+      {p.explanation ? <p className="prediction-breakdown-why">{p.explanation}</p> : null}
+    </div>
   );
 }
 

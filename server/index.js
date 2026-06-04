@@ -47,6 +47,14 @@ import {
   computeReliabilityReport,
   sourceMixClass,
 } from './confidence-calibration.js';
+import {
+  TRAFFIC_VISION_MODEL_VERSION,
+  computeGoogleTrafficV2,
+  aggregateGoogleSamples,
+  estimateCameraWaitV2,
+  serviceRateFor,
+  fuseTrafficVision,
+} from './traffic-vision.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1332,6 +1340,17 @@ const CAMERA_CV_ENABLED = process.env.CAMERA_CV_ENABLED
 // On Railway/CPU the first YOLO inference is slow even with a pre-warmed model, so give it room
 // before falling back to the heuristic. Once warm, inference is well under a second.
 const CAMERA_CV_TIMEOUT_MS = Math.max(800, Number(process.env.CAMERA_CV_TIMEOUT_MS || 6000));
+// ── Traffic + Vision prediction layer v2 (the differentiator) feature flags ─────────────────────
+// PREDICTION_V2 OFF by default → v2 runs in SHADOW (computed + attached as signal.predictionV2 for
+// admin/debug/UI breakdown) but the headline wait still uses the proven legacy fusion. Flip it on
+// once validated. Any v2 failure is caught and falls back to legacy — never crashes the estimate.
+const PREDICTION_V2_ENABLED = process.env.PREDICTION_V2_ENABLED === 'true';
+const GOOGLE_TRAFFIC_V2_ENABLED = process.env.GOOGLE_TRAFFIC_V2_ENABLED !== 'false';
+const YOLO_ROI_V2_ENABLED = process.env.YOLO_ROI_V2_ENABLED !== 'false';
+const TRAFFIC_VISION_DEBUG = process.env.TRAFFIC_VISION_DEBUG === 'true';
+const CAMERA_YOLO_MULTI_FRAME_ENABLED = process.env.CAMERA_YOLO_MULTI_FRAME_ENABLED === 'true';
+const CAMERA_YOLO_FRAME_COUNT = Math.max(1, Math.min(5, Number(process.env.CAMERA_YOLO_FRAME_COUNT || 3)));
+const CAMERA_YOLO_FRAME_GAP_MS = Math.max(500, Number(process.env.CAMERA_YOLO_FRAME_GAP_MS || 2500));
 // YOLO + ROI (V5 §6). OFF by default — must be explicitly enabled, and even then it only
 // REPLACES the vehicle-detection step; the wait still flows through the same evidence-cap,
 // direction/ROI gate and confidence calibration. If the model/runtime is unavailable the
@@ -2707,6 +2726,19 @@ function buildGoogleSnapshotFromRoute(crossing, direction, payload) {
   const ts = route.trafficSummary || null;
   const worst = ts?.worstTrafficLevel || 'UNKNOWN';
   const googleTrafficSeverity = worst === 'TRAFFIC_JAM' ? 'jam' : worst === 'SLOW' ? 'slow' : worst === 'NORMAL' ? 'clear' : 'unknown';
+  // ── GOOGLE TRAFFIC v2: border-SEGMENT delay, multi-sampled across the route variants ─────────
+  // Compute the segment-delay model per available route (primary + variants) and aggregate so a
+  // single mis-routed sample can't dominate. Stored on the snapshot for the v2 fusion + admin debug.
+  let googleTrafficV2 = null;
+  if (GOOGLE_TRAFFIC_V2_ENABLED) {
+    try {
+      const anchor = crossing.anchors?.[direction] || crossing.anchors?.toBih || {};
+      const samples = (payload.routes || []).map((r) => computeGoogleTrafficV2(r, anchor));
+      googleTrafficV2 = { ...aggregateGoogleSamples(samples), primary: samples[0] || null };
+    } catch (error) {
+      googleTrafficV2 = { fallbackReason: `v2-error:${error.message}`.slice(0, 80), confidence: 0 };
+    }
+  }
   return {
     crossingId: crossing.id,
     direction,
@@ -2738,6 +2770,7 @@ function buildGoogleSnapshotFromRoute(crossing, direction, payload) {
       slowMeters: ts?.slowMeters ?? 0,
       jamMeters: ts?.jamMeters ?? 0,
       affectedRatio: ts?.affectedRatio ?? 0,
+      googleTrafficV2,
     },
     fetchedAt: new Date().toISOString(),
   };
@@ -3274,8 +3307,59 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     };
     explanationPayload.googleTraffic = googleTraffic;
 
+    // ── TRAFFIC + VISION PREDICTION v2 (the differentiator) ──────────────────────────────────
+    // Compute our OWN estimate from Google border-segment delay + YOLO queue model + chat/verified
+    // ground truth, public only as fallback. SHADOW by default (attached for UI/admin); leads when
+    // PREDICTION_V2_ENABLED. Fully wrapped — any failure keeps the legacy estimate.
+    let predictionV2 = null;
+    try {
+      const gV2 = googleSignal?.metadata?.googleTrafficV2 || null;
+      const allDirCams = CAMERA_FEEDS[crossing.id] || [];
+      const dirCameras = allDirCams.filter((cam) => cameraRelevantForDirection(cam, direction, allDirCams));
+      const roiCalibrated = YOLO_ROI_V2_ENABLED && dirCameras.some((cam) => cameraHasQueueRoi(cam));
+      const mix = cameraSignal?.metadata?.vehicleMix15 || {};
+      const heavy = Number(mix.trucks || 0) + Number(mix.buses || 0);
+      const truckRatio = heavy / Math.max(1, heavy + Number(mix.cars || 0) + Number(mix.vans || 0));
+      const cameraV2 = cameraSignal && !cameraStale ? estimateCameraWaitV2({
+        vehiclesInQueueRoi: roiCalibrated ? cameraSignal.metadata?.queueVehicles : null,
+        queueVehicles: cameraSignal.metadata?.queueVehicles,
+        visibleVehicleCount: cameraSignal.metadata?.visibleVehicles ?? cameraSignal.metadata?.queueVehicles,
+        vehicleCountByClass: mix,
+        roiCalibrated,
+        averageDetectionConfidence: cameraSignal.confidence,
+        isNightOrLowLight: Boolean(cameraSignal.metadata?.isNightOrLowLight),
+      }, { crossingId: crossing.id, direction, truckRatio }) : null;
+      const measuredReport = reports.filter((r) => r.measured && r.gpsVerified).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+      const chatReports = reports.filter((r) => !r.measured);
+      const chatAvg = chatReports.length ? Math.round(chatReports.reduce((s, r) => s + Number(r.wait || 0), 0) / chatReports.length) : null;
+      const bestPublic = publicSignals.length ? choosePublicSourceSignal(publicSignals) : null;
+      predictionV2 = fuseTrafficVision({
+        google: gV2,
+        camera: cameraV2,
+        publicSig: bestPublic ? { waitMin: bestPublic.normalizedWaitMin, soft: isSoftUpperBoundSource(bestPublic), confidence: bestPublic.confidence } : null,
+        chat: chatReports.length ? { waitMin: chatAvg, count: chatReports.length, ageMin: ageMinutesOf(chatReports[0].createdAt), withLocation: chatReports.some((r) => r.gpsVerified) } : null,
+        verified: measuredReport ? { waitMin: measuredReport.wait, ageMin: ageMinutesOf(measuredReport.createdAt) } : null,
+        baselineWaitMin: clampWait(staticWait) ?? 10,
+      });
+    } catch (error) {
+      predictionV2 = { error: String(error.message).slice(0, 120), modelVersion: TRAFFIC_VISION_MODEL_VERSION };
+    }
+    if (PREDICTION_V2_ENABLED && predictionV2 && !predictionV2.error && predictionV2.lead && predictionV2.lead !== 'baseline') {
+      finalWait = predictionV2.expectedWaitMin;
+      outRangeMin = predictionV2.rangeMin;
+      outRangeMax = predictionV2.rangeMax;
+      outScore = predictionV2.confidenceScore;
+      outLevel = predictionV2.confidenceLabel === 'high' ? 'visoka' : predictionV2.confidenceLabel === 'medium' ? 'srednja' : 'niska';
+      outHint = predictionV2.confidenceLabel;
+      outPrecision = predictionV2.rangeMax - predictionV2.rangeMin > 4 ? 'range' : 'exact';
+      note = predictionV2.explanation;
+      conflictKind = predictionV2.lead.includes('conflict') ? 'prediction-conflict' : conflictKind;
+    }
+
     return {
       wait: finalWait,
+      predictionV2,
+      modelVersion: TRAFFIC_VISION_MODEL_VERSION,
       rangeMin: outRangeMin,
       rangeMax: outRangeMax,
       confidenceHint: outHint,
@@ -3436,6 +3520,8 @@ async function buildEffectiveWaitMaps(store) {
         label: signal.label,
         className: signal.className,
         note: signal.note,
+        predictionV2: signal.predictionV2 || null,
+        modelVersion: signal.modelVersion || null,
         explanation: signal.explanation,
         explanationPayload: signal.explanationPayload,
         confidence: signal.confidence,
@@ -3885,6 +3971,53 @@ app.post('/api/admin/sources/prune-suspicious', authRequired, adminRequired, wri
     console.error('[admin-prune-suspicious]', error);
     res.status(500).json({ ok: false, error: 'Čišćenje sumnjivih snapshotova nije uspjelo.', detail: safeError(error) });
   }
+});
+
+// Traffic + Vision v2 debug for one crossing/direction: the full source breakdown (Google
+// border-segment delay, YOLO queue model, public, chat, verified) + the fused prediction.
+app.get('/api/admin/traffic-vision/:crossingId/:direction', authRequired, adminRequired, async (req, res) => {
+  const crossing = BORDER_CROSSINGS[String(req.params.crossingId || '').trim()];
+  if (!crossing) return res.status(404).json({ ok: false, error: 'Prijelaz nije pronađen.' });
+  const direction = req.params.direction === 'toHr' ? 'toHr' : 'toBih';
+  try {
+    const store = await readAppStore();
+    const sig = await effectiveBorderSignal(crossing, direction, 'car', store);
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      crossingId: crossing.id,
+      direction,
+      modelVersion: sig.modelVersion || TRAFFIC_VISION_MODEL_VERSION,
+      predictionV2Enabled: PREDICTION_V2_ENABLED,
+      headlineWait: sig.wait,
+      predictionV2: sig.predictionV2 || null,
+      googleTraffic: sig.explanationPayload?.googleTraffic || null,
+      conflictKind: sig.conflictKind || null,
+      visualBand: sig.visualBand || null,
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Traffic-vision debug nije uspio.', detail: safeError(error) });
+  }
+});
+
+// Backtesting (§10): overall accuracy of the resolved predictions. Per-source (Google-only /
+// YOLO-only / fusion) error needs the v2 prediction snapshots to accumulate after deploy.
+app.get('/api/admin/traffic-vision-accuracy', authRequired, adminRequired, async (req, res) => {
+  const hours = Math.max(1, Math.min(24 * 60, Number(req.query.hours || 24 * 14)));
+  const records = recentResolvedAccuracy(hours);
+  const stats = computeAccuracyStats(records);
+  res.json({
+    ok: true,
+    windowHours: hours,
+    modelVersion: TRAFFIC_VISION_MODEL_VERSION,
+    predictionV2Enabled: PREDICTION_V2_ENABLED,
+    sampleSize: stats.sampleSize,
+    overall: stats.overall,
+    perCrossing: stats.perCrossing,
+    note: records.length
+      ? 'Točnost na temelju razriješenih predikcija (verified/chat-confirmed). Per-source (Google-only / YOLO-only / fusion) raspodjela puni se kako se v2 predikcije akumuliraju.'
+      : 'Još nema razriješenih predikcija — metrike se popunjavaju kad stignu verified/chat potvrde.',
+  });
 });
 
 app.get('/api/admin/audit', authRequired, adminRequired, async (req, res) => {
