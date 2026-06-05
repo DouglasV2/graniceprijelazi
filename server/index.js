@@ -3311,6 +3311,8 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       cameraWait: cameraDisplayWait,
       currentWait: finalWait,
       hardAuthorityPresent: hardAuthorityForCamera,
+      // Google measures the APPROACH road; a jam there reinforces a camera-visible booth queue.
+      googleHeavyNearBorder: googleLooksHeavy(googleSignal),
     });
     const cameraCongestionOverride = cameraCongestionResult.override;
     finalWait = cameraCongestionResult.wait;

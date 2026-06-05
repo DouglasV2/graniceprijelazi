@@ -88,7 +88,9 @@ export function shapeWaitDisplay(wait, sourceMeta = {}) {
   // Conflict copy is intentionally conservative: a low official number + camera/Google jam is a
   // floor, not a fake precise number.
   if (kind === 'clear-high') return { primaryLabel: `~${formatMinutes(n)}`, displayRangeLabel: null, confidence, broadRangeCollapsed: false, reason: 'clear-high-conflict' };
-  if (kind === 'congestion' || kind === 'google-jam') return { primaryLabel: `od ${formatMinutes(n)}`, displayRangeLabel: null, confidence, broadRangeCollapsed: false, reason: 'congestion-floor' };
+  // A visible queue (camera) / jam (Google / official-low conflict) is a FLOOR — "od X min", never a
+  // confident low/precise number. Camera-congestion is the "road visibly full → at least X" case.
+  if (kind === 'congestion' || kind === 'google-jam' || kind === 'camera-congestion') return { primaryLabel: `od ${formatMinutes(n)}`, displayRangeLabel: null, confidence, broadRangeCollapsed: false, reason: 'congestion-floor' };
 
   if (hasRange) {
     const rawMin = Math.max(0, Number(sourceMeta.rangeMin));

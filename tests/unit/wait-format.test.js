@@ -84,8 +84,9 @@ describe('formatWaitDisplay', () => {
     expect(formatWaitDisplay(14, { confidenceLevel: 'niska', precision: 'range', rangeMin: 6, rangeMax: 20 })).toBe('do 20 min');
   });
 
-  it('collapses a too-wide camera-led congestion range into an actionable headline', () => {
-    expect(formatWaitDisplay(30, { conflictKind: 'camera-congestion', precision: 'range', rangeMin: 4, rangeMax: 40 })).toBe('oko 30 min');
+  it('camera-led congestion shows an honest FLOOR ("od X"), never a token low number', () => {
+    // A camera-visible queue means "at least X min" — a floor, not an approximate that understates it.
+    expect(formatWaitDisplay(30, { conflictKind: 'camera-congestion', precision: 'range', rangeMin: 4, rangeMax: 40 })).toBe('od 30 min');
   });
 
   it('returns a human fallback (not "null"/"NaN") when wait is unknown', () => {
@@ -129,14 +130,20 @@ describe('formatWaitDisplay', () => {
     expect(formatWaitDisplay(11, { conflictKind: 'congestion' })).toBe('od 11 min');
   });
 
-  it('camera-led congestion avoids unhelpful broad ranges', () => {
-    // Camera raised the estimate: show the committed range, not "od X" and never "check elsewhere".
-    expect(formatWaitDisplay(30, { conflictKind: 'camera-congestion', precision: 'range', rangeMin: 30, rangeMax: 55 })).toBe('oko 30 min');
+  it('camera-led congestion commits to a number (floor), never "check elsewhere"', () => {
+    // Camera raised the estimate: a committed "od X min" floor (at least this long), not a punt.
+    expect(formatWaitDisplay(30, { conflictKind: 'camera-congestion', precision: 'range', rangeMin: 30, rangeMax: 55 })).toBe('od 30 min');
   });
 
   it('clear-high conflict shows an approximate ("~X"), never a confident high number', () => {
     // Šamac case: wait is high but the camera shows little/no queue → suspect, verify.
     expect(formatWaitDisplay(360, { conflictKind: 'clear-high' })).toBe('~6 h');
+  });
+
+  it('camera-congestion (extreme visible queue) shows an honest floor "od X min", never "do 15"', () => {
+    const shaped = shapeWaitDisplay(50, { conflictKind: 'camera-congestion', confidenceLevel: 'srednja', rangeMin: 45, rangeMax: 80 });
+    expect(shaped.primaryLabel).toBe('od 50 min');
+    expect(shaped.primaryLabel).not.toMatch(/^do /);
   });
 
   it('google-jam conflict shows a floor ("od X"), low wait but Google jam on the approach', () => {

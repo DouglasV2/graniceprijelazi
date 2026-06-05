@@ -131,21 +131,29 @@ describe('resolveCameraClearOverride — empty camera lowers a weak number, neve
 describe('resolveCameraCongestionOverride — camera queue raises a low number (commit, never "provjeri")', () => {
   const base = { visualBand: 'ekstremna', cameraWait: null, currentWait: 8, hardAuthorityPresent: false };
 
-  it('ekstremna band + low number + no hard authority → raises to the band floor (≥30)', () => {
+  it('an EXTREME visible queue commits to a realistic wait (≥50), not a token 15-30 min', () => {
     const r = resolveCameraCongestionOverride({ ...base });
     expect(r.override).toBe(true);
-    expect(r.wait).toBeGreaterThanOrEqual(30);
+    expect(r.wait).toBeGreaterThanOrEqual(50);
   });
 
-  it('velika band raises to a lower floor (≥18) than ekstremna', () => {
+  it('velika band raises to a lower floor (≥30) than ekstremna', () => {
     const r = resolveCameraCongestionOverride({ ...base, visualBand: 'velika' });
     expect(r.override).toBe(true);
-    expect(r.wait).toBeGreaterThanOrEqual(18);
+    expect(r.wait).toBeGreaterThanOrEqual(30);
+    expect(r.wait).toBeLessThan(50); // below the ekstremna floor
+  });
+
+  it('camera + Google approach-jam agree → estimate is reinforced higher', () => {
+    const withGoogle = resolveCameraCongestionOverride({ ...base, googleHeavyNearBorder: true });
+    const withoutGoogle = resolveCameraCongestionOverride({ ...base });
+    expect(withGoogle.wait).toBeGreaterThan(withoutGoogle.wait);
+    expect(withGoogle.wait).toBeGreaterThanOrEqual(60);
   });
 
   it('uses the camera own wait when it is higher than the floor', () => {
-    const r = resolveCameraCongestionOverride({ ...base, cameraWait: 45 });
-    expect(r.wait).toBe(45);
+    const r = resolveCameraCongestionOverride({ ...base, cameraWait: 75 });
+    expect(r.wait).toBe(75);
   });
 
   it('a HARD official / measured value BLOCKS the raise (official|measured > camera)', () => {
@@ -161,8 +169,8 @@ describe('resolveCameraCongestionOverride — camera queue raises a low number (
   });
 
   it('never LOWERS — if the current number already exceeds the band floor, no change', () => {
-    const r = resolveCameraCongestionOverride({ ...base, currentWait: 50 });
+    const r = resolveCameraCongestionOverride({ ...base, currentWait: 70 });
     expect(r.override).toBe(false);
-    expect(r.wait).toBe(50);
+    expect(r.wait).toBe(70);
   });
 });

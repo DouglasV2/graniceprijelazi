@@ -566,18 +566,23 @@ export function resolveCameraClearOverride({
 // CAMERA-CONGESTION HIGH OVERRIDE (symmetric to the clear-low one). The app must COMMIT to a
 // number rather than tell people to "check official sources": when a fresh, direction-relevant
 // camera VISUALLY shows a real queue (band velika/ekstremna) but the current number is low, raise
-// the estimate to a camera-led value — the camera's own wait if it has one, otherwise a
-// conservative band floor (velika ≥ 18, ekstremna ≥ 30 min). Honours the source priority: a HARD
-// official number or a measured session (hardAuthorityPresent) keeps its own value. Only RAISES.
+// the estimate to a camera-led value — the camera's own wait if it has one, otherwise a band floor.
+// A road VISIBLY full of cars at a border is a LONG wait (this is the differentiator vs services
+// that only echo a lagging official figure), so the floors are realistic: velika ≥ 30, ekstremna
+// ≥ 50 min. Google approach-congestion (googleHeavyNearBorder) reinforces it. Honours source
+// priority: a HARD official number or measured session (hardAuthorityPresent) keeps its value. Only
+// RAISES, never lowers.
 export function resolveCameraCongestionOverride({
   visualBand = null,
   cameraWait = null,
   currentWait = null,
   hardAuthorityPresent = false,
+  googleHeavyNearBorder = false,
 } = {}) {
   const strong = queueBandRank(visualBand) >= queueBandRank('velika'); // velika or ekstremna
   if (!strong || hardAuthorityPresent || !isNum(currentWait)) return { override: false, wait: currentWait, band: visualBand };
-  const floor = visualBand === 'ekstremna' ? 30 : 18;
+  let floor = visualBand === 'ekstremna' ? 50 : 30;
+  if (googleHeavyNearBorder) floor += visualBand === 'ekstremna' ? 15 : 10; // camera + Google agree → stronger
   const committed = Math.max(isNum(cameraWait) ? Number(cameraWait) : 0, floor);
   if (committed <= Number(currentWait)) return { override: false, wait: currentWait, band: visualBand };
   return { override: true, wait: committed, band: visualBand };
