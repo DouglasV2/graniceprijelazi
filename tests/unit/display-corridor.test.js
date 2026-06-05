@@ -121,17 +121,26 @@ describe('makeMapFriendlyControlZoneRoute end-to-end: manual fallback beats a ba
     expect(out.displayGeometrySource).toBe('calibrated-display-corridor');
   });
 
-  it('auto crossings KEEP a good long Google route (svilaj) instead of the corridor', () => {
-    const direction = 'toBih';
-    const anchor = BORDER_CROSSINGS.svilaj.anchors[direction];
-    // dense, road-following, clearly-crossing path between the (far) precise anchors → passes quality
+  it('the auto-mode quality gate still works (validateDisplayPathQuality): good crossing passes, one-sided fails', () => {
+    // The 'auto' code path is retained for future crossings; verify its gate directly. (All current
+    // problematic crossings are forced to mode 'manual' so the map never depends on Google there.)
+    const anchor = BORDER_CROSSINGS.svilaj.anchors.toBih;
     const a = anchor.approachStart; const b = anchor.borderPoint; const e = anchor.exitPoint;
     const dense = [];
     for (let i = 0; i <= 12; i += 1) dense.push({ lat: a.lat + (b.lat - a.lat) * (i / 12), lng: a.lng + (b.lng - a.lng) * (i / 12) });
     for (let i = 1; i <= 12; i += 1) dense.push({ lat: b.lat + (e.lat - b.lat) * (i / 12), lng: b.lng + (e.lng - b.lng) * (i / 12) });
-    const route = { path: dense, direction, distanceMeters: 4400, durationMinutes: 6, staticMinutes: 5, delayMinutes: 1, primary: true, speedReadingIntervals: [] };
+    expect(validateDisplayPathQuality(dense, anchor, { minSideMeters: 500, minTotalMeters: 1800, maxWiggleRatio: 1.9 }).ok).toBe(true);
+    const oneSided = [a, { lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2 }];
+    expect(validateDisplayPathQuality(oneSided, anchor, { minSideMeters: 500, minTotalMeters: 1800 }).ok).toBe(false);
+  });
+
+  it('svilaj (now manual) renders the calibrated corridor regardless of the Google route', () => {
+    const direction = 'toBih';
+    const anchor = BORDER_CROSSINGS.svilaj.anchors[direction];
+    const good = buildCalibratedCorridor(anchor, { minPerSideMeters: 1300, maxPerSideMeters: 1800 });
+    const route = { path: good, direction, distanceMeters: 4400, durationMinutes: 6, staticMinutes: 5, delayMinutes: 1, primary: true, speedReadingIntervals: [] };
     const out = makeMapFriendlyControlZoneRoute(route, anchor);
-    expect(out.displayGeometrySource).not.toBe('calibrated-display-corridor');
+    expect(out.displayGeometrySource).toBe('calibrated-display-corridor');
     expect(out.displayZone.crossesBorder).toBe(true);
   });
 });

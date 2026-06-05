@@ -27,7 +27,10 @@ function buildThroughPath(anchor) {
 }
 
 describe('Google traffic survives the REAL control-zone slice (root-cause regression)', () => {
-  const crossing = BORDER_CROSSINGS.bijaca;
+  // Use a crossing that renders the GOOGLE-sliced path (per-segment traffic). The 9 "problematic"
+  // crossings (Bijača, Izačić, …) are intentionally forced to a manual calibrated corridor with
+  // uniform colouring, so this traffic-preservation feature is exercised on a Google-slice crossing.
+  const crossing = BORDER_CROSSINGS.gradiska;
   const anchor = crossing.anchors.toBih;
   const path = buildThroughPath(anchor);
 
