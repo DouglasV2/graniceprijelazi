@@ -2957,8 +2957,32 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
 
     addMarkers();
 
+    // The map is created the instant the tab mounts; if the container is still 0-sized (tab switch /
+    // layout not settled) Google paints GREY tiles and only fixes itself on a later resize. Force a
+    // resize + recenter shortly after mount AND whenever the container actually changes size, so the
+    // map renders on the FIRST visit instead of only after leaving + returning to the tab.
+    const recenter = () => {
+      if (mapCrossings.length === 1) { map.setCenter({ lat: mapCrossings[0].lat, lng: mapCrossings[0].lng }); map.setZoom(11); }
+      else if (!bounds.isEmpty()) map.fitBounds(bounds, 84);
+    };
+    const ensureSized = () => {
+      if (!isMounted || !mapEl.current) return;
+      window.google.maps.event.trigger(map, 'resize');
+      recenter();
+    };
+    const tA = window.setTimeout(ensureSized, 80);
+    const tB = window.setTimeout(ensureSized, 400);
+    let resizeObs = null;
+    if (typeof ResizeObserver !== 'undefined' && mapEl.current) {
+      resizeObs = new ResizeObserver(() => ensureSized());
+      resizeObs.observe(mapEl.current);
+    }
+
     return () => {
       isMounted = false;
+      window.clearTimeout(tA);
+      window.clearTimeout(tB);
+      if (resizeObs) resizeObs.disconnect();
       markersRef.current.forEach((item) => {
         if (item.marker?.map !== undefined) item.marker.map = null;
         if (item.marker?.setMap) item.marker.setMap(null);

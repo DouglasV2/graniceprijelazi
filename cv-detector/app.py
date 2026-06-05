@@ -41,8 +41,12 @@ from ultralytics import YOLO
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("cv-detector")
 
-MODEL_NAME = os.environ.get("CV_MODEL", "yolov8n.pt")  # nano by default; use yolov8s/m for accuracy
-CONF_THRESHOLD = float(os.environ.get("CV_CONF", "0.30"))
+# yolov8s ("small") by default: the nano model misses the small/distant/compressed vehicles on the
+# HAK/BIHAMK border stills (the "AI nije pronašao vozila" on a full lane). Use yolov8m for more
+# accuracy if the host has the CPU/RAM, or set CV_MODEL=yolov8n.pt to go back to the fast nano.
+MODEL_NAME = os.environ.get("CV_MODEL", "yolov8s.pt")
+# Border-camera vehicles are small/distant → a slightly lower confidence catches them (was 0.30).
+CONF_THRESHOLD = float(os.environ.get("CV_CONF", "0.25"))
 FETCH_TIMEOUT = float(os.environ.get("CV_FETCH_TIMEOUT", "6"))
 AUTH_TOKEN = os.environ.get("CV_AUTH_TOKEN", "")  # if set, require matching Bearer
 USER_AGENT = os.environ.get(

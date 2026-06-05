@@ -4229,17 +4229,51 @@ app.get('/api/internal/traffic-vision/cv-health', optionalAuth, trafficVisionInt
   if (!yoloEndpoint) return res.json(result);
   const started = Date.now();
   try {
-    const firstEntry = Object.entries(CAMERA_FEEDS).flatMap(([crossingId, cams]) => (cams || []).map((camera) => ({ crossingId, camera })))[0];
-    if (!firstEntry) return res.json({ ...result, status: 'no-camera-configured', durationMs: Date.now() - started });
-    const image = await fetchCameraImage(firstEntry.camera, { forceSnapshot: true }).catch(() => null);
-    if (!image || !isUsableCameraImage(image.buffer, image.contentType)) return res.json({ ...result, status: 'camera-image-unavailable', durationMs: Date.now() - started });
-    const yolo = await runYoloDetector(firstEntry.camera, firstEntry.crossingId, 'toBih', image.buffer, image.contentType);
-    const validShape = yolo && yolo.fallbackReason === null && Array.isArray(yolo.detections) && (yolo.width !== undefined || yolo.height !== undefined || yolo.count !== undefined);
+    // ?cameraId=mal-hak-hr-exit lets you debug ONE camera (e.g. why Maljevac sees no vehicles).
+    const cameraId = String(req.query.cameraId || '').trim();
+    const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
+    let entry = cameraId ? findCameraEntry(cameraId) : null;
+    if (cameraId && !entry) return res.json({ ...result, status: 'camera-not-found', cameraId, durationMs: Date.now() - started });
+    if (!entry) {
+      const first = Object.entries(CAMERA_FEEDS).flatMap(([crossingId, cams]) => (cams || []).map((camera) => ({ crossingId, camera })))[0];
+      entry = first || null;
+    }
+    if (!entry) return res.json({ ...result, status: 'no-camera-configured', durationMs: Date.now() - started });
+    const { camera, crossingId } = entry;
+    const image = await fetchCameraImage(camera, { forceSnapshot: true }).catch(() => null);
+    if (!image || !isUsableCameraImage(image.buffer, image.contentType)) {
+      return res.json({ ...result, status: 'camera-image-unavailable', cameraId: camera.id, imageUrl: image?.url || null, imageBytes: image?.buffer?.length || 0, durationMs: Date.now() - started });
+    }
+    const yolo = await runYoloDetector(camera, crossingId, direction, image.buffer, image.contentType);
+    const validShape = yolo && yolo.fallbackReason === null && Array.isArray(yolo.detections);
+    // ROI view: how many of YOLO's detections land in the queue zone (and is that ROI trusted).
+    const roiConfig = YOLO_ROI_CONFIG_ENABLED ? (getRoiConfig(camera.id) || rectCalibrationToRoiConfig(camera, crossingId, direction)) : null;
+    let roiFeatures = null;
+    if (Array.isArray(yolo?.detections)) {
+      roiFeatures = computeRoiCameraFeatures(yolo.detections, roiConfig, { width: yolo.width || null, height: yolo.height || null, coordSpace: 'percent' });
+    }
     return res.json({
       ...result,
       healthy: Boolean(validShape),
       status: validShape ? 'ok' : (yolo?.fallbackReason || 'invalid-response'),
+      cameraId: camera.id,
+      crossingId,
+      direction,
+      imageUrl: image.url || null,
+      imageBytes: image.buffer.length,
+      // The headline numbers for debugging "no vehicles": what the MODEL returned vs the ROI.
+      model: yolo?.model || null,
+      visibleDetections: Array.isArray(yolo?.detections) ? yolo.detections.length : 0,
+      detectionsByClass: roiFeatures?.vehicleCountByClass || null,
+      roiSource: getRoiConfigSource(camera.id) || (roiConfig?.derivedFromRect ? 'rect-derived' : null),
+      roiTrusted: Boolean(roiFeatures?.roiTrusted),
+      vehiclesInQueueRoi: roiFeatures?.vehiclesInQueueRoi ?? null,
+      vehiclesIgnored: roiFeatures?.vehiclesIgnored ?? null,
+      vehiclesOutsideRoi: roiFeatures?.vehiclesOutsideRoi ?? null,
       durationMs: Date.now() - started,
+      hint: (validShape && (yolo.detections.length === 0))
+        ? `Model "${yolo?.model || '?'}" nije našao vozila na ovom kadru. HAK kadrovi su udaljeni/komprimirani — probaj jači model (CV_MODEL=yolov8s.pt ili yolov8m.pt) i/ili niži CV_CONF.`
+        : undefined,
       details: yolo ? { count: yolo.count, detectionsCount: Array.isArray(yolo.detections) ? yolo.detections.length : 0, width: yolo.width, height: yolo.height, model: yolo.model, fallbackReason: yolo.fallbackReason } : null,
     });
   } catch (error) {
