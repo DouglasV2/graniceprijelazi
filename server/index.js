@@ -3310,7 +3310,11 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       visualBand,
       cameraWait: cameraDisplayWait,
       currentWait: finalWait,
-      hardAuthorityPresent: hardAuthorityForCamera,
+      // RAISING on a visibly extreme queue is blocked ONLY by truly authoritative LIVE ground truth —
+      // a measured GPS session (admin overrides already short-circuit earlier). A coarse/lagging public
+      // text estimate (BIHAMK/AMS) must NOT keep a low number when the live camera shows a packed border;
+      // the fresh camera is the differentiator vs services that only echo the official figure.
+      hardAuthorityPresent: hasMeasuredSession,
       // Google measures the APPROACH road; a jam there reinforces a camera-visible booth queue.
       googleHeavyNearBorder: googleLooksHeavy(googleSignal),
     });

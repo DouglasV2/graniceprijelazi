@@ -2833,20 +2833,30 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   useEffect(() => {
     if (!apiKey) return;
     let cancelled = false;
+    let pollTimer = null;
     setMapError('');
     loadGoogleMaps(apiKey)
       .then(() => {
         if (cancelled) return;
-        // Defensive: only flip mapsReady when every constructor the render uses is truly attached,
-        // so the map effect can never hit "LatLngBounds is not a constructor".
-        if (mapsConstructorsReady()) setMapsReady(true);
-        else setMapError('Karta se nije uspjela učitati (Google Maps nije potpuno spreman).');
+        // The Maps constructors can attach a tick AFTER the loader promise resolves. Poll briefly
+        // instead of giving up immediately — otherwise the map stays blank on the FIRST visit and only
+        // appears after you leave the tab and come back (the script is cached by then). ~3s budget.
+        let tries = 0;
+        const check = () => {
+          if (cancelled) return;
+          if (mapsConstructorsReady()) { setMapsReady(true); return; }
+          tries += 1;
+          if (tries >= 20) { setMapError('Karta se nije uspjela učitati (Google Maps nije potpuno spreman).'); return; }
+          pollTimer = window.setTimeout(check, 150);
+        };
+        check();
       })
       .catch(() => {
         if (!cancelled) setMapError('Karta se nije uspjela učitati.');
       });
     return () => {
       cancelled = true;
+      if (pollTimer) window.clearTimeout(pollTimer);
     };
   }, [apiKey]);
 
@@ -3015,7 +3025,8 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
     }
 
     loadCrossingRoutes();
-    const timer = window.setInterval(loadCrossingRoutes, 120000);
+    // Refresh the map route + traffic more often (60s) so the zone tracks live congestion.
+    const timer = window.setInterval(loadCrossingRoutes, 60000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
