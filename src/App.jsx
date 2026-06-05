@@ -1617,7 +1617,13 @@ function sourceLooksProtected(meta = {}) {
 function sourceHasAuthoritativeQueue(meta = {}) {
   return meta.hasHardPublicSignal === true
     || meta.hasStrongCameraQueue === true
-    || meta.googleClearWhileQueue === true;
+    || meta.googleClearWhileQueue === true
+    // A camera VISIBLY shows a queue (override raised the number, or the visual-congestion conflict
+    // flagged it). Google blue on the APPROACH must never trim a booth queue the camera can see —
+    // this is what kept the map at "od 12 min" while the overview already showed the raised estimate.
+    || meta.conflictKind === 'camera-congestion'
+    || meta.sourceType === 'camera-congestion-override'
+    || meta.visualCongestionConflict === true;
 }
 
 function sourceLooksSoftUpperBound(meta = {}) {

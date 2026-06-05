@@ -242,6 +242,15 @@ describe('v2 wiring (server + UI) is in place and safe', () => {
     expect(app).toMatch(/većina stoji/);
     expect(app).toMatch(/kolona se pomiče/);
   });
+  it('the frontend route-sanity NEVER trims a camera-visible queue (map == overview wait)', () => {
+    // Regression: the map showed "od 12 min" while the overview showed the raised camera estimate,
+    // because the Google-approach route-sanity cap pulled it down. sourceHasAuthoritativeQueue must
+    // treat a camera-congestion override / visual-congestion conflict as authoritative-about-the-booth.
+    expect(app).toMatch(/function sourceHasAuthoritativeQueue/);
+    expect(app).toMatch(/conflictKind === 'camera-congestion'/);
+    expect(app).toMatch(/sourceType === 'camera-congestion-override'/);
+    expect(app).toMatch(/visualCongestionConflict === true/);
+  });
 });
 
 describe('ROI v2 editor + feature wiring is present and flag/token gated', () => {
