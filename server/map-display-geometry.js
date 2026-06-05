@@ -90,32 +90,80 @@ export function corridorPolygon(path = [], halfWidthMeters = 55) {
   return ring;
 }
 
+// Project a point onto a polyline (PERPENDICULAR distance to the nearest segment) and return the
+// cumulative road length up to that projection. Robust to RDP-simplification that drops a colinear
+// border vertex — we measure to the segment, not to a vertex.
+function projectOntoPath(pts, point) {
+  const originLat = Number(pts[0].lat);
+  const P = toXY(point, originLat);
+  let best = { dist: Infinity, beforeLen: 0 };
+  let acc = 0;
+  for (let i = 0; i < pts.length - 1; i += 1) {
+    const A = toXY(pts[i], originLat);
+    const B = toXY(pts[i + 1], originLat);
+    const dx = B.x - A.x; const dy = B.y - A.y;
+    const segLen = Math.hypot(dx, dy);
+    let t = segLen === 0 ? 0 : ((P.x - A.x) * dx + (P.y - A.y) * dy) / (segLen * segLen);
+    t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(P.x - (A.x + t * dx), P.y - (A.y + t * dy));
+    if (d < best.dist) best = { dist: d, beforeLen: acc + t * segLen };
+    acc += segLen;
+  }
+  return { dist: best.dist, beforeLen: best.beforeLen, totalLen: acc };
+}
+
+// A display corridor must genuinely STRADDLE the border: the polyline must pass close to the border
+// point, with meaningful road length on BOTH sides. This is what stops a route that "ends at / just
+// before the border" from being shown as a crossing (the Maljevac BiH→HR bug).
+export function pathCrossesBorder(path = [], borderPoint = null, { minSideMeters = 250, borderNearToleranceM = 500 } = {}) {
+  const pts = (path || []).filter(isPoint);
+  if (pts.length < 2 || !isPoint(borderPoint)) return { crosses: false, reason: 'no-geometry', beforeMeters: 0, afterMeters: 0, borderDist: null };
+  const proj = projectOntoPath(pts, borderPoint);
+  const beforeMeters = Math.round(proj.beforeLen);
+  const afterMeters = Math.round(proj.totalLen - proj.beforeLen);
+  if (proj.dist > borderNearToleranceM) return { crosses: false, reason: 'border-off-path', beforeMeters, afterMeters, borderDist: Math.round(proj.dist) };
+  if (beforeMeters < minSideMeters || afterMeters < minSideMeters) return { crosses: false, reason: 'one-sided', beforeMeters, afterMeters, borderDist: Math.round(proj.dist) };
+  return { crosses: true, reason: null, beforeMeters, afterMeters, borderDist: Math.round(proj.dist) };
+}
+
 // Main entry: a clean, professional measurement-zone display model for one crossing/direction.
-export function buildMeasurementZone({ path = [], anchor = {}, direction = 'toBih', halfWidthMeters = 55, simplifyToleranceMeters = 18 } = {}) {
+// Uses EXTENDED display anchors when provided (so the zone is longer along the real main road) while
+// the precise anchors stay reserved for route-guard validation + live-location. If the supplied path
+// does NOT cross the border, we fall back to the clean calibrated corridor (which does by design).
+export function buildMeasurementZone({ path = [], anchor = {}, direction = 'toBih', halfWidthMeters = 55, simplifyToleranceMeters = 18, minSideMeters = 250 } = {}) {
   const clean = (Array.isArray(path) ? path : []).filter(isPoint);
   const border = isPoint(anchor.borderPoint) ? anchor.borderPoint : (clean.length ? clean[Math.floor(clean.length / 2)] : null);
+  // Display anchors extend further along the main road than the precise control anchors.
+  const displayApproach = isPoint(anchor.displayApproachStart) ? anchor.displayApproachStart : (isPoint(anchor.approachStart) ? anchor.approachStart : null);
+  const displayExit = isPoint(anchor.displayExitPoint) ? anchor.displayExitPoint : (isPoint(anchor.exitPoint) ? anchor.exitPoint : null);
+  const cornerCorridor = [displayApproach, border, displayExit].filter(isPoint);
 
-  // Corridor source: the (already border-sliced) path if usable, else the calibrated anchor triplet.
-  let source = clean.length >= 2
-    ? clean
-    : [anchor.approachStart, anchor.borderPoint, anchor.exitPoint].filter(isPoint);
+  // Prefer the supplied (Google) path ONLY when it actually crosses the border; otherwise use the
+  // clean calibrated corridor so the map never shows a one-sided / pre-border stub.
+  const pathOk = clean.length >= 2 && pathCrossesBorder(clean, border, { minSideMeters }).crosses;
+  let source = pathOk ? clean : cornerCorridor;
+  let geometrySource = pathOk ? 'path' : 'clean-anchor-corridor';
 
   if (source.length < 2) {
     return {
       ok: false,
       reason: 'insufficient-geometry',
       direction,
-      approachAnchor: isPoint(anchor.approachStart) ? anchor.approachStart : null,
+      crossesBorder: false,
+      approachAnchor: displayApproach,
       borderAnchor: border,
-      exitAnchor: isPoint(anchor.exitPoint) ? anchor.exitPoint : null,
+      exitAnchor: displayExit,
       displayCorridorPolyline: source,
       measurementZonePolygon: [],
       zoneDistanceKm: 0,
+      beforeBorderKm: 0,
+      afterBorderKm: 0,
     };
   }
 
   const simplified = simplifyPath(source, simplifyToleranceMeters);
   const displayCorridorPolyline = simplified.length >= 2 ? simplified : source;
+  const crossing = pathCrossesBorder(displayCorridorPolyline, border, { minSideMeters: Math.min(minSideMeters, 200) });
   const zoneDistanceKm = Math.round(pathLengthMeters(displayCorridorPolyline) / 100) / 10;
   const measurementZonePolygon = corridorPolygon(displayCorridorPolyline, halfWidthMeters);
 
@@ -123,12 +171,16 @@ export function buildMeasurementZone({ path = [], anchor = {}, direction = 'toBi
     ok: true,
     reason: null,
     direction,
-    approachAnchor: isPoint(anchor.approachStart) ? anchor.approachStart : displayCorridorPolyline[0],
+    crossesBorder: crossing.crosses,
+    geometrySource,
+    approachAnchor: displayApproach || displayCorridorPolyline[0],
     borderAnchor: border,
-    exitAnchor: isPoint(anchor.exitPoint) ? anchor.exitPoint : displayCorridorPolyline[displayCorridorPolyline.length - 1],
+    exitAnchor: displayExit || displayCorridorPolyline[displayCorridorPolyline.length - 1],
     displayCorridorPolyline,
     measurementZonePolygon,
     zoneDistanceKm,
+    beforeBorderKm: Math.round(crossing.beforeMeters / 100) / 10,
+    afterBorderKm: Math.round(crossing.afterMeters / 100) / 10,
     simplifiedFrom: source.length,
     simplifiedTo: displayCorridorPolyline.length,
   };

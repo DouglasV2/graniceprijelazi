@@ -71,7 +71,7 @@ import {
   STATIC_ROI_CONFIGS,
 } from './camera-roi-config.js';
 import { ROI_EDITOR_HTML } from './roi-editor-page.js';
-import { buildMeasurementZone } from './map-display-geometry.js';
+import { buildMeasurementZone, pathCrossesBorder } from './map-display-geometry.js';
 import { classifyLocationPing, aggregateVerifiedLocation } from './location-wait.js';
 import { buildLocationWaitAnchors, hasLocationWaitAnchors } from './location-wait-anchors.js';
 
@@ -717,6 +717,12 @@ const BORDER_CROSSINGS = {
       // immediately before/through/after GP Maljevac. The earlier anchors were too far
       // toward Velika Kladuša and Google drew a city loop; these keep the map focused
       // on the actual border approach while still forcing the route through the crossing.
+      // Precise control anchors (used for route-guard pass-distance validation AND live-location
+      // A→B) stay SHORT and on the D216/M4.2. Separate `display*` anchors extend ~1.25 km further
+      // along the SAME road bearing — used only to request a longer Google route + draw a longer
+      // "Provjerena zona", never for validation or live measurement. Google snaps the request to the
+      // real road, so the drawn line stays on D216/M4.2; the wiggle guard + clean-corridor fallback
+      // protect against any city loop around Velika Kladuša.
       toBih: {
         label: 'HR → BiH',
         fromLabel: 'Maljevac · HR prilaz kontroli',
@@ -724,7 +730,10 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.19985, lng: 15.79042 },
         borderPoint: { lat: 45.19583, lng: 15.79639 },
         exitPoint: { lat: 45.19295, lng: 15.80155 },
-        routeGuard: { maxCrossingDistanceKm: 4, hardMaxCrossingDistanceKm: 12, passDistanceMeters: 600, validateApproachExit: true, displayBeforeMeters: 650, displayAfterMeters: 1000 },
+        // HR side extended NW toward Maljevac; BiH side extended SE toward Velika Kladuša.
+        displayApproachStart: { lat: 45.20359, lng: 15.78485 },
+        displayExitPoint: { lat: 45.18885, lng: 15.80889 },
+        routeGuard: { maxCrossingDistanceKm: 6, hardMaxCrossingDistanceKm: 14, passDistanceMeters: 600, validateApproachExit: true, displayBeforeMeters: 1400, displayAfterMeters: 1400, displayMaxMeters: 3400 },
       },
       toHr: {
         label: 'BiH → HR',
@@ -733,7 +742,10 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.19295, lng: 15.80155 },
         borderPoint: { lat: 45.19583, lng: 15.79639 },
         exitPoint: { lat: 45.19985, lng: 15.79042 },
-        routeGuard: { maxCrossingDistanceKm: 4, hardMaxCrossingDistanceKm: 12, passDistanceMeters: 600, validateApproachExit: true, displayBeforeMeters: 650, displayAfterMeters: 1000 },
+        // BiH side (approach) extended SE toward Velika Kladuša; HR side (exit) extended NW toward Maljevac.
+        displayApproachStart: { lat: 45.18885, lng: 15.80889 },
+        displayExitPoint: { lat: 45.20359, lng: 15.78485 },
+        routeGuard: { maxCrossingDistanceKm: 6, hardMaxCrossingDistanceKm: 14, passDistanceMeters: 600, validateApproachExit: true, displayBeforeMeters: 1400, displayAfterMeters: 1400, displayMaxMeters: 3400 },
       },
     },
   },
@@ -5234,8 +5246,8 @@ app.get('/api/debug/route-traffic/:crossingId', authRequired, adminRequired, asy
     return res.json({ ok: false, crossingId, direction, usedFallbackRoute: true, routeSource: 'route-pending', note: 'Prijelaz nema kalibrirani routeGuard pa se cestovna linija (i traffic) ne crta.' });
   }
   const request = routeRequest({
-    origin: latLngWaypoint(anchor.approachStart),
-    destination: latLngWaypoint(anchor.exitPoint),
+    origin: latLngWaypoint(routeOriginAnchor(anchor)),
+    destination: latLngWaypoint(routeDestinationAnchor(anchor)),
     intermediates: anchor.borderPoint ? [latLngWaypoint(anchor.borderPoint, { via: true })] : [],
     alternatives: false,
   });
@@ -7925,30 +7937,46 @@ function sortCrossingRoutesByAnchorFit(routes = [], anchor = {}) {
     .map((entry) => entry.route);
 }
 
+// Origin/destination for the GOOGLE route request. Prefer the EXTENDED display anchors so the route
+// (and the drawn zone) covers more real road on both sides; precise anchors are the fallback. Route
+// guard still validates the polyline against the precise approachStart/borderPoint/exitPoint.
+function routeOriginAnchor(anchor = {}) {
+  return anchor.displayApproachStart || anchor.approachStart;
+}
+function routeDestinationAnchor(anchor = {}) {
+  return anchor.displayExitPoint || anchor.exitPoint;
+}
+
+// Clean fallback corridor — uses the EXTENDED display anchors when present so even the no-Google
+// fallback shows a useful zone that crosses the border (precise anchors otherwise).
 function cleanAnchorCorridorPath(anchor = {}) {
-  return [anchor.approachStart, anchor.borderPoint, anchor.exitPoint].filter((p) => Number.isFinite(Number(p?.lat)) && Number.isFinite(Number(p?.lng)));
+  const approach = anchor.displayApproachStart || anchor.approachStart;
+  const exit = anchor.displayExitPoint || anchor.exitPoint;
+  return [approach, anchor.borderPoint, exit].filter((p) => Number.isFinite(Number(p?.lat)) && Number.isFinite(Number(p?.lng)));
 }
 
 function routeWiggleRatio(path = [], anchor = {}) {
   const distance = pathDistanceMeters(path);
-  const direct = anchor?.approachStart && anchor?.exitPoint ? distanceMeters(anchor.approachStart, anchor.exitPoint) : 0;
+  // Compare against the DISPLAY-anchor span (the route is requested between those), so extending the
+  // zone does not, by itself, inflate the wiggle ratio and trip the city-loop guard.
+  const a = anchor?.displayApproachStart || anchor?.approachStart;
+  const b = anchor?.displayExitPoint || anchor?.exitPoint;
+  const direct = a && b ? distanceMeters(a, b) : 0;
   if (!distance || !direct) return 1;
   return distance / Math.max(direct, 1);
 }
 
 function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
   const guard = anchor.routeGuard || {};
-  let beforeMeters = Number(guard.displayBeforeMeters || process.env.ROUTE_DISPLAY_BEFORE_METERS || 850);
-  let afterMeters = Number(guard.displayAfterMeters || process.env.ROUTE_DISPLAY_AFTER_METERS || 1050);
-  // Production UX: do NOT extend the displayed zone deep into a town/city. The map card is a
-  // border-control corridor, not a full route preview. The previous default +1800m HR-side boost
-  // produced ugly labels/anchors high above the crossing (e.g. Brod), so the default is now 0 and
-  // the whole displayed zone is capped below. Operators can opt in per-env/per-anchor if needed.
+  // Longer-but-still-focused control zone: ~1.3 km each side by default so the user sees real road
+  // before AND after the booth (per-anchor guard can override). Capped well below a full city route.
+  let beforeMeters = Number(guard.displayBeforeMeters || process.env.ROUTE_DISPLAY_BEFORE_METERS || 1300);
+  let afterMeters = Number(guard.displayAfterMeters || process.env.ROUTE_DISPLAY_AFTER_METERS || 1300);
   const hrExtra = Number(process.env.ROUTE_HR_SIDE_EXTRA_METERS || guard.hrSideExtraMeters || 0);
   if (route.direction === 'toHr') afterMeters += hrExtra;
   else beforeMeters += hrExtra;
 
-  const maxDisplayMeters = Number(guard.displayMaxMeters || process.env.ROUTE_DISPLAY_MAX_METERS || 2200);
+  const maxDisplayMeters = Number(guard.displayMaxMeters || process.env.ROUTE_DISPLAY_MAX_METERS || 3400);
   let slice = slicePathAroundPointIndexed(route.path || [], anchor.borderPoint, beforeMeters, afterMeters);
   let displayPath = slice.path;
   let displayDistanceMeters = pathDistanceMeters(displayPath);
@@ -7969,13 +7997,21 @@ function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
   let displayGeometryWarnings = [];
   const wiggle = routeWiggleRatio(displayPath, anchor);
   const tooWiggly = wiggle > Number(guard.displayMaxWiggleRatio || process.env.ROUTE_DISPLAY_MAX_WIGGLE_RATIO || 2.4);
-  if (!displayPath.length || displayDistanceMeters <= 0 || tooWiggly) {
+  // MUST-CROSS validation: the sliced display path has to straddle the border with real length on
+  // both sides. A one-sided / pre-border stub (the Maljevac BiH→HR bug) is rejected in favour of the
+  // clean calibrated corridor, which crosses by construction.
+  const crossCheck = pathCrossesBorder(displayPath, anchor.borderPoint, { minSideMeters: 300, borderNearToleranceM: 600 });
+  if (!displayPath.length || displayDistanceMeters <= 0 || tooWiggly || !crossCheck.crosses) {
     const corridor = cleanAnchorCorridorPath(anchor);
     if (corridor.length >= 2) {
       displayPath = corridor;
       displayDistanceMeters = pathDistanceMeters(displayPath);
       displayGeometrySource = 'clean-anchor-corridor';
-      displayGeometryWarnings = tooWiggly ? [`Google putanja je previše vijugava za javni prikaz (ratio ${Math.round(wiggle * 10) / 10}); prikazana je čista zona.`] : ['Google putanja nije dala urednu zonu; prikazana je čista kalibrirana zona.'];
+      displayGeometryWarnings = tooWiggly
+        ? [`Google putanja je previše vijugava za javni prikaz (ratio ${Math.round(wiggle * 10) / 10}); prikazana je čista zona.`]
+        : !crossCheck.crosses
+          ? [`Google putanja ne prelazi jasno granicu (${crossCheck.reason}); prikazana je čista kalibrirana zona koja prelazi granicu.`]
+          : ['Google putanja nije dala urednu zonu; prikazana je čista kalibrirana zona.'];
       slice = { startIndex: 0, endIndex: Math.max(0, (route.path || []).length - 1) };
     }
   }
@@ -8552,13 +8588,17 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
   const useVia = anchor.routeGuard?.useViaIntermediate !== false;
   const retryWithoutVia = anchor.routeGuard?.retryWithoutVia !== false;
 
+  // Request between the EXTENDED display anchors so the route covers more real road on both sides.
+  // The route guard still validates the polyline against the precise approachStart/border/exitPoint.
+  const reqOrigin = routeOriginAnchor(anchor);
+  const reqDestination = routeDestinationAnchor(anchor);
   const attempts = [];
   if (useVia) {
     attempts.push({
       label: 'via-intermediate',
       body: routeRequest({
-        origin: latLngWaypoint(anchor.approachStart),
-        destination: latLngWaypoint(anchor.exitPoint),
+        origin: latLngWaypoint(reqOrigin),
+        destination: latLngWaypoint(reqDestination),
         intermediates: [latLngWaypoint(anchor.borderPoint, { via: true })],
         alternatives: true,
       }),
@@ -8568,8 +8608,8 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
     attempts.push({
       label: 'stopover-intermediate',
       body: routeRequest({
-        origin: latLngWaypoint(anchor.approachStart),
-        destination: latLngWaypoint(anchor.exitPoint),
+        origin: latLngWaypoint(reqOrigin),
+        destination: latLngWaypoint(reqDestination),
         intermediates: [latLngWaypoint(anchor.borderPoint)],
         alternatives: true,
       }),
@@ -8582,8 +8622,8 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
   attempts.push({
     label: 'no-intermediate',
     body: routeRequest({
-      origin: latLngWaypoint(anchor.approachStart),
-      destination: latLngWaypoint(anchor.exitPoint),
+      origin: latLngWaypoint(reqOrigin),
+      destination: latLngWaypoint(reqDestination),
       intermediates: [],
       alternatives: true,
     }),

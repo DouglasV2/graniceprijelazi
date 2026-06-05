@@ -6,6 +6,7 @@ import {
   simplifyPath,
   corridorPolygon,
   buildMeasurementZone,
+  pathCrossesBorder,
 } from '../../server/map-display-geometry.js';
 
 // A short ~2 km path roughly across a border, with a couple of deliberate wiggles.
@@ -74,5 +75,48 @@ describe('buildMeasurementZone', () => {
   it('does not invent anchors from garbage points', () => {
     const zone = buildMeasurementZone({ path: [{ lat: 'x', lng: null }, {}], anchor: {}, direction: 'toBih' });
     expect(zone.ok).toBe(false);
+  });
+});
+
+describe('pathCrossesBorder', () => {
+  const border = { lat: 45.10, lng: 16.00 };
+  it('a path with real length on both sides crosses', () => {
+    const r = pathCrossesBorder(wigglyPath(), border, { minSideMeters: 250 });
+    expect(r.crosses).toBe(true);
+    expect(r.beforeMeters).toBeGreaterThan(250);
+    expect(r.afterMeters).toBeGreaterThan(250);
+  });
+  it('a one-sided path (entirely before the border) does NOT cross', () => {
+    const oneSide = [];
+    for (let i = 0; i <= 10; i += 1) oneSide.push({ lat: 45.080 + i * 0.001, lng: 16.0 }); // ends at 45.090, below border 45.10
+    expect(pathCrossesBorder(oneSide, border).crosses).toBe(false);
+  });
+  it('a path that never comes near the border does NOT cross', () => {
+    const elsewhere = [{ lat: 44.0, lng: 17.0 }, { lat: 44.02, lng: 17.0 }];
+    expect(pathCrossesBorder(elsewhere, border).crosses).toBe(false);
+  });
+});
+
+describe('buildMeasurementZone must-cross + display anchors', () => {
+  const border = { lat: 45.10, lng: 16.00 };
+  const anchorWithDisplay = {
+    approachStart: { lat: 45.095, lng: 16.0 },
+    borderPoint: border,
+    exitPoint: { lat: 45.105, lng: 16.0 },
+    displayApproachStart: { lat: 45.085, lng: 16.0 }, // ~1.7km before border
+    displayExitPoint: { lat: 45.115, lng: 16.0 },     // ~1.7km after border
+  };
+  it('uses the EXTENDED display anchors for the corridor ends', () => {
+    const zone = buildMeasurementZone({ path: [], anchor: anchorWithDisplay, direction: 'toBih' });
+    expect(zone.approachAnchor).toEqual(anchorWithDisplay.displayApproachStart);
+    expect(zone.exitAnchor).toEqual(anchorWithDisplay.displayExitPoint);
+    expect(zone.crossesBorder).toBe(true);
+    expect(zone.zoneDistanceKm).toBeGreaterThan(3); // ~3.4km across the extended corridor
+  });
+  it('a one-sided Google path falls back to the clean corridor that DOES cross', () => {
+    const oneSided = [{ lat: 45.085, lng: 16.0 }, { lat: 45.090, lng: 16.0 }, { lat: 45.095, lng: 16.0 }]; // all before border
+    const zone = buildMeasurementZone({ path: oneSided, anchor: anchorWithDisplay, direction: 'toHr' });
+    expect(zone.geometrySource).toBe('clean-anchor-corridor');
+    expect(zone.crossesBorder).toBe(true);
   });
 });
