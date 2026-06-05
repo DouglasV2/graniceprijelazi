@@ -23,7 +23,7 @@ import {
   User,
 } from 'lucide-react';
 import { formatMinutes, hasKnownWait, isUsableMinuteValue, normalizeMinutes, formatWaitDisplay, shapeWaitDisplay } from './utils/wait-format.js';
-import { cameraEstimateDecision, buildCameraQueueLabel, buildCameraTrustText } from './utils/camera-display.js';
+import { cameraEstimateDecision, buildCameraQueueLabel, buildCameraTrustText, cameraStatusCopy } from './utils/camera-display.js';
 import { loadGoogleMaps, mapsConstructorsReady } from './utils/google-maps-loader.js';
 import { shouldSendPing } from './utils/location-wait-client.js';
 
@@ -3810,9 +3810,9 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
           {cameraEstimateUsable && analytics.cameraSnapshots?.length ? <p className="camera-source-note">Procjena iz kamera pomaže orijentaciji, ali službene obavijesti i dalje imaju prednost.</p> : null}
           {analytics.cvEnabled ? (
             <p className="camera-source-note">
-              Detekcija vozila: {analytics.cvUsed
-                ? 'YOLO model (cv-detector) — broji vozila unutar kalibrirane zone kad je ROI dostupan'
-                : `heuristika / vizualna pomoć${analytics.cvFallbackReason ? ` — YOLO trenutno nedostupan: ${analytics.cvFallbackReason}` : ''}`}
+              {analytics.cvUsed
+                ? 'AI kamera: broji vozila unutar kalibrirane zone kad je ROI dostupan.'
+                : cameraStatusCopy(analytics.cvFallbackReason)}
             </p>
           ) : null}
         </article>

@@ -65,6 +65,18 @@ export function buildCameraQueueLabel(analytics = {}, { estimateUsable = false }
   return cautiousBandLabel(raw);
 }
 
+// Map a raw detector fallback reason to clean, user-safe Croatian copy. NEVER leak the raw token
+// (e.g. "no-detections", "timeout", "http-502") to the user. `no-detections` is a NORMAL empty-lane
+// result, not an outage.
+export function cameraStatusCopy(reason = '') {
+  const r = String(reason || '').toLowerCase();
+  if (!r) return 'AI detekcija trenutno nije dostupna.';
+  if (r.includes('no-endpoint') || r.includes('disabled') || r.includes('not-configured')) return 'AI detekcija nije konfigurirana.';
+  if (r.includes('no-detection') || r.includes('empty')) return 'AI nije pronašao vozila u ovom kadru.';
+  // timeout / http-xxx / error / invalid-json / no-image → generic "temporarily unavailable"
+  return 'AI detekcija trenutno nije dostupna.';
+}
+
 export function buildCameraTrustText(analytics = {}, { estimateUsable = false, contradictsOfficial = false } = {}) {
   const cvUsed = analytics.cvUsed === true || analytics.yoloUsed === true;
   const roiFeatures = analytics.roiFeaturesPrimary || analytics.roiFeatures || analytics.yoloCamera || null;
@@ -74,7 +86,7 @@ export function buildCameraTrustText(analytics = {}, { estimateUsable = false, c
   if (estimateUsable && cvUsed && roiCalibrated) return 'Procjena koristi AI detekciju vozila unutar kalibrirane zone kolone.';
   if (estimateUsable) return analytics.message || 'Procjena iz kamere koristi svježi signal, ali i dalje je uspoređujemo s javnim izvorima.';
   if (contradictsOfficial) return 'Kamera se ne slaže dovoljno sa službenim izvorom, zato ju prikazujemo samo kao vizualnu provjeru.';
-  if (!cvUsed && fallback) return `Kamera trenutno služi kao vizualna pomoć — YOLO nije dostupan (${fallback}).`;
-  if (cvUsed && !roiCalibrated) return 'AI kamera vidi vozila, ali bez kalibrirane ROI zone signal je niže pouzdanosti.';
+  if (cvUsed && !roiCalibrated) return 'AI vidi vozila, ali kamera nije potpuno kalibrirana.';
+  if (!cvUsed && fallback) return `Kamera trenutno služi kao vizualna provjera. ${cameraStatusCopy(fallback)}`;
   return 'Kamera trenutno služi kao vizualna provjera — čekanje ne izvodimo iz same slike.';
 }

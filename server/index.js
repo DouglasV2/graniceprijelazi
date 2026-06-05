@@ -5964,6 +5964,41 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
+// Public LIVENESS probe (Railway / uptime checks). Always 200 while the process is up. No secrets.
+app.get('/health', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ ok: true, status: 'alive', uptimeSeconds: Math.round(process.uptime()) });
+});
+
+// Public READINESS probe — shows config STATE (booleans only, never keys/values). Stays 200 so a
+// missing optional integration (YOLO/Google) does not fail the deploy; `ready` reflects whether the
+// datastore the app is configured for is actually reachable.
+app.get('/readiness', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  let dbConnected = null;
+  if (datastoreMode === 'postgres') {
+    dbConnected = false;
+    try { await dbQuery('SELECT 1'); dbConnected = true; } catch { dbConnected = false; }
+  }
+  const ready = datastoreMode !== 'postgres' || dbConnected === true;
+  res.status(200).json({
+    ok: true,
+    ready,
+    status: ready ? 'ready' : 'degraded',
+    uptimeSeconds: Math.round(process.uptime()),
+    datastore: datastoreMode === 'postgres' ? 'postgres' : 'file',
+    dbConnected,
+    checks: {
+      googleMapsConfigured: Boolean(serverKey),
+      cameraCvConfigured: Boolean(yoloEndpoint),
+      publicSourcesEnabled: SOURCE_FETCH_ENABLED,
+      predictionV2Enabled: PREDICTION_V2_ENABLED,
+      verifiedLocationEnabled: VERIFIED_LOCATION_ENABLED,
+      lastSourceRefreshAgeSeconds: sourceRefreshState?.lastRunAt ? Math.round((Date.now() - sourceRefreshState.lastRunAt) / 1000) : null,
+    },
+  });
+});
+
 // Admin-only detailed health: integrations, datastore, env checks.
 app.get('/api/admin/health', authRequired, adminRequired, async (req, res) => {
   const store = await readAppStore();
