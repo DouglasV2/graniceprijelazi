@@ -67,9 +67,11 @@ import {
   rectCalibrationToRoiConfig,
   saveRoiConfig,
   listRoiConfigIds,
+  setDbRoiConfigs,
   STATIC_ROI_CONFIGS,
 } from './camera-roi-config.js';
 import { ROI_EDITOR_HTML } from './roi-editor-page.js';
+import { buildMeasurementZone } from './map-display-geometry.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -482,6 +484,78 @@ async function writeSqlStore(store) {
   }
 }
 
+// ── ROI v2 configs in Postgres (production source of truth) ───────────────────────────────────
+// Rows are mapped back to the same shape getRoiConfig() returns, then pushed into the sync cache in
+// camera-roi-config.js so the hot path stays synchronous. Falls back silently to static/file config.
+function roiRowToConfig(row) {
+  if (!row) return null;
+  return {
+    cameraId: row.camera_id,
+    crossingId: row.crossing_id || null,
+    direction: row.direction || null,
+    queuePolygon: Array.isArray(row.queue_polygon_json) ? row.queue_polygon_json : [],
+    ignorePolygons: Array.isArray(row.ignore_polygons_json) ? row.ignore_polygons_json : [],
+    lanePolygons: Array.isArray(row.lane_polygons_json) ? row.lane_polygons_json : [],
+    boothLine: row.booth_line_json || null,
+    borderLine: row.border_line_json || null,
+    metersPerPixel: row.meters_per_pixel != null ? Number(row.meters_per_pixel) : null,
+    cameraReliability: row.camera_reliability != null ? Number(row.camera_reliability) : 0.7,
+    nightReliability: row.night_reliability != null ? Number(row.night_reliability) : 0.45,
+    roiVersion: row.roi_version || 'db-1',
+    isActive: row.is_active !== false,
+    source: 'db',
+    metadata: row.metadata_json || {},
+    updatedAt: isoDate(row.updated_at),
+  };
+}
+
+async function loadRoiConfigsFromDb() {
+  if (datastoreMode !== 'postgres') { setDbRoiConfigs({}); return {}; }
+  try {
+    const result = await dbQuery('SELECT * FROM borderflow_camera_roi_configs WHERE is_active = TRUE');
+    const map = {};
+    for (const row of result.rows) {
+      const cfg = roiRowToConfig(row);
+      if (cfg && cfg.cameraId) map[cfg.cameraId] = cfg;
+    }
+    setDbRoiConfigs(map);
+    return map;
+  } catch (error) {
+    console.warn('[roi] DB ROI load failed, falling back to static/file configs:', error.message);
+    setDbRoiConfigs({});
+    return {};
+  }
+}
+
+async function saveRoiConfigToDb(cameraId, config) {
+  const id = `roi-${cameraId}`;
+  await dbQuery(
+    `INSERT INTO borderflow_camera_roi_configs
+       (id, camera_id, crossing_id, direction, queue_polygon_json, ignore_polygons_json, lane_polygons_json,
+        booth_line_json, border_line_json, meters_per_pixel, camera_reliability, night_reliability,
+        roi_version, is_active, metadata_json, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
+     ON CONFLICT (camera_id) DO UPDATE SET
+       crossing_id=EXCLUDED.crossing_id, direction=EXCLUDED.direction,
+       queue_polygon_json=EXCLUDED.queue_polygon_json, ignore_polygons_json=EXCLUDED.ignore_polygons_json,
+       lane_polygons_json=EXCLUDED.lane_polygons_json, booth_line_json=EXCLUDED.booth_line_json,
+       border_line_json=EXCLUDED.border_line_json, meters_per_pixel=EXCLUDED.meters_per_pixel,
+       camera_reliability=EXCLUDED.camera_reliability, night_reliability=EXCLUDED.night_reliability,
+       roi_version=EXCLUDED.roi_version, is_active=EXCLUDED.is_active, metadata_json=EXCLUDED.metadata_json,
+       updated_at=NOW()`,
+    [
+      id, cameraId, config.crossingId || null, config.direction || null,
+      JSON.stringify(config.queuePolygon || []), JSON.stringify(config.ignorePolygons || []), JSON.stringify(config.lanePolygons || []),
+      config.boothLine ? JSON.stringify(config.boothLine) : null, config.borderLine ? JSON.stringify(config.borderLine) : null,
+      Number.isFinite(Number(config.metersPerPixel)) ? Number(config.metersPerPixel) : null,
+      Number.isFinite(Number(config.cameraReliability)) ? Number(config.cameraReliability) : 0.7,
+      Number.isFinite(Number(config.nightReliability)) ? Number(config.nightReliability) : 0.45,
+      String(config.roiVersion || 'db-1').slice(0, 60), config.isActive !== false, config.metadata || {},
+    ]
+  );
+  await loadRoiConfigsFromDb();
+}
+
 async function readAppStore() {
   if (datastoreMode === 'postgres') return readSqlStore();
   return readStore();
@@ -496,6 +570,7 @@ async function initializeDatastore() {
   if (datastoreMode === 'postgres') {
     await ensureSqlSchema();
     await loadPersistedIntelligenceState();
+    await loadRoiConfigsFromDb();
   } else {
     readStore();
   }
@@ -4252,6 +4327,7 @@ app.get('/api/internal/traffic-vision/roi-audit', optionalAuth, roiEditorGuard, 
     roiV2Enabled: YOLO_ROI_V2_ENABLED,
     roiConfigEnabled: YOLO_ROI_CONFIG_ENABLED,
     predictionV2Enabled: PREDICTION_V2_ENABLED,
+    persistenceMode: datastoreMode === 'postgres' ? 'postgres' : 'file+static',
     configuredIds: listRoiConfigIds(),
     cameras,
   });
@@ -4342,7 +4418,7 @@ app.post('/api/internal/traffic-vision/roi-test/:cameraId', optionalAuth, roiEdi
 
 // Save a runtime ROI override (validated) + return a STATIC_ROI_CONFIGS snippet to commit (Railway's
 // FS is ephemeral, so the durable home is the committed static map).
-app.put('/api/internal/traffic-vision/roi-config/:cameraId', optionalAuth, roiEditorGuard, writeLimiter, (req, res) => {
+app.put('/api/internal/traffic-vision/roi-config/:cameraId', optionalAuth, roiEditorGuard, writeLimiter, async (req, res) => {
   const entry = findCameraEntry(req.params.cameraId);
   if (!entry) return res.status(404).json({ ok: false, error: 'Kamera nije pronađena.' });
   const body = req.body || {};
@@ -4361,6 +4437,33 @@ app.put('/api/internal/traffic-vision/roi-config/:cameraId', optionalAuth, roiEd
     savedVia: 'roi-editor',
     isActive: body.isActive !== false,
   };
+  // Validate once up front (same rules in both modes).
+  const validation = validateRoiConfig({ ...config, cameraId: req.params.cameraId });
+  if (!validation.valid) return res.status(400).json({ ok: false, errors: validation.errors });
+
+  // Production source of truth = Postgres when configured; otherwise the runtime file override.
+  if (datastoreMode === 'postgres') {
+    try {
+      await saveRoiConfigToDb(req.params.cameraId, config);
+      try {
+        const store = await readAppStore();
+        store.audit.unshift({ id: crypto.randomUUID(), type: 'roi_config_saved', actor: req.user || null, details: { cameraId: req.params.cameraId, roiVersion: config.roiVersion, queuePoints: (config.queuePolygon || []).length }, createdAt: new Date().toISOString() });
+        store.audit = store.audit.slice(0, 500);
+        await writeAppStore(store);
+      } catch { /* audit best-effort */ }
+      return res.json({
+        ok: true,
+        cameraId: req.params.cameraId,
+        config: getRoiConfig(req.params.cameraId),
+        persistence: 'postgres',
+        staticSnippet: { [req.params.cameraId]: config },
+        note: 'Spremljeno u Postgres (borderflow_camera_roi_configs) — trajno, preživljava redeploy. staticSnippet je opcionalan backup za commit.',
+      });
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: 'Spremanje ROI configa u bazu nije uspjelo.', detail: safeError(error) });
+    }
+  }
+
   const result = saveRoiConfig(req.params.cameraId, config);
   if (!result.ok) return res.status(400).json({ ok: false, errors: result.errors });
   res.json({
@@ -4369,7 +4472,7 @@ app.put('/api/internal/traffic-vision/roi-config/:cameraId', optionalAuth, roiEd
     config: result.config,
     persistence: 'runtime-override',
     staticSnippet: { [req.params.cameraId]: result.config },
-    note: 'Spremljeno u runtime override (data/camera-roi-overrides.json). Na efemernoj PaaS FS (Railway) override se gubi na redeploy — kopiraj `staticSnippet` u STATIC_ROI_CONFIGS u server/camera-roi-config.js i commitaj za trajnu pohranu.',
+    note: 'Spremljeno u runtime override (data/camera-roi-overrides.json). Na efemernoj PaaS FS (Railway) override se gubi na redeploy — kopiraj `staticSnippet` u STATIC_ROI_CONFIGS u server/camera-roi-config.js i commitaj za trajnu pohranu, ili postavi DATABASE_URL za trajnu DB pohranu.',
   });
 });
 
@@ -7675,6 +7778,10 @@ function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
     displayGeometrySource,
     displayGeometryWarnings,
     displayWiggleRatio: Math.round(routeWiggleRatio(displayPath, anchor) * 10) / 10,
+    // Structured, tidy display geometry for the UI: explicit anchors + a simplified corridor
+    // polyline + a measurement-zone ribbon polygon. The UI prefers these over the raw path so the
+    // map shows a clean "Provjerena zona" instead of wiggly off-road artifacts (Problem D).
+    displayZone: buildMeasurementZone({ path: displayPath, anchor, direction: route.direction }),
     displayNote: 'Na karti je prikazana čista provjerena zona oko prijelaza, bez udaljenih početnih/završnih sidara i bez sirovih Google vijuganja.',
   };
 }

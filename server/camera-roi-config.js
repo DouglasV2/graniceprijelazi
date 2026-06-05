@@ -66,6 +66,17 @@ export const STATIC_ROI_CONFIGS = {
   },
 };
 
+// DB-backed configs (postgres mode) are loaded once at startup + after each save into this sync
+// cache, so getRoiConfig() can stay synchronous on the hot path. index.js owns the SQL; it pushes
+// the resolved map here via setDbRoiConfigs(). Empty in file mode.
+let _dbConfigs = {};
+export function setDbRoiConfigs(map) {
+  _dbConfigs = (map && typeof map === 'object') ? map : {};
+}
+export function getDbRoiConfig(cameraId) {
+  return (cameraId && _dbConfigs[cameraId]) || null;
+}
+
 let _overridesCache = null;
 let _overridesMtime = 0;
 
@@ -93,8 +104,11 @@ function loadOverrides() {
   }
 }
 
+// Resolution order (spec §1.1): DB config → runtime file override → committed static → null.
+// (rect-derived legacy calibration is applied by the caller as the next fallback.)
 export function getRoiConfig(cameraId) {
   if (!cameraId) return null;
+  if (_dbConfigs[cameraId]) return _dbConfigs[cameraId];
   const overrides = loadOverrides();
   if (overrides[cameraId]) return overrides[cameraId];
   if (STATIC_ROI_CONFIGS[cameraId]) return STATIC_ROI_CONFIGS[cameraId];
@@ -102,12 +116,13 @@ export function getRoiConfig(cameraId) {
 }
 
 export function listRoiConfigIds() {
-  return [...new Set([...Object.keys(STATIC_ROI_CONFIGS), ...Object.keys(loadOverrides())])];
+  return [...new Set([...Object.keys(STATIC_ROI_CONFIGS), ...Object.keys(loadOverrides()), ...Object.keys(_dbConfigs)])];
 }
 
-// Where a camera's effective config comes from: 'override' (runtime file) | 'static' (committed) | null.
+// Where a camera's effective config comes from: 'db' | 'override' (runtime file) | 'static' | null.
 export function getRoiConfigSource(cameraId) {
   if (!cameraId) return null;
+  if (_dbConfigs[cameraId]) return 'db';
   if (loadOverrides()[cameraId]) return 'override';
   if (STATIC_ROI_CONFIGS[cameraId]) return 'static';
   return null;

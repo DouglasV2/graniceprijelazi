@@ -150,4 +150,14 @@ describe('multi-frame trackStoppedMoving', () => {
     const r = trackStoppedMoving([f1, f2], { roiConfig, imageMeta: meta });
     expect(r.matchedCount).toBe(3); // only the 3 in-queue vehicles tracked, not the outside one
   });
+  it('identical frame hashes (cached/frozen feed) → DUPLICATE_OR_CACHED_FRAMES, not a fake result', () => {
+    const r = trackStoppedMoving([frame(0), frame(0.3), frame(0.3)], { roiConfig, imageMeta: meta, frameHashes: ['h1', 'h1', 'h1'] });
+    expect(r.multiFrameFallbackReason).toBe('DUPLICATE_OR_CACHED_FRAMES');
+    expect(r.multiFrameEligible).toBe(false);
+  });
+  it('distinct frame hashes do NOT trigger duplicate detection', () => {
+    const r = trackStoppedMoving([frame(0), frame(0.3)], { roiConfig, imageMeta: meta, frameHashes: ['h1', 'h2'] });
+    expect(r.multiFrameFallbackReason).not.toBe('DUPLICATE_OR_CACHED_FRAMES');
+    expect(r.multiFrameUsed).toBe(true);
+  });
 });

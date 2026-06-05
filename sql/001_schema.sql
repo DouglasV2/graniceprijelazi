@@ -197,6 +197,31 @@ CREATE TABLE IF NOT EXISTS borderflow_measured_sessions (
 CREATE INDEX IF NOT EXISTS idx_borderflow_measured_sessions_lookup
   ON borderflow_measured_sessions (crossing_id, direction, started_at DESC);
 
+-- ── Per-camera ROI v2 configs (queue polygon counting). Production source of truth when a DB is
+--    configured; otherwise the committed STATIC_ROI_CONFIGS + runtime file overrides are used. ──
+CREATE TABLE IF NOT EXISTS borderflow_camera_roi_configs (
+  id TEXT PRIMARY KEY,
+  camera_id TEXT NOT NULL UNIQUE,
+  crossing_id TEXT,
+  direction TEXT CHECK (direction IS NULL OR direction IN ('toBih', 'toHr')),
+  queue_polygon_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ignore_polygons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  lane_polygons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  booth_line_json JSONB,
+  border_line_json JSONB,
+  meters_per_pixel NUMERIC,
+  camera_reliability NUMERIC NOT NULL DEFAULT 0.7,
+  night_reliability NUMERIC NOT NULL DEFAULT 0.45,
+  roi_version TEXT NOT NULL DEFAULT 'db-1',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_borderflow_camera_roi_configs_active
+  ON borderflow_camera_roi_configs (is_active, camera_id);
+
 -- ── Alert subscriptions (push-ready; transport configured separately) ─────────
 CREATE TABLE IF NOT EXISTS borderflow_alert_subscriptions (
   id TEXT PRIMARY KEY,

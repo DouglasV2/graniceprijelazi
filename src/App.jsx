@@ -2971,9 +2971,33 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
       if (cancelled) return;
 
       routePayload.routes.forEach((route, index) => {
-        const path = route.path || [];
+        // Prefer the tidy simplified corridor (server display geometry) over the raw Google path so
+        // the line does not wiggle / look like it leaves the road. Falls back to the raw path.
+        const zone = route.displayZone || null;
+        const cleanCorridor = zone && Array.isArray(zone.displayCorridorPolyline) && zone.displayCorridorPolyline.length >= 2
+          ? zone.displayCorridorPolyline
+          : null;
+        const path = cleanCorridor || route.path || [];
         if (!path.length) return;
         path.forEach((point) => bounds.extend(point));
+
+        // Soft "Provjerena zona" ribbon for the primary route (clean, professional zone visual).
+        if (route.primary && google.maps.Polygon && zone && Array.isArray(zone.measurementZonePolygon) && zone.measurementZonePolygon.length >= 4) {
+          const zonePolygon = new google.maps.Polygon({
+            paths: zone.measurementZonePolygon,
+            map,
+            strokeColor: getRouteToneColor(route.level, true),
+            strokeOpacity: 0.35,
+            strokeWeight: 1,
+            fillColor: getRouteToneColor(route.level, true),
+            fillOpacity: 0.12,
+            clickable: false,
+            zIndex: 6,
+          });
+          zonePolygon.getPaths?.().forEach?.((ring) => ring.forEach?.((pt) => bounds.extend(pt)));
+          routePolylinesRef.current.push(zonePolygon);
+        }
+
         const basePolyline = new google.maps.Polyline({
           path,
           map,

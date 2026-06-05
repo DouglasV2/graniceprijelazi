@@ -269,3 +269,23 @@ describe('ROI v2 editor + feature wiring is present and flag/token gated', () =>
     expect(server).toMatch(/YOLO_ROI_CONFIG_ENABLED = process\.env\.YOLO_ROI_CONFIG_ENABLED !== 'false'/);
   });
 });
+
+describe('production hardening wiring (DB ROI persistence, readiness, map zone)', () => {
+  it('DB-backed ROI persistence is wired (table + load + save + fallback cache)', () => {
+    expect(server).toMatch(/borderflow_camera_roi_configs/);
+    expect(server).toMatch(/loadRoiConfigsFromDb/);
+    expect(server).toMatch(/saveRoiConfigToDb/);
+    expect(server).toMatch(/setDbRoiConfigs/);
+  });
+  it('readiness + cv-health endpoints exist and are debug-gated', () => {
+    expect(server).toMatch(/\/api\/internal\/traffic-vision\/readiness/);
+    expect(server).toMatch(/\/api\/internal\/traffic-vision\/cv-health/);
+    expect(server).toMatch(/readyForPredictionV2Headline/);
+  });
+  it('the map display corridor/zone is emitted on the route + consumed by the UI', () => {
+    expect(server).toMatch(/buildMeasurementZone\(/);
+    expect(server).toMatch(/displayZone:/);
+    expect(app).toMatch(/measurementZonePolygon/);
+    expect(app).toMatch(/displayCorridorPolyline/);
+  });
+});
