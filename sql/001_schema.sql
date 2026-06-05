@@ -222,6 +222,28 @@ CREATE TABLE IF NOT EXISTS borderflow_camera_roi_configs (
 CREATE INDEX IF NOT EXISTS idx_borderflow_camera_roi_configs_active
   ON borderflow_camera_roi_configs (is_active, camera_id);
 
+-- ── Live-location wait sessions (anonymous A→B pass timing; NO raw GPS trail stored) ──────────
+CREATE TABLE IF NOT EXISTS borderflow_location_wait_sessions (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL UNIQUE,
+  crossing_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('toBih', 'toHr')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'completed', 'expired', 'cancelled')),
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  measured_wait_min INTEGER CHECK (measured_wait_min IS NULL OR measured_wait_min BETWEEN 0 AND 360),
+  start_anchor_id TEXT,
+  end_anchor_id TEXT,
+  location_accuracy_m INTEGER,
+  user_session_hash TEXT,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_borderflow_location_wait_lookup
+  ON borderflow_location_wait_sessions (crossing_id, direction, status, completed_at DESC);
+
 -- ── Alert subscriptions (push-ready; transport configured separately) ─────────
 CREATE TABLE IF NOT EXISTS borderflow_alert_subscriptions (
   id TEXT PRIMARY KEY,

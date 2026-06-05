@@ -72,6 +72,8 @@ import {
 } from './camera-roi-config.js';
 import { ROI_EDITOR_HTML } from './roi-editor-page.js';
 import { buildMeasurementZone } from './map-display-geometry.js';
+import { classifyLocationPing, aggregateVerifiedLocation } from './location-wait.js';
+import { buildLocationWaitAnchors, hasLocationWaitAnchors } from './location-wait-anchors.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -722,7 +724,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.19985, lng: 15.79042 },
         borderPoint: { lat: 45.19583, lng: 15.79639 },
         exitPoint: { lat: 45.19295, lng: 15.80155 },
-        routeGuard: { maxCrossingDistanceKm: 4, hardMaxCrossingDistanceKm: 12, passDistanceMeters: 600, validateApproachExit: true, displayBeforeMeters: 650, displayAfterMeters: 850 },
+        routeGuard: { maxCrossingDistanceKm: 4, hardMaxCrossingDistanceKm: 12, passDistanceMeters: 600, validateApproachExit: true, displayBeforeMeters: 650, displayAfterMeters: 1000 },
       },
       toHr: {
         label: 'BiH → HR',
@@ -731,7 +733,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.19295, lng: 15.80155 },
         borderPoint: { lat: 45.19583, lng: 15.79639 },
         exitPoint: { lat: 45.19985, lng: 15.79042 },
-        routeGuard: { maxCrossingDistanceKm: 4, hardMaxCrossingDistanceKm: 12, passDistanceMeters: 600, validateApproachExit: true, displayBeforeMeters: 650, displayAfterMeters: 850 },
+        routeGuard: { maxCrossingDistanceKm: 4, hardMaxCrossingDistanceKm: 12, passDistanceMeters: 600, validateApproachExit: true, displayBeforeMeters: 650, displayAfterMeters: 1000 },
       },
     },
   },
@@ -817,7 +819,7 @@ const BORDER_CROSSINGS = {
         exitPoint: { lat: 45.13550, lng: 17.21620 },
         // Same treatment as Gradiška: skip via-intermediate and fail open so the UI
         // prefers Google's road-following polyline over the straight calibrated fallback.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 3600 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 4200 },
       },
       toHr: {
         label: 'BiH → HR',
@@ -826,7 +828,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.13550, lng: 17.21620 },
         borderPoint: { lat: 45.14250, lng: 17.20650 },
         exitPoint: { lat: 45.15050, lng: 17.19700 },
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 3600 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 4200 },
       },
     },
   },
@@ -861,7 +863,7 @@ const BORDER_CROSSINGS = {
         // which dropped Bijača into the straight-line calibrated fallback. The free A1 route
         // naturally passes through the border zone. Fail open here because the previous
         // strict guard caused a straight-line fallback that visibly missed the motorway.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1000, displayAfterMeters: 1050 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1000, displayAfterMeters: 1400 },
       },
       toHr: {
         label: 'BiH → HR',
@@ -870,7 +872,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 43.12300, lng: 17.57760 },
         borderPoint: { lat: 43.12340, lng: 17.56780 },
         exitPoint: { lat: 43.12376, lng: 17.55720 },
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1000, displayAfterMeters: 1050 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1000, displayAfterMeters: 1400 },
       },
     },
   },
@@ -1497,6 +1499,15 @@ const publicWriteLimiter = rateLimit({ windowMs: 60 * 1000, max: 12, keyPrefix: 
 // mode they are mirrored to the borderflow_* tables added in 001_schema.sql.
 const predictionAccuracyBuffer = []; // { id, crossingId, direction, predictedWait, actualWait, confidenceLevel, confidenceScore, sourceMix, predictedAt, resolvedAt, source }
 const measuredSessionBuffer = [];    // { id, crossingId, direction, userId, anonymous, predictedWaitAtStart, actualWait, gpsVerified, startGps, endGps, status, startedAt, finishedAt }
+// Live-location wait sessions (subtle "Moja lokacija" signal). NO raw GPS trail is stored — only the
+// lifecycle status + the server-measured A→B wait. Capped buffer; persisted to DB in postgres mode.
+const locationWaitSessionBuffer = [];
+const VERIFIED_LOCATION_ENABLED = process.env.VERIFIED_LOCATION_ENABLED === 'true';
+const LOCATION_WAIT_MAX_ACCURACY_M = Math.max(20, Number(process.env.LOCATION_WAIT_MAX_ACCURACY_M || 100));
+const LOCATION_WAIT_PING_MIN_INTERVAL_MS = Math.max(0, Number(process.env.LOCATION_WAIT_PING_MIN_INTERVAL_SECONDS ?? 20)) * 1000;
+const LOCATION_WAIT_SESSION_MAX_MS = Math.max(10, Number(process.env.LOCATION_WAIT_SESSION_MAX_MINUTES || 240)) * 60 * 1000;
+const LOCATION_WAIT_SIGNAL_MAX_AGE_MINUTES = Math.max(5, Number(process.env.LOCATION_WAIT_SIGNAL_MAX_AGE_MINUTES || 45));
+const LOCATION_WAIT_HASH_SALT = process.env.LOCATION_WAIT_HASH_SALT || sessionSecret || 'borderflow-loc-salt';
 const alertSubscriptionBuffer = [];  // { id, userId, crossingId, direction, dropBelow, riseAbove, pushToken, active, createdAt }
 const alertEventBuffer = [];         // recent alert events (push-ready payloads)
 const lastWaitForAlerts = new Map(); // key → last displayed wait, for transition detection
@@ -1718,6 +1729,22 @@ async function persistMeasuredSession(session) {
   );
 }
 
+async function persistLocationWaitSession(session) {
+  if (datastoreMode !== 'postgres') return;
+  await dbQuery(
+    `INSERT INTO borderflow_location_wait_sessions
+       (id, session_id, crossing_id, direction, status, started_at, completed_at, measured_wait_min, start_anchor_id, end_anchor_id, location_accuracy_m, user_session_hash, metadata_json, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+     ON CONFLICT (session_id) DO UPDATE SET status=EXCLUDED.status, started_at=EXCLUDED.started_at,
+       completed_at=EXCLUDED.completed_at, measured_wait_min=EXCLUDED.measured_wait_min,
+       location_accuracy_m=EXCLUDED.location_accuracy_m, metadata_json=EXCLUDED.metadata_json, updated_at=NOW()`,
+    [session.id, session.sessionId, session.crossingId, session.direction, session.status,
+      session.serverStartedAt || null, session.serverCompletedAt || null, session.measuredWaitMin ?? null,
+      session.startAnchorId || null, session.endAnchorId || null, Math.round(Number(session.lastAccuracyM || 0)) || null,
+      session.userSessionHash || null, session.metadata || {}]
+  );
+}
+
 async function persistAlertSubscription(sub) {
   if (datastoreMode !== 'postgres') return;
   await dbQuery(
@@ -1751,7 +1778,15 @@ async function loadPersistedIntelligenceState() {
       id: r.id, userId: r.user_id, crossingId: r.crossing_id, direction: r.direction, dropBelow: r.drop_below,
       riseAbove: r.rise_above, pushToken: r.push_token, active: r.active, createdAt: isoDate(r.created_at),
     })));
-    console.log(`[intelligence-state] loaded ${predictionAccuracyBuffer.length} accuracy / ${measuredSessionBuffer.length} sessions / ${alertSubscriptionBuffer.length} subs`);
+    // Recent location-wait sessions (last 24h) so the verified-location signal survives a restart.
+    const loc = await dbQuery("SELECT * FROM borderflow_location_wait_sessions WHERE created_at > NOW() - INTERVAL '24 hours' ORDER BY created_at DESC LIMIT 20000");
+    locationWaitSessionBuffer.splice(0, locationWaitSessionBuffer.length, ...loc.rows.map((r) => ({
+      id: r.id, sessionId: r.session_id, crossingId: r.crossing_id, direction: r.direction, status: r.status,
+      serverStartedAt: r.started_at ? isoDate(r.started_at) : null, serverCompletedAt: r.completed_at ? isoDate(r.completed_at) : null,
+      measuredWaitMin: r.measured_wait_min, startAnchorId: r.start_anchor_id, endAnchorId: r.end_anchor_id,
+      userSessionHash: r.user_session_hash, metadata: r.metadata_json || {}, createdAt: isoDate(r.created_at),
+    })));
+    console.log(`[intelligence-state] loaded ${predictionAccuracyBuffer.length} accuracy / ${measuredSessionBuffer.length} sessions / ${alertSubscriptionBuffer.length} subs / ${locationWaitSessionBuffer.length} loc-sessions`);
     refreshBiasModel();
     refreshCalibrationModel();
   } catch (error) {
@@ -3454,14 +3489,29 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       const chatReports = reports.filter((r) => !r.measured);
       const chatAvg = chatReports.length ? Math.round(chatReports.reduce((s, r) => s + Number(r.wait || 0), 0) / chatReports.length) : null;
       const bestPublic = publicSignals.length ? choosePublicSourceSignal(publicSignals) : null;
+      // Anonymous live-location passes → verifiedLocation. Outlier-safe (trimmed median), age-aware.
+      const verifiedAggregate = aggregateVerifiedLocation(
+        recentLocationWaitSessions(crossing.id, direction, LOCATION_WAIT_SIGNAL_MAX_AGE_MINUTES),
+        { now: Date.now(), maxAgeMin: LOCATION_WAIT_SIGNAL_MAX_AGE_MINUTES }
+      );
+      // Prefer a FRESH live-location aggregate; else fall back to a measured driver report.
+      const verifiedForFusion = (verifiedAggregate.available && verifiedAggregate.freshSampleCount >= 1)
+        ? { waitMin: verifiedAggregate.medianWaitMin, ageMin: Math.round(verifiedAggregate.latestAgeSeconds / 60), sampleCount: verifiedAggregate.sampleCount, confidence: verifiedAggregate.confidence }
+        : (measuredReport ? { waitMin: measuredReport.wait, ageMin: ageMinutesOf(measuredReport.createdAt) } : null);
       predictionV2 = fuseTrafficVision({
         google: gV2,
         camera: cameraV2,
         publicSig: bestPublic ? { waitMin: bestPublic.normalizedWaitMin, soft: isSoftUpperBoundSource(bestPublic), confidence: bestPublic.confidence } : null,
         chat: chatReports.length ? { waitMin: chatAvg, count: chatReports.length, ageMin: ageMinutesOf(chatReports[0].createdAt), withLocation: chatReports.some((r) => r.gpsVerified) } : null,
-        verified: measuredReport ? { waitMin: measuredReport.wait, ageMin: ageMinutesOf(measuredReport.createdAt) } : null,
+        verified: verifiedForFusion,
         baselineWaitMin: clampWait(staticWait) ?? 10,
       });
+      // Always surface the rich verifiedLocation aggregate in the breakdown (available:false when none).
+      if (predictionV2 && predictionV2.sourceBreakdown) {
+        predictionV2.sourceBreakdown.verifiedLocation = verifiedAggregate.available
+          ? verifiedAggregate
+          : (measuredReport ? { available: true, sampleCount: 1, freshSampleCount: ageMinutesOf(measuredReport.createdAt) <= LOCATION_WAIT_SIGNAL_MAX_AGE_MINUTES ? 1 : 0, medianWaitMin: measuredReport.wait, minWaitMin: measuredReport.wait, maxWaitMin: measuredReport.wait, latestAgeSeconds: Math.round(ageMinutesOf(measuredReport.createdAt) * 60), confidence: 80, source: 'measured-report' } : { available: false, sampleCount: 0 });
+      }
     } catch (error) {
       predictionV2 = { error: String(error.message).slice(0, 120), modelVersion: TRAFFIC_VISION_MODEL_VERSION };
     }
@@ -3806,10 +3856,16 @@ app.get('/api/public/state', async (req, res) => {
     },
     reportsCount: store.reports.length,
     lastReports: store.reports.slice(0, 12),
+    features: {
+      // Subtle live-location signal. The "Moja lokacija" button shows regardless, but the anonymous
+      // A→B pass signal only arms when this is on (so the UI can subdue the live wording otherwise).
+      verifiedLocation: VERIFIED_LOCATION_ENABLED,
+    },
     crossings: Object.values(BORDER_CROSSINGS).map((crossing) => ({
       id: crossing.id,
       name: crossing.name,
       shortName: crossing.shortName,
+      locationWaitArmed: VERIFIED_LOCATION_ENABLED && (hasLocationWaitAnchors(crossing, 'toBih') || hasLocationWaitAnchors(crossing, 'toHr')),
       cameras: (CAMERA_FEEDS[crossing.id] || []).map((camera) => ({ id: camera.id, source: camera.source || 'HAK', label: camera.label })),
     })),
   });
@@ -4744,6 +4800,188 @@ app.get('/api/measured/geofences', async (_req, res) => {
     }
   }
   res.json({ ok: true, geofences });
+});
+
+// ── LIVE LOCATION WAIT SIGNAL ("Moja lokacija") ───────────────────────────────────────────────
+// Subtle, anonymous A→B pass timing. The driver only ever sees their own location; we store NO raw
+// GPS trail — only the server-decided lifecycle + the measured wait. Off by default.
+const locationWaitPingLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, keyPrefix: 'loc-ping' });
+
+function hashUserSession(req, sessionId = '') {
+  const ip = req.ip || req.headers['x-forwarded-for'] || '';
+  const ua = String(req.get('user-agent') || '').slice(0, 80);
+  return crypto.createHash('sha256').update(`${LOCATION_WAIT_HASH_SALT}:${ip}:${ua}:${sessionId}`).digest('hex').slice(0, 32);
+}
+
+function findLocationWaitSession(sessionId) {
+  const id = String(sessionId || '').trim();
+  if (!id) return null;
+  return locationWaitSessionBuffer.find((s) => s.sessionId === id) || null;
+}
+
+// Completed location-wait sessions for a crossing/direction within the freshness window.
+function recentLocationWaitSessions(crossingId, direction, maxAgeMin = LOCATION_WAIT_SIGNAL_MAX_AGE_MINUTES) {
+  const cutoff = Date.now() - maxAgeMin * 60 * 1000;
+  return locationWaitSessionBuffer.filter((s) => s.crossingId === crossingId && s.direction === direction
+    && s.status === 'completed' && s.serverCompletedAt && new Date(s.serverCompletedAt).getTime() >= cutoff);
+}
+
+function locationFeatureDisabled(res) {
+  return res.status(404).json({ ok: false, disabled: true, error: 'Live lokacija nije omogućena.' });
+}
+
+// Create (or reuse) a pending session for a crossing/direction.
+app.post('/api/location-wait/session', publicWriteLimiter, optionalAuth, async (req, res) => {
+  if (!VERIFIED_LOCATION_ENABLED) return locationFeatureDisabled(res);
+  const crossingId = String(req.body?.crossingId || '').trim();
+  const direction = req.body?.direction === 'toHr' ? 'toHr' : 'toBih';
+  const crossing = BORDER_CROSSINGS[crossingId];
+  if (!crossing) return res.status(400).json({ ok: false, error: 'Nepoznat prijelaz.' });
+
+  const anchors = buildLocationWaitAnchors(crossing, direction);
+  if (!anchors) {
+    // The map still shows the user's own location; we just don't arm the A→B signal here.
+    return res.json({ ok: true, armed: false, status: 'disarmed', message: 'Lokacija uključena' });
+  }
+
+  const hash = hashUserSession(req, '');
+  const existing = locationWaitSessionBuffer.find((s) => s.userSessionHash === hash && s.crossingId === crossingId && s.direction === direction && (s.status === 'pending' || s.status === 'active'));
+  if (existing) {
+    return res.json({ ok: true, armed: true, sessionId: existing.sessionId, status: existing.status, message: existing.status === 'active' ? 'Live signal aktivan' : 'Lokacija uključena' });
+  }
+
+  const sessionId = crypto.randomUUID();
+  const session = {
+    id: `locw-${sessionId}`,
+    sessionId,
+    crossingId,
+    direction,
+    status: 'pending',
+    serverStartedAt: null,
+    serverCompletedAt: null,
+    measuredWaitMin: null,
+    startAnchorId: anchors.startAnchor.id,
+    endAnchorId: anchors.endAnchor.id,
+    userSessionHash: hashUserSession(req, sessionId),
+    predictedWaitAtStart: null,
+    lastPingAt: 0,
+    lastAccuracyM: null,
+    metadata: { pingCount: 0, duplicatePingCount: 0, source: 'map-location', anchorSource: anchors.source },
+    createdAt: new Date().toISOString(),
+  };
+  locationWaitSessionBuffer.unshift(session);
+  while (locationWaitSessionBuffer.length > 20000) locationWaitSessionBuffer.pop();
+  persistLocationWaitSession(session).catch((e) => console.warn('[locw-persist]', e.message));
+  res.status(201).json({ ok: true, armed: true, sessionId, status: 'pending', message: 'Lokacija uključena' });
+});
+
+// Throttled ping. Server decides the lifecycle from anchor geofences + server time.
+app.post('/api/location-wait/ping', locationWaitPingLimiter, optionalAuth, async (req, res) => {
+  if (!VERIFIED_LOCATION_ENABLED) return locationFeatureDisabled(res);
+  const session = findLocationWaitSession(req.body?.sessionId);
+  if (!session) return res.status(404).json({ ok: false, error: 'Sesija nije pronađena.' });
+
+  const now = Date.now();
+  // Per-session throttle: ignore (but do not error) pings that arrive faster than the min interval.
+  if (now - (session.lastPingAt || 0) < LOCATION_WAIT_PING_MIN_INTERVAL_MS && session.status !== 'pending') {
+    session.metadata.duplicatePingCount = (session.metadata.duplicatePingCount || 0) + 1;
+    return res.json({ ok: true, status: session.status, throttled: true, message: statusMessage(session.status) });
+  }
+  session.lastPingAt = now;
+
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+  const accuracyM = Number(req.body?.accuracyM);
+  const crossing = BORDER_CROSSINGS[session.crossingId];
+  const anchors = crossing ? buildLocationWaitAnchors(crossing, session.direction) : null;
+
+  const result = classifyLocationPing(session, { lat, lng, accuracyM }, anchors, { now, maxAccuracyM: LOCATION_WAIT_MAX_ACCURACY_M });
+
+  // Update anonymous aggregate metadata (NO raw GPS trail).
+  const md = session.metadata;
+  md.pingCount = (md.pingCount || 0) + 1;
+  md.lastSeenAt = new Date(now).toISOString();
+  if (Number.isFinite(accuracyM)) {
+    md.minAccuracyM = md.minAccuracyM == null ? accuracyM : Math.min(md.minAccuracyM, accuracyM);
+    md.maxAccuracyM = md.maxAccuracyM == null ? accuracyM : Math.max(md.maxAccuracyM, accuracyM);
+    md.averageAccuracyM = Math.round((((md.averageAccuracyM || accuracyM) * (md.pingCount - 1)) + accuracyM) / md.pingCount);
+    session.lastAccuracyM = accuracyM;
+  }
+  if (result.startDistanceM != null) md.startDistanceM = result.startDistanceM;
+  if (result.endDistanceM != null) md.endDistanceM = result.endDistanceM;
+  if (result.rejectionReason) md.rejectionReason = result.rejectionReason;
+
+  if (result.transitioned) {
+    session.status = result.status;
+    session.serverStartedAt = result.serverStartedAt || session.serverStartedAt;
+    session.serverCompletedAt = result.serverCompletedAt || session.serverCompletedAt;
+    session.measuredWaitMin = result.measuredWaitMin ?? session.measuredWaitMin;
+
+    // On activation, capture the prediction "at join" so we can score accuracy when it completes.
+    if (session.status === 'active' && session.predictedWaitAtStart == null) {
+      try {
+        const signal = await effectiveBorderSignal(crossing, session.direction, 'car');
+        if (signal?.displayReady !== false && Number.isFinite(Number(signal.wait))) {
+          session.predictedWaitAtStart = Number(signal.wait);
+          session.predictedConfidenceLevel = signal.confidenceLevel || null;
+          session.predictedConfidenceScore = signal.confidenceScore ?? null;
+          session.predictedSourceMix = signalSourceMix(signal);
+        }
+      } catch { /* optional */ }
+    }
+    // On completion, close the accuracy loop (predicted-at-join vs measured) for the readiness KPI.
+    if (session.status === 'completed' && Number.isFinite(Number(session.measuredWaitMin))) {
+      recordResolvedAccuracy({
+        crossingId: session.crossingId,
+        direction: session.direction,
+        predictedWait: session.predictedWaitAtStart,
+        actualWait: session.measuredWaitMin,
+        confidenceLevel: session.predictedConfidenceLevel || null,
+        confidenceScore: session.predictedConfidenceScore || null,
+        sourceMix: session.predictedSourceMix || {},
+        source: 'location-wait',
+      });
+    }
+    persistLocationWaitSession(session).catch((e) => console.warn('[locw-persist]', e.message));
+  }
+
+  res.json({
+    ok: true,
+    status: session.status,
+    message: statusMessage(session.status),
+    ...(session.status === 'completed' ? { measuredWaitMin: session.measuredWaitMin } : {}),
+  });
+});
+
+function statusMessage(status) {
+  if (status === 'active') return 'Live signal aktivan';
+  if (status === 'completed') return 'Hvala — live procjena je ažurirana.';
+  if (status === 'expired' || status === 'cancelled') return 'Live signal je zaustavljen.';
+  return 'Lokacija uključena';
+}
+
+app.post('/api/location-wait/cancel', publicWriteLimiter, async (req, res) => {
+  if (!VERIFIED_LOCATION_ENABLED) return locationFeatureDisabled(res);
+  const session = findLocationWaitSession(req.body?.sessionId);
+  if (!session) return res.status(404).json({ ok: false, error: 'Sesija nije pronađena.' });
+  if (session.status === 'pending' || session.status === 'active') {
+    session.status = 'cancelled';
+    persistLocationWaitSession(session).catch(() => {});
+  }
+  res.json({ ok: true, status: session.status, message: statusMessage(session.status) });
+});
+
+app.get('/api/location-wait/status/:sessionId', (req, res) => {
+  if (!VERIFIED_LOCATION_ENABLED) return locationFeatureDisabled(res);
+  const session = findLocationWaitSession(req.params.sessionId);
+  if (!session) return res.status(404).json({ ok: false, error: 'Sesija nije pronađena.' });
+  res.json({
+    ok: true,
+    status: session.status,
+    message: statusMessage(session.status),
+    measuredWaitMin: session.measuredWaitMin ?? null,
+    pingCount: session.metadata?.pingCount || 0,
+  });
 });
 
 // ── BEST CROSSING ENGINE (spec §10) ───────────────────────────────────────────

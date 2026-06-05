@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Clock,
   Copy,
+  Crosshair,
   Download,
   Lock,
   LogOut,
@@ -24,6 +25,7 @@ import {
 import { formatMinutes, hasKnownWait, isUsableMinuteValue, normalizeMinutes, formatWaitDisplay, shapeWaitDisplay } from './utils/wait-format.js';
 import { cameraEstimateDecision, buildCameraQueueLabel, buildCameraTrustText } from './utils/camera-display.js';
 import { loadGoogleMaps, mapsConstructorsReady } from './utils/google-maps-loader.js';
+import { shouldSendPing } from './utils/location-wait-client.js';
 
 
 function makeCrossingHistory(baseCars, baseTrucks, baseBuses, baseWait) {
@@ -2750,6 +2752,84 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   const [mapsReady, setMapsReady] = useState(false);
   const [mapError, setMapError] = useState('');
 
+  // ── "Moja lokacija" live signal (subtle, Google-Maps style). Shows the user's own location; while
+  //    on, an anonymous A→B pass can quietly improve the live estimate. No other users are shown. ──
+  const [locationOn, setLocationOn] = useState(false);
+  const [locStatus, setLocStatus] = useState(''); // small toast text
+  const [locLiveStatus, setLocLiveStatus] = useState('idle'); // idle|pending|active|completed
+  const [locInfoOpen, setLocInfoOpen] = useState(false);
+  const [userPos, setUserPos] = useState(null);
+  const watchIdRef = useRef(null);
+  const userMarkerRef = useRef(null);
+  const locSessionRef = useRef(null); // { sessionId, armed }
+  const lastPingRef = useRef({ at: 0, point: null });
+  const didCenterUserRef = useRef(false);
+
+  const stopLocation = useCallback(() => {
+    if (watchIdRef.current != null && navigator.geolocation) navigator.geolocation.clearWatch(watchIdRef.current);
+    watchIdRef.current = null;
+    const s = locSessionRef.current;
+    if (s?.sessionId) {
+      fetch('/api/location-wait/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: s.sessionId }) }).catch(() => {});
+    }
+    locSessionRef.current = null;
+    lastPingRef.current = { at: 0, point: null };
+    didCenterUserRef.current = false;
+    if (userMarkerRef.current) { if (userMarkerRef.current.map !== undefined) userMarkerRef.current.map = null; if (userMarkerRef.current.setMap) userMarkerRef.current.setMap(null); userMarkerRef.current = null; }
+    setUserPos(null);
+    setLocLiveStatus('idle');
+    setLocationOn(false);
+    setLocStatus('Lokacija nije uključena.');
+  }, []);
+
+  async function sendLocationPing(point) {
+    const sess = locSessionRef.current;
+    if (!sess?.armed || !sess.sessionId) return;
+    // throttle decision (cadence + min-move). distance-to-zone unknown client-side → near cadence.
+    const decision = shouldSendPing({ now: Date.now(), lastSentAt: lastPingRef.current.at, lastPoint: lastPingRef.current.point, point, status: locLiveStatus === 'idle' ? 'pending' : locLiveStatus, distanceToZoneM: 1000 });
+    if (!decision.send) return;
+    lastPingRef.current = { at: Date.now(), point };
+    try {
+      const resp = await fetch('/api/location-wait/ping', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: sess.sessionId, lat: point.lat, lng: point.lng, accuracyM: point.accuracyM }) });
+      const data = await resp.json().catch(() => null);
+      if (!data?.ok) return;
+      if (data.status === 'active') { setLocLiveStatus('active'); setLocStatus('Live signal aktivan'); }
+      else if (data.status === 'completed') { setLocLiveStatus('completed'); setLocStatus('Hvala — live procjena je ažurirana.'); locSessionRef.current = { ...sess, armed: false }; }
+    } catch { /* ignore — never break the map */ }
+  }
+
+  function enableLocation() {
+    if (!('geolocation' in navigator)) { setLocStatus('Lokacija nije dostupna na ovom uređaju.'); return; }
+    setLocationOn(true);
+    setLocStatus('Tražim lokaciju…');
+    // Arm an anonymous session for this crossing/direction (server decides if it actually arms).
+    fetch('/api/location-wait/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ crossingId: selectedCrossing.id, direction: selectedDirection }) })
+      .then((r) => r.json().catch(() => null))
+      .then((data) => {
+        if (data?.ok && data.armed && data.sessionId) { locSessionRef.current = { sessionId: data.sessionId, armed: true }; setLocLiveStatus('pending'); }
+        else locSessionRef.current = { sessionId: null, armed: false }; // disabled/disarmed → location-only
+      })
+      .catch(() => { locSessionRef.current = { sessionId: null, armed: false }; });
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const point = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy };
+        setUserPos(point);
+        setLocStatus((prev) => (prev === 'Tražim lokaciju…' || prev === 'Lokacija nije uključena.') ? 'Lokacija uključena' : prev);
+        sendLocationPing(point);
+      },
+      () => { setLocStatus('Lokacija nije uključena.'); setLocationOn(false); if (watchIdRef.current != null) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; } },
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+    );
+  }
+
+  function toggleLocation() {
+    if (locationOn) stopLocation();
+    else enableLocation();
+  }
+
+  useEffect(() => () => stopLocation(), [stopLocation]); // cleanup on unmount
+
   useEffect(() => {
     if (!apiKey) return;
     let cancelled = false;
@@ -3103,6 +3183,30 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
     });
   }, [selectedCrossing, selectedDirection, focusTraffic, visibleCrossings]);
 
+  // Render ONLY the current user's own blue-dot location (never other users). First fix centres; later
+  // fixes just move the dot, so we don't fight the user panning the map.
+  useEffect(() => {
+    if (!mapRef.current || !window.google?.maps || !userPos) return;
+    const google = window.google;
+    const map = mapRef.current;
+    const pos = { lat: userPos.lat, lng: userPos.lng };
+    if (!userMarkerRef.current) {
+      const dot = document.createElement('div');
+      dot.className = 'user-location-dot';
+      dot.title = 'Moja lokacija';
+      if (google.maps.marker?.AdvancedMarkerElement) {
+        userMarkerRef.current = new google.maps.marker.AdvancedMarkerElement({ map, position: pos, content: dot, title: 'Moja lokacija', zIndex: 80 });
+      } else {
+        userMarkerRef.current = new google.maps.Marker({ map, position: pos, title: 'Moja lokacija', zIndex: 80, icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#1a73e8', fillOpacity: 1, strokeColor: '#ffffff', strokeWeight: 3 } });
+      }
+    } else if (userMarkerRef.current.position !== undefined) {
+      userMarkerRef.current.position = pos;
+    } else if (userMarkerRef.current.setPosition) {
+      userMarkerRef.current.setPosition(pos);
+    }
+    if (!didCenterUserRef.current) { didCenterUserRef.current = true; map.panTo(pos); }
+  }, [userPos]);
+
   if (!apiKey) return <StaticMapPlaceholder selectedDirection={selectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={setSelectedCrossing} visibleCrossings={visibleCrossings} overrides={overrides} />;
 
   const routes = routePayload.routes || [];
@@ -3123,6 +3227,35 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
       <div ref={mapEl} className="google-map" />
       {!mapsReady && !mapError && <div className="map-loading">Učitavam kartu…</div>}
       {mapError && <div className="map-error">{mapError}</div>}
+
+      {/* Google-Maps-style "Moja lokacija" control. Small, unobtrusive; lives near the map controls. */}
+      {mapsReady && (
+        <div className="map-location-control">
+          <button
+            type="button"
+            className={`map-location-button${locationOn ? ' active' : ''}`}
+            onClick={toggleLocation}
+            title="Moja lokacija"
+            aria-label="Moja lokacija"
+            aria-pressed={locationOn}
+          >
+            <Crosshair size={18} aria-hidden="true" />
+          </button>
+          <button type="button" className="map-location-info" onClick={() => setLocInfoOpen((v) => !v)} aria-label="Info o lokaciji" title="Info">i</button>
+          {locInfoOpen && (
+            <div className="map-location-popover" role="dialog">
+              <p>Lokacija prikazuje tvoju poziciju na mapi. Ako prolaziš kroz zonu prijelaza, anonimni signal prolaska može pomoći da live procjene budu točnije. Ne spremamo tvoju rutu i ne prikazujemo tvoju lokaciju drugim korisnicima.</p>
+              <button type="button" onClick={() => setLocInfoOpen(false)}>U redu</button>
+            </div>
+          )}
+        </div>
+      )}
+      {locStatus && (
+        <div className={`map-location-toast${locLiveStatus === 'active' ? ' live' : ''}`} role="status">
+          {locStatus}
+          {locLiveStatus === 'active' && <span className="loc-live-dot" aria-hidden="true" />}
+        </div>
+      )}
       {routes.some((route) => (route.trafficSegments || []).length > 0) && (
         <div className="map-traffic-legend" aria-label="Legenda prometa">
           <span><i className="legend-dot normal" /> protočno</span>
@@ -3368,8 +3501,17 @@ function PredictionBreakdown({ sourceMeta = {} }) {
   if (b.googleTraffic && b.googleTraffic.delayMin !== null && b.googleTraffic.delayMin !== undefined) {
     rows.push({ icon: '🚗', text: `Google promet: ${b.googleTraffic.delayMin > 0 ? `+${b.googleTraffic.delayMin} min usporenja` : 'bez zastoja'} na prilazu` });
   }
-  if (b.verifiedLocation && b.verifiedLocation.waitMin !== null && b.verifiedLocation.waitMin !== undefined) {
-    rows.push({ icon: '✅', text: `Provjereno na terenu: ${formatMinutes(b.verifiedLocation.waitMin)}` });
+  // Verified live-location signal (anonymous A→B passes). Subtle copy — never "tracking"/"GPS".
+  const vl = b.verifiedLocation || null;
+  if (vl && vl.available && (vl.freshSampleCount > 0 || vl.sampleCount > 0)) {
+    const ageMin = Number.isFinite(Number(vl.latestAgeSeconds)) ? Math.max(1, Math.round(vl.latestAgeSeconds / 60)) : null;
+    if ((vl.freshSampleCount || 0) >= 2) {
+      rows.push({ icon: '📍', text: `Potvrđeno live signalima — ${vl.freshSampleCount} anonimna prolaska${ageMin ? ` u zadnjih ${ageMin} min` : ''}` });
+    } else {
+      rows.push({ icon: '📍', text: 'Jedan svježi live signal potvrđuje procjenu' });
+    }
+  } else if (vl && vl.waitMin !== null && vl.waitMin !== undefined) {
+    rows.push({ icon: '📍', text: 'Potvrđeno live signalom prolaska' });
   }
   if (b.chatReports && b.chatReports.waitMin !== null && b.chatReports.waitMin !== undefined) {
     rows.push({ icon: '💬', text: `Dojave vozača: ${formatMinutes(b.chatReports.waitMin)} (${b.chatReports.count})` });

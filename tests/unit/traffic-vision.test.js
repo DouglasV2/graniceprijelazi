@@ -289,3 +289,33 @@ describe('production hardening wiring (DB ROI persistence, readiness, map zone)'
     expect(app).toMatch(/displayCorridorPolyline/);
   });
 });
+
+describe('live "Moja lokacija" signal wiring (subtle, anonymous, no raw trail)', () => {
+  it('backend has the flag-gated endpoints + server-authoritative classify + aggregate', () => {
+    expect(server).toMatch(/\/api\/location-wait\/session/);
+    expect(server).toMatch(/\/api\/location-wait\/ping/);
+    expect(server).toMatch(/\/api\/location-wait\/cancel/);
+    expect(server).toMatch(/VERIFIED_LOCATION_ENABLED/);
+    expect(server).toMatch(/classifyLocationPing\(/);
+    expect(server).toMatch(/aggregateVerifiedLocation\(/);
+    expect(server).toMatch(/borderflow_location_wait_sessions/);
+  });
+  it('the verifiedLocation aggregate feeds fusion + the breakdown', () => {
+    expect(server).toMatch(/sourceBreakdown\.verifiedLocation =/);
+    expect(server).toMatch(/verifiedForFusion/);
+  });
+  it('the UI has a Google-Maps-style location control + own blue dot ONLY (no other users)', () => {
+    expect(app).toMatch(/map-location-button/);
+    expect(app).toMatch(/Moja lokacija/);
+    expect(app).toMatch(/user-location-dot|SymbolPath\.CIRCLE/);
+    // Subtle copy — and NONE of the forbidden tracking words.
+    expect(app).toMatch(/Ne spremamo tvoju rutu/);
+    expect(app).not.toMatch(/Izmjeri moje čekanje|GPS trail|Pratimo te/);
+  });
+  it('the prediction UI shows the subtle "Potvrđeno live signalima" copy', () => {
+    expect(app).toMatch(/Potvrđeno live signalima/);
+  });
+  it('the public state exposes the feature flag so the UI can subdue it when off', () => {
+    expect(server).toMatch(/verifiedLocation: VERIFIED_LOCATION_ENABLED/);
+  });
+});
