@@ -71,7 +71,7 @@ import {
   STATIC_ROI_CONFIGS,
 } from './camera-roi-config.js';
 import { ROI_EDITOR_HTML } from './roi-editor-page.js';
-import { buildMeasurementZone, pathCrossesBorder, buildCalibratedCorridor, validateDisplayPathQuality } from './map-display-geometry.js';
+import { buildMeasurementZone, pathCrossesBorder, buildCalibratedCorridor, validateDisplayPathQuality, pointAlongBearing } from './map-display-geometry.js';
 import { classifyLocationPing, aggregateVerifiedLocation } from './location-wait.js';
 import { buildLocationWaitAnchors, hasLocationWaitAnchors } from './location-wait-anchors.js';
 
@@ -831,7 +831,7 @@ const BORDER_CROSSINGS = {
         exitPoint: { lat: 45.13550, lng: 17.21620 },
         // Same treatment as Gradiška: skip via-intermediate and fail open so the UI
         // prefers Google's road-following polyline over the straight calibrated fallback.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 4200, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 4200, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       },
       toHr: {
         label: 'BiH → HR',
@@ -840,7 +840,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.13550, lng: 17.21620 },
         borderPoint: { lat: 45.14250, lng: 17.20650 },
         exitPoint: { lat: 45.15050, lng: 17.19700 },
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 4200, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 4200, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       },
     },
   },
@@ -875,7 +875,7 @@ const BORDER_CROSSINGS = {
         // which dropped Bijača into the straight-line calibrated fallback. The free A1 route
         // naturally passes through the border zone. Fail open here because the previous
         // strict guard caused a straight-line fallback that visibly missed the motorway.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1000, displayAfterMeters: 1400, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1000, displayAfterMeters: 1400, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       },
       toHr: {
         label: 'BiH → HR',
@@ -884,7 +884,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 43.12300, lng: 17.57760 },
         borderPoint: { lat: 43.12340, lng: 17.56780 },
         exitPoint: { lat: 43.12376, lng: 17.55720 },
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1000, displayAfterMeters: 1400, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1000, displayAfterMeters: 1400, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       },
     },
   },
@@ -1150,7 +1150,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
         approachStart: { lat: 45.0508, lng: 18.7028 },
         borderPoint: { lat: 45.0405, lng: 18.7030 },
         exitPoint: { lat: 45.0315, lng: 18.7028 },
-        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 900, validateApproachExit: true, displayBeforeMeters: 900, displayAfterMeters: 1100, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 900, validateApproachExit: true, displayBeforeMeters: 900, displayAfterMeters: 1100, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       },
       toHr: {
         label: 'BiH → HR',
@@ -1159,7 +1159,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
         approachStart: { lat: 45.0315, lng: 18.7028 },
         borderPoint: { lat: 45.0405, lng: 18.7030 },
         exitPoint: { lat: 45.0508, lng: 18.7028 },
-        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 900, validateApproachExit: true, displayBeforeMeters: 900, displayAfterMeters: 1100, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 900, validateApproachExit: true, displayBeforeMeters: 900, displayAfterMeters: 1100, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       },
     },
     cameras: [
@@ -1189,7 +1189,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
         approachStart: { lat: 45.1597, lng: 18.0035 },
         borderPoint: { lat: 45.1497, lng: 18.0033 },
         exitPoint: { lat: 45.1395, lng: 18.0028 },
-        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 900, validateApproachExit: true, displayBeforeMeters: 950, displayAfterMeters: 1150, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 900, validateApproachExit: true, displayBeforeMeters: 950, displayAfterMeters: 1150, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       },
       toHr: {
         label: 'BiH → HR',
@@ -1198,7 +1198,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
         approachStart: { lat: 45.1395, lng: 18.0028 },
         borderPoint: { lat: 45.1497, lng: 18.0033 },
         exitPoint: { lat: 45.1597, lng: 18.0035 },
-        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 900, validateApproachExit: true, displayBeforeMeters: 950, displayAfterMeters: 1150, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 900, validateApproachExit: true, displayBeforeMeters: 950, displayAfterMeters: 1150, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       },
     },
     cameras: [
@@ -1229,7 +1229,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       approachHr: { lat: 45.06630, lng: 18.49659 },
       borderPoint: { lat: 45.06135, lng: 18.49385 },
       exitBih: { lat: 45.05647, lng: 18.49083 },
-      guard: { maxCrossingDistanceKm: 9, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 850, displayBeforeMeters: 800, displayAfterMeters: 1000, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+      guard: { maxCrossingDistanceKm: 9, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 850, displayBeforeMeters: 800, displayAfterMeters: 1000, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
     }),
     // FIX: k=300 ("Slavonski Šamac") embeds cam.asp?id=1015/1016. The k-derived 300.jpg was wrong.
     cameras: [{ id: 'sam-hak', label: 'Slavonski Šamac', url: 'https://m.hak.hr/kamera.asp?g=2&k=300', imageUrls: ['https://www.hak.hr/info/kamere/1015.jpg', 'https://www.hak.hr/info/kamere/1016.jpg'] }],
@@ -1246,7 +1246,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       approachHr: { lat: 45.12273, lng: 18.33281 },
       borderPoint: { lat: 45.10810, lng: 18.31310 },
       exitBih: { lat: 45.09351, lng: 18.29339 },
-      guard: { maxCrossingDistanceKm: 16, hardMaxCrossingDistanceKm: 34, passDistanceMeters: 1200, displayBeforeMeters: 1600, displayAfterMeters: 1900, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1800 } },
+      guard: { maxCrossingDistanceKm: 16, hardMaxCrossingDistanceKm: 34, passDistanceMeters: 1200, displayBeforeMeters: 1600, displayAfterMeters: 1900, displayCorridor: { requestExtendMeters: 1700, sliceMeters: 1800, fallbackPerSideMeters: 1500, fallbackMaxPerSideMeters: 1900 } },
     }),
     cameras: [{
       id: 'svi-hak', label: 'Svilaj',
@@ -1267,7 +1267,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       exitBih: { lat: 44.86889, lng: 15.77159 },
       // FORCED manual corridor: Google's polyline here loops/wiggles off the main road, so we never
       // use it for the display geometry — only a clean calibrated corridor along the M5/Izačić road.
-      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1500, displayAfterMeters: 1500, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1500, displayAfterMeters: 1500, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
     }),
     cameras: [
       // FIX: k=179 ("BIH Izačić") embeds cam.asp?id=407. Old 179.jpg = invalid-webcam placeholder.
@@ -1299,7 +1299,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       approachHr: { lat: 43.59778, lng: 16.98480 },
       borderPoint: { lat: 43.59485, lng: 16.98960 },
       exitBih: { lat: 43.59190, lng: 16.99455 },
-      guard: { maxCrossingDistanceKm: 9, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 900, displayBeforeMeters: 800, displayAfterMeters: 1050, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+      guard: { maxCrossingDistanceKm: 9, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 900, displayBeforeMeters: 800, displayAfterMeters: 1050, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
     }),
     cameras: [
       // FIX: k=193 ("Aržano") → cam.asp?id=315/316; k=180 ("BIH Prisika") → cam.asp?id=409.
@@ -1346,7 +1346,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       exitBih: { lat: 43.45549, lng: 17.29809 },
       // FORCED manual corridor: Google often returns a one-sided / non-crossing polyline here, so the
       // clean calibrated corridor (HR approach → border → BiH exit) is always used for the display.
-      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1600, displayAfterMeters: 1600, displayCorridor: { mode: 'manual', minPerSideMeters: 1300, maxPerSideMeters: 1700 } },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1600, displayAfterMeters: 1600, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
     }),
     // FIX: k=282 ("Vinjani Gornji") embeds cam.asp?id=994/995. Old 282.jpg = invalid-webcam placeholder.
     cameras: [{ id: 'vg-hak', label: 'Vinjani Gornji', url: 'https://m.hak.hr/kamera.asp?g=2&k=282', imageUrls: ['https://www.hak.hr/info/kamere/994.jpg', 'https://www.hak.hr/info/kamere/995.jpg'] }],
@@ -7976,14 +7976,30 @@ function sortCrossingRoutesByAnchorFit(routes = [], anchor = {}) {
     .map((entry) => entry.route);
 }
 
-// Origin/destination for the GOOGLE route request. Prefer the EXTENDED display anchors so the route
-// (and the drawn zone) covers more real road on both sides; precise anchors are the fallback. Route
-// guard still validates the polyline against the precise approachStart/borderPoint/exitPoint.
+// A point `extendMeters` out from the border along the border→target road bearing (never shorter
+// than the calibrated anchor itself). Pushing the Google request origin/destination further out
+// makes Google draw MORE of the REAL road on each side; Google snaps it to the actual carriageway.
+function extendedAlongRoad(borderPoint, target, extendMeters) {
+  if (!borderPoint || !target || !Number.isFinite(Number(extendMeters))) return target || null;
+  const dist = distanceMeters(borderPoint, target);
+  const reach = Math.max(dist, Number(extendMeters));
+  return pointAlongBearing(borderPoint, target, reach) || target;
+}
+
+// Origin/destination for the GOOGLE route request. Prefer an explicit display anchor; else, when a
+// displayCorridor.requestExtendMeters is set, extend the precise anchor along the road so Google
+// returns a LONGER road-following route on both sides; else the precise anchor.
 function routeOriginAnchor(anchor = {}) {
-  return anchor.displayApproachStart || anchor.approachStart;
+  if (anchor.displayApproachStart) return anchor.displayApproachStart;
+  const ext = anchor.routeGuard?.displayCorridor?.requestExtendMeters;
+  if (ext && anchor.borderPoint && anchor.approachStart) return extendedAlongRoad(anchor.borderPoint, anchor.approachStart, ext);
+  return anchor.approachStart;
 }
 function routeDestinationAnchor(anchor = {}) {
-  return anchor.displayExitPoint || anchor.exitPoint;
+  if (anchor.displayExitPoint) return anchor.displayExitPoint;
+  const ext = anchor.routeGuard?.displayCorridor?.requestExtendMeters;
+  if (ext && anchor.borderPoint && anchor.exitPoint) return extendedAlongRoad(anchor.borderPoint, anchor.exitPoint, ext);
+  return anchor.exitPoint;
 }
 
 // Clean fallback corridor — uses the EXTENDED display anchors when present so even the no-Google
@@ -8007,10 +8023,11 @@ function routeWiggleRatio(path = [], anchor = {}) {
 
 function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
   const guard = anchor.routeGuard || {};
-  // Longer-but-still-focused control zone: ~1.3 km each side by default so the user sees real road
-  // before AND after the booth (per-anchor guard can override). Capped well below a full city route.
-  let beforeMeters = Number(guard.displayBeforeMeters || process.env.ROUTE_DISPLAY_BEFORE_METERS || 1300);
-  let afterMeters = Number(guard.displayAfterMeters || process.env.ROUTE_DISPLAY_AFTER_METERS || 1300);
+  const dc = guard.displayCorridor || null;
+  // Longer-but-still-focused control zone. A displayCorridor.sliceMeters widens BOTH sides equally so
+  // the HR side is never cut short; otherwise per-anchor displayBefore/After apply.
+  let beforeMeters = Number(dc?.sliceMeters || guard.displayBeforeMeters || process.env.ROUTE_DISPLAY_BEFORE_METERS || 1300);
+  let afterMeters = Number(dc?.sliceMeters || guard.displayAfterMeters || process.env.ROUTE_DISPLAY_AFTER_METERS || 1300);
   const hrExtra = Number(process.env.ROUTE_HR_SIDE_EXTRA_METERS || guard.hrSideExtraMeters || 0);
   if (route.direction === 'toHr') afterMeters += hrExtra;
   else beforeMeters += hrExtra;
@@ -8034,53 +8051,30 @@ function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
 
   let displayGeometrySource = 'google-sliced-control-zone';
   let displayGeometryWarnings = [];
-  let manualUsed = false;
+  let usedFallbackCorridor = false;
 
-  // ── Manual / calibrated display corridor (problematic crossings) ────────────────────────────
-  // Some crossings get a loopy / one-sided / too-short Google polyline (Izačić loop, Vinjani Gornji
-  // not crossing, several HR-side stubs). For those, the display geometry is a CLEAN calibrated
-  // corridor along the road bearing through the border — either ALWAYS (mode 'manual') or only when
-  // Google fails the quality gate (mode 'auto'). A clean calibrated zone beats a wrong Google route.
-  const dc = guard.displayCorridor || null;
-  if (dc) {
-    const manualCorridor = buildCalibratedCorridor(anchor, { minPerSideMeters: dc.minPerSideMeters || 1000, maxPerSideMeters: dc.maxPerSideMeters || 1600 });
-    let useManual = dc.mode === 'manual';
-    let quality = null;
-    if (!useManual) {
-      quality = validateDisplayPathQuality(displayPath, anchor, { minSideMeters: 500, minTotalMeters: dc.minGoogleMeters || 1700, maxWiggleRatio: dc.maxWiggleRatio || 1.9 });
-      useManual = !quality.ok;
-    }
-    if (useManual && manualCorridor.length >= 3) {
-      displayPath = manualCorridor;
+  // PREFER Google's REAL road-following polyline. Only fall back to a clean straight corridor when the
+  // Google geometry is genuinely BROKEN — doesn't cross the border, loops / U-turns, is too wiggly, or
+  // is a stub. The straight corridor is the emergency, never the default (a straight line that ignores
+  // the road is worse than a slightly short one).
+  const quality = validateDisplayPathQuality(displayPath, anchor, {
+    minSideMeters: dc?.minSideMeters || 300,
+    minTotalMeters: dc?.minGoogleMeters || 900,
+    maxWiggleRatio: dc?.maxWiggleRatio || 1.8,
+    nearToleranceM: guard.passDistanceMeters ? Math.max(600, Number(guard.passDistanceMeters)) : 700,
+    maxTurnDeg: dc?.maxTurnDeg || 150,
+  });
+  if (!displayPath.length || displayDistanceMeters <= 0 || !quality.ok) {
+    const corridor = dc
+      ? buildCalibratedCorridor(anchor, { minPerSideMeters: dc.fallbackPerSideMeters || 1100, maxPerSideMeters: dc.fallbackMaxPerSideMeters || 1700 })
+      : cleanAnchorCorridorPath(anchor);
+    if (corridor.length >= 2) {
+      displayPath = corridor;
       displayDistanceMeters = pathDistanceMeters(displayPath);
-      manualUsed = true;
-      displayGeometrySource = 'calibrated-display-corridor';
-      displayGeometryWarnings = dc.mode === 'manual'
-        ? ['Ručno kalibrirana zona uz glavnu cestu (Google ruta za ovaj prijelaz nije pouzdana).']
-        : [`Google ruta nije zadovoljila provjeru kvalitete (${(quality?.reasons || []).join(', ') || 'loša'}); prikazana je ručno kalibrirana zona uz glavnu cestu.`];
+      usedFallbackCorridor = true;
+      displayGeometrySource = 'clean-anchor-corridor';
+      displayGeometryWarnings = [`Google ruta nije bila uredna (${(quality.reasons || ['nije dostupna']).join(', ')}); prikazana je čista kalibrirana zona koja prelazi granicu.`];
       slice = { startIndex: 0, endIndex: Math.max(0, (route.path || []).length - 1) };
-    }
-  }
-
-  // Fallback for crossings WITHOUT a calibrated corridor: reject a wiggly / non-crossing Google path
-  // in favour of the simple clean anchor corridor (must straddle the border with length on both sides).
-  if (!manualUsed) {
-    const wiggle = routeWiggleRatio(displayPath, anchor);
-    const tooWiggly = wiggle > Number(guard.displayMaxWiggleRatio || process.env.ROUTE_DISPLAY_MAX_WIGGLE_RATIO || 2.4);
-    const crossCheck = pathCrossesBorder(displayPath, anchor.borderPoint, { minSideMeters: 300, borderNearToleranceM: 600 });
-    if (!displayPath.length || displayDistanceMeters <= 0 || tooWiggly || !crossCheck.crosses) {
-      const corridor = cleanAnchorCorridorPath(anchor);
-      if (corridor.length >= 2) {
-        displayPath = corridor;
-        displayDistanceMeters = pathDistanceMeters(displayPath);
-        displayGeometrySource = 'clean-anchor-corridor';
-        displayGeometryWarnings = tooWiggly
-          ? [`Google putanja je previše vijugava za javni prikaz (ratio ${Math.round(wiggle * 10) / 10}); prikazana je čista zona.`]
-          : !crossCheck.crosses
-            ? [`Google putanja ne prelazi jasno granicu (${crossCheck.reason}); prikazana je čista kalibrirana zona koja prelazi granicu.`]
-            : ['Google putanja nije dala urednu zonu; prikazana je čista kalibrirana zona.'];
-        slice = { startIndex: 0, endIndex: Math.max(0, (route.path || []).length - 1) };
-      }
     }
   }
   if (!displayPath.length || displayDistanceMeters <= 0) return route;
@@ -8090,9 +8084,11 @@ function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
   // corridor has different geometry than Google's polyline, so we colour it UNIFORMLY by the route's
   // overall level instead of mis-mapping per-segment intervals onto it.
   const sourceTrafficIntervals = extractSpeedReadingIntervals(route);
-  const remappedIntervals = manualUsed ? [] : remapSpeedReadingIntervals(sourceTrafficIntervals, slice.startIndex, slice.endIndex);
+  const remappedIntervals = usedFallbackCorridor ? [] : remapSpeedReadingIntervals(sourceTrafficIntervals, slice.startIndex, slice.endIndex);
   let displayTrafficSegments;
-  if (manualUsed) {
+  if (usedFallbackCorridor) {
+    // The straight fallback corridor has different geometry than Google's polyline, so colour it
+    // uniformly by the route's overall level instead of mis-mapping per-segment intervals.
     const overallLevel = route.level || delayLevel(Number(route.delayMinutes || 0), Number(route.ratio || 1));
     const hadTraffic = sourceTrafficIntervals.length > 0 || Number(route.delayMinutes || 0) > 0;
     displayTrafficSegments = hadTraffic ? [{ path: displayPath, level: overallLevel, speed: trafficSpeedFromLevel(overallLevel) }] : [];
@@ -9292,6 +9288,8 @@ export {
   extractSpeedReadingIntervals,
   remapSpeedReadingIntervals,
   makeMapFriendlyControlZoneRoute,
+  routeOriginAnchor,
+  routeDestinationAnchor,
   // Exposed for integration tests (mint an admin token against the seeded admin user).
   signToken,
 };

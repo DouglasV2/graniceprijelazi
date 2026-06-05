@@ -193,8 +193,10 @@ export function validateDisplayPathQuality(path = [], anchor = {}, {
     if (!inc && !dec) reasons.push('bad-order');
   }
 
-  const direct = isPoint(approach) && isPoint(exit) ? distanceMetersLL(approach, exit) : 0;
-  const wiggleRatio = direct > 0 ? total / direct : 1;
+  // Wiggle = path length vs the straight line between the path's OWN endpoints (anchor-independent).
+  // A road-following route is ~1.0–1.5; an out-and-back loop has endpoints close together → high.
+  const endSpan = pts.length >= 2 ? distanceMetersLL(pts[0], pts[pts.length - 1]) : 0;
+  const wiggleRatio = endSpan > 0 ? total / endSpan : 1;
   if (wiggleRatio > maxWiggleRatio) reasons.push(`wiggle:${wiggleRatio.toFixed(2)}`);
   const turn = maxTurnAngleDeg(pts);
   if (turn > maxTurnDeg) reasons.push(`u-turn:${Math.round(turn)}`);
