@@ -113,9 +113,24 @@ describe('computeRoiCameraFeatures', () => {
   it('no ROI config → roiCalibrated false + NO_ROI_CONFIG, still reports visible count', () => {
     const f = computeRoiCameraFeatures(dets, null, { width: 1280, height: 720, coordSpace: 'percent' });
     expect(f.roiCalibrated).toBe(false);
+    expect(f.roiTrusted).toBe(false);
     expect(f.fallbackReason).toBe('NO_ROI_CONFIG');
     expect(f.visibleVehicleCount).toBe(4);
     expect(f.vehiclesInQueueRoi).toBeNull();
+  });
+  it('roiTrusted is FALSE for a seeded/needsEditorReview config (calibrated but unverified)', () => {
+    const seeded = { ...roiConfig, metadata: { needsEditorReview: true } };
+    const f = computeRoiCameraFeatures(dets, seeded, { width: 1280, height: 720, coordSpace: 'percent' });
+    expect(f.roiCalibrated).toBe(true);
+    expect(f.roiTrusted).toBe(false);
+  });
+  it('roiTrusted is FALSE for a rect-derived config', () => {
+    const rect = { ...roiConfig, derivedFromRect: true };
+    expect(computeRoiCameraFeatures(dets, rect, { width: 1280, height: 720, coordSpace: 'percent' }).roiTrusted).toBe(false);
+  });
+  it('roiTrusted is TRUE for a real reviewed polygon (version, no review flag)', () => {
+    const f = computeRoiCameraFeatures(dets, roiConfig, { width: 1280, height: 720, coordSpace: 'percent' });
+    expect(f.roiTrusted).toBe(true);
   });
 });
 

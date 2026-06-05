@@ -717,12 +717,12 @@ const BORDER_CROSSINGS = {
       // immediately before/through/after GP Maljevac. The earlier anchors were too far
       // toward Velika Kladuša and Google drew a city loop; these keep the map focused
       // on the actual border approach while still forcing the route through the crossing.
-      // Precise control anchors (used for route-guard pass-distance validation AND live-location
-      // A→B) stay SHORT and on the D216/M4.2. Separate `display*` anchors extend ~1.25 km further
-      // along the SAME road bearing — used only to request a longer Google route + draw a longer
-      // "Provjerena zona", never for validation or live measurement. Google snaps the request to the
-      // real road, so the drawn line stays on D216/M4.2; the wiggle guard + clean-corridor fallback
-      // protect against any city loop around Velika Kladuša.
+      // Precise control anchors stay SHORT + ON the D216/M4.2 (route-guard pass-distance AND
+      // live-location A→B use ONLY these). The display zone is the Google ROAD-FOLLOWING polyline
+      // requested between these anchors, modestly extended (~1 km/side) along the road. The earlier
+      // hardcoded 1.25 km display anchors overshot a road bend on the HR side → Google drew an
+      // off-road spur to reach them; removed. displayCorridor.requestExtendMeters keeps the extension
+      // modest + on-road, validateDisplayPathQuality rejects any spur/loop (clean fallback only then).
       toBih: {
         label: 'HR → BiH',
         fromLabel: 'Maljevac · HR prilaz kontroli',
@@ -730,10 +730,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.19985, lng: 15.79042 },
         borderPoint: { lat: 45.19583, lng: 15.79639 },
         exitPoint: { lat: 45.19295, lng: 15.80155 },
-        // HR side extended NW toward Maljevac; BiH side extended SE toward Velika Kladuša.
-        displayApproachStart: { lat: 45.20359, lng: 15.78485 },
-        displayExitPoint: { lat: 45.18885, lng: 15.80889 },
-        routeGuard: { maxCrossingDistanceKm: 6, hardMaxCrossingDistanceKm: 14, passDistanceMeters: 600, validateApproachExit: true, displayBeforeMeters: 1400, displayAfterMeters: 1400, displayMaxMeters: 3400 },
+        routeGuard: { maxCrossingDistanceKm: 6, hardMaxCrossingDistanceKm: 14, passDistanceMeters: 600, validateApproachExit: true, displayMaxMeters: 3000, displayCorridor: { requestExtendMeters: 1000, sliceMeters: 1200, fallbackPerSideMeters: 1000, fallbackMaxPerSideMeters: 1300 } },
       },
       toHr: {
         label: 'BiH → HR',
@@ -742,10 +739,7 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.19295, lng: 15.80155 },
         borderPoint: { lat: 45.19583, lng: 15.79639 },
         exitPoint: { lat: 45.19985, lng: 15.79042 },
-        // BiH side (approach) extended SE toward Velika Kladuša; HR side (exit) extended NW toward Maljevac.
-        displayApproachStart: { lat: 45.18885, lng: 15.80889 },
-        displayExitPoint: { lat: 45.20359, lng: 15.78485 },
-        routeGuard: { maxCrossingDistanceKm: 6, hardMaxCrossingDistanceKm: 14, passDistanceMeters: 600, validateApproachExit: true, displayBeforeMeters: 1400, displayAfterMeters: 1400, displayMaxMeters: 3400 },
+        routeGuard: { maxCrossingDistanceKm: 6, hardMaxCrossingDistanceKm: 14, passDistanceMeters: 600, validateApproachExit: true, displayMaxMeters: 3000, displayCorridor: { requestExtendMeters: 1000, sliceMeters: 1200, fallbackPerSideMeters: 1000, fallbackMaxPerSideMeters: 1300 } },
       },
     },
   },

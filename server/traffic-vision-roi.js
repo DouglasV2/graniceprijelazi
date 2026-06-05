@@ -173,6 +173,7 @@ export function computeRoiCameraFeatures(detections = [], roiConfig = null, imag
       isNightOrLowLight: Boolean(imageMeta.isNightOrLowLight),
       cameraImageQualityScore: isNum(imageMeta.qualityScore) ? round2(imageMeta.qualityScore) : null,
       roiCalibrated: false,
+      roiTrusted: false,
       roiVersion: null,
       fallbackReason: 'NO_ROI_CONFIG',
     };
@@ -208,6 +209,10 @@ export function computeRoiCameraFeatures(detections = [], roiConfig = null, imag
     isNightOrLowLight: Boolean(imageMeta.isNightOrLowLight),
     cameraImageQualityScore: isNum(imageMeta.qualityScore) ? round2(imageMeta.qualityScore) : null,
     roiCalibrated: true,
+    // TRUSTED only when the polygon is a real reviewed calibration — NOT a rect-derived guess and NOT
+    // a seeded config still flagged needsEditorReview. An untrusted ROI may count 0 in a mis-mapped
+    // zone, so the UI must not turn that into a confident "no queue" claim.
+    roiTrusted: Boolean(roiConfig.roiVersion) && !roiConfig.derivedFromRect && !(roiConfig.metadata && roiConfig.metadata.needsEditorReview),
     roiVersion: roiConfig.roiVersion || null,
     fallbackReason: null,
   };

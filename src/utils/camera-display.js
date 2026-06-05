@@ -50,18 +50,24 @@ export function buildCameraQueueLabel(analytics = {}, { estimateUsable = false }
   const cvUsed = analytics.cvUsed === true || analytics.yoloUsed === true;
   const roiFeatures = analytics.roiFeaturesPrimary || analytics.roiFeatures || analytics.yoloCamera || null;
   const roiCalibrated = Boolean(roiFeatures?.roiCalibrated || analytics.roiCalibrated);
+  // TRUSTED ROI = a real reviewed polygon. A seeded/rect-derived ROI (roiTrusted false) may count 0
+  // in a mis-mapped zone, so we must NOT turn that into a confident "AI kamera ne vidi kolonu".
+  const roiTrusted = Boolean(roiFeatures?.roiTrusted);
   const queueVehicles = Number(roiFeatures?.vehiclesInQueueRoi ?? analytics.queueVehicles ?? NaN);
   const noDetections = normalizeText(analytics.cvFallbackReason).includes('no-detections') || queueVehicles === 0;
 
   if (estimateUsable) {
-    if (roiCalibrated && Number.isFinite(queueVehicles)) return `${queueVehicles} vozila u koloni`;
+    if (roiCalibrated && roiTrusted && Number.isFinite(queueVehicles)) return `${queueVehicles} vozila u koloni`;
     return raw;
   }
-  if (cvUsed && roiCalibrated && Number.isFinite(queueVehicles)) {
+  // Only a TRUSTED, calibrated ROI may state a precise count or "no queue".
+  if (cvUsed && roiCalibrated && roiTrusted && Number.isFinite(queueVehicles)) {
     if (queueVehicles <= 1 || noDetections) return 'AI kamera ne vidi kolonu';
     return `AI kamera vidi ${queueVehicles} vozila u koloni`;
   }
-  if (cvUsed && !roiCalibrated) return 'AI signal niže pouzdanosti';
+  // Calibrated-but-unverified (seeded/rect-derived) → neutral, never a confident no-queue claim.
+  if (cvUsed && roiCalibrated && !roiTrusted) return 'Kamera dostupna za vizualnu provjeru';
+  if (cvUsed && !roiCalibrated) return 'AI kamera nije dovoljno kalibrirana za procjenu kolone';
   return cautiousBandLabel(raw);
 }
 
@@ -81,11 +87,14 @@ export function buildCameraTrustText(analytics = {}, { estimateUsable = false, c
   const cvUsed = analytics.cvUsed === true || analytics.yoloUsed === true;
   const roiFeatures = analytics.roiFeaturesPrimary || analytics.roiFeatures || analytics.yoloCamera || null;
   const roiCalibrated = Boolean(roiFeatures?.roiCalibrated || analytics.roiCalibrated);
+  const roiTrusted = Boolean(roiFeatures?.roiTrusted);
   const fallback = analytics.cvFallbackReason || roiFeatures?.fallbackReason || null;
 
-  if (estimateUsable && cvUsed && roiCalibrated) return 'Procjena koristi AI detekciju vozila unutar kalibrirane zone kolone.';
+  if (estimateUsable && cvUsed && roiCalibrated && roiTrusted) return 'Procjena koristi AI detekciju vozila unutar kalibrirane zone kolone.';
   if (estimateUsable) return analytics.message || 'Procjena iz kamere koristi svježi signal, ali i dalje je uspoređujemo s javnim izvorima.';
   if (contradictsOfficial) return 'Kamera se ne slaže dovoljno sa službenim izvorom, zato ju prikazujemo samo kao vizualnu provjeru.';
+  // Calibrated but not yet reviewed (seeded/rect-derived) → don't claim a reliable verdict.
+  if (cvUsed && roiCalibrated && !roiTrusted) return 'AI kamera nije dovoljno kalibrirana za procjenu kolone — kamera prikazuje promet, ali čekanje ne izvodimo samo iz slike.';
   if (cvUsed && !roiCalibrated) return 'AI vidi vozila, ali kamera nije potpuno kalibrirana.';
   if (!cvUsed && fallback) return `Kamera trenutno služi kao vizualna provjera. ${cameraStatusCopy(fallback)}`;
   return 'Kamera trenutno služi kao vizualna provjera — čekanje ne izvodimo iz same slike.';

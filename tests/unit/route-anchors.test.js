@@ -4,7 +4,7 @@
 // anchors and span a non-degenerate control zone.
 
 import { describe, it, expect } from 'vitest';
-import { BORDER_CROSSINGS } from '../../server/index.js';
+import { BORDER_CROSSINGS, makeMapFriendlyControlZoneRoute, routeOriginAnchor } from '../../server/index.js';
 import { buildMeasurementZone, pathCrossesBorder } from '../../server/map-display-geometry.js';
 import { buildLocationWaitAnchors } from '../../server/location-wait-anchors.js';
 
@@ -73,52 +73,60 @@ describe('display zone crosses the border (no-Google fallback corridor)', () => 
   }
 });
 
-describe('Maljevac display zone is longer + crosses the border (both directions)', () => {
-  const MIN_SIDE_M = 500;
-  const MIN_TOTAL_M = 1800;
+describe('Maljevac display route follows the road (Google), no off-road spur, crosses', () => {
+  const lerp = (p, q, t) => ({ lat: p.lat + (q.lat - p.lat) * t, lng: p.lng + (q.lng - p.lng) * t });
+  // A dense, road-following-ish Google path that runs beyond approach, through the border, beyond exit.
+  function goodPath(anchor) {
+    const A = anchor.approachStart; const B = anchor.borderPoint; const E = anchor.exitPoint;
+    const far1 = lerp(B, A, 1.8); const far2 = lerp(B, E, 1.8);
+    const pts = [];
+    for (let i = 0; i < 14; i += 1) pts.push(lerp(far1, B, i / 14));
+    for (let i = 0; i <= 14; i += 1) pts.push(lerp(B, far2, i / 14));
+    return pts;
+  }
+
+  it('the off-road display anchors are removed (root cause of the HR-side spur)', () => {
+    for (const direction of ['toBih', 'toHr']) {
+      const a = BORDER_CROSSINGS.maljevac.anchors[direction];
+      expect(a.displayApproachStart).toBeUndefined();
+      expect(a.displayExitPoint).toBeUndefined();
+      expect(a.routeGuard.displayCorridor).toBeTruthy();
+    }
+  });
+
   for (const direction of ['toBih', 'toHr']) {
-    it(`maljevac · ${direction} crosses border, >${MIN_SIDE_M}m each side, >${MIN_TOTAL_M}m total`, () => {
+    it(`maljevac · ${direction}: a good Google path is KEPT (road-like, not a 3-point straight line) + crosses`, () => {
       const anchor = BORDER_CROSSINGS.maljevac.anchors[direction];
-      const zone = buildMeasurementZone({ path: [], anchor, direction });
-      expect(zone.crossesBorder).toBe(true);
-      expect(zone.beforeBorderKm * 1000).toBeGreaterThan(MIN_SIDE_M);
-      expect(zone.afterBorderKm * 1000).toBeGreaterThan(MIN_SIDE_M);
-      expect(zone.zoneDistanceKm * 1000).toBeGreaterThan(MIN_TOTAL_M);
-      // realistic upper bound — still a "zone", not a city route
-      expect(zone.zoneDistanceKm).toBeLessThan(3.6);
+      const route = { path: goodPath(anchor), direction, distanceMeters: 4000, durationMinutes: 6, staticMinutes: 5, delayMinutes: 1, primary: true, speedReadingIntervals: [] };
+      const out = makeMapFriendlyControlZoneRoute(route, anchor);
+      expect(out.displayGeometrySource).toBe('google-sliced-control-zone');
+      expect(out.displayZone.crossesBorder).toBe(true);
+      expect(out.path.length).toBeGreaterThan(3); // road-like, NOT a straight 3-point corridor
     });
   }
 
-  it('maljevac toHr goes BiH approach → border → HR exit (correct order, ends on HR side)', () => {
-    const anchor = BORDER_CROSSINGS.maljevac.anchors.toHr;
-    const zone = buildMeasurementZone({ path: [], anchor, direction: 'toHr' });
-    // BiH side is east (higher lng), HR side is west (lower lng); border lng sits between them.
-    expect(zone.approachAnchor.lng).toBeGreaterThan(zone.borderAnchor.lng); // approach on BiH side
-    expect(zone.exitAnchor.lng).toBeLessThan(zone.borderAnchor.lng);        // exit on HR side
-    expect(zone.exitAnchor).toEqual(anchor.displayExitPoint);               // ends at the HR exit anchor
+  it('the Google REQUEST extends beyond the precise anchor but NOT to the old off-road 1.25km point', () => {
+    const a = BORDER_CROSSINGS.maljevac.anchors.toBih;
+    const origin = routeOriginAnchor(a);
+    const dFromBorder = distanceMeters(a.borderPoint, origin);
+    const dPrecise = distanceMeters(a.borderPoint, a.approachStart);
+    expect(dFromBorder).toBeGreaterThanOrEqual(dPrecise - 1); // at least as far as the precise anchor
+    expect(dFromBorder).toBeLessThan(1150);                   // modest — not the off-road 1.25km overshoot
   });
 
-  it('maljevac toBih goes HR approach → border → BiH exit (correct order)', () => {
-    const anchor = BORDER_CROSSINGS.maljevac.anchors.toBih;
-    const zone = buildMeasurementZone({ path: [], anchor, direction: 'toBih' });
-    expect(zone.approachAnchor.lng).toBeLessThan(zone.borderAnchor.lng);    // approach on HR side
-    expect(zone.exitAnchor.lng).toBeGreaterThan(zone.borderAnchor.lng);     // exit on BiH side
-  });
-
-  it('a one-sided Google path for Maljevac falls back to a corridor that still crosses', () => {
+  it('a one-sided / spur Google path falls back to a corridor that still crosses (emergency only)', () => {
     const anchor = BORDER_CROSSINGS.maljevac.anchors.toHr;
-    // a stub that stays on the BiH side and never reaches HR
-    const stub = [{ lat: 45.1889, lng: 15.8089 }, { lat: 45.1925, lng: 15.8030 }, { lat: 45.1945, lng: 15.7985 }];
-    const zone = buildMeasurementZone({ path: stub, anchor, direction: 'toHr' });
-    expect(zone.geometrySource).toBe('clean-anchor-corridor');
-    expect(zone.crossesBorder).toBe(true);
+    const stub = [anchor.approachStart, lerp(anchor.approachStart, anchor.borderPoint, 0.3)]; // never crosses
+    const route = { path: stub, direction: 'toHr', distanceMeters: 400, durationMinutes: 2, staticMinutes: 2, delayMinutes: 0, primary: true, speedReadingIntervals: [] };
+    const out = makeMapFriendlyControlZoneRoute(route, anchor);
+    expect(out.displayGeometrySource).toBe('clean-anchor-corridor');
+    expect(out.displayZone.crossesBorder).toBe(true);
   });
 });
 
-// Live-location must keep using the PRECISE short anchors, never the extended display anchors.
-describe('live-location anchors stay precise + finite (not replaced by display/Google geometry)', () => {
+describe('live-location anchors stay precise + finite (unchanged by the Maljevac route fix)', () => {
   for (const direction of ['toBih', 'toHr']) {
-    it(`maljevac · ${direction} location-wait anchors are finite + equal the precise control anchors`, () => {
+    it(`maljevac · ${direction} location-wait anchors finite + equal the precise control anchors`, () => {
       const anchor = BORDER_CROSSINGS.maljevac.anchors[direction];
       const la = buildLocationWaitAnchors(BORDER_CROSSINGS.maljevac, direction);
       expect(la).toBeTruthy();
@@ -126,18 +134,14 @@ describe('live-location anchors stay precise + finite (not replaced by display/G
         expect(Number.isFinite(a.lat)).toBe(true);
         expect(Number.isFinite(a.lng)).toBe(true);
       }
-      // start/end follow the PRECISE approachStart/exitPoint, NOT the extended display anchors.
       expect(distanceMeters(la.startAnchor, anchor.approachStart)).toBeLessThan(5);
       expect(distanceMeters(la.endAnchor, anchor.exitPoint)).toBeLessThan(5);
-      expect(distanceMeters(la.startAnchor, anchor.displayApproachStart)).toBeGreaterThan(500);
-      expect(distanceMeters(la.endAnchor, anchor.displayExitPoint)).toBeGreaterThan(500);
     });
   }
 
-  it('the precise Maljevac control zone stays SHORT (so route-guard + live measurement are tight)', () => {
+  it('the precise Maljevac control zone stays SHORT (route-guard + live measurement tight)', () => {
     for (const direction of ['toBih', 'toHr']) {
       const a = BORDER_CROSSINGS.maljevac.anchors[direction];
-      // precise approachStart → exitPoint is the tight control zone, well under the display corridor
       expect(distanceMeters(a.approachStart, a.exitPoint)).toBeLessThan(1500);
     }
   });

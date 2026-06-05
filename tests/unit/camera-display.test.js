@@ -47,14 +47,37 @@ describe('camera queue label honesty', () => {
     expect(buildCameraQueueLabel({ queueBandLabel: 'Srednja kolona', cvUsed: false }, { estimateUsable: false })).toBe('Vizualno djeluje kao srednja kolona');
   });
 
-  it('shows a precise queue label only for calibrated AI signal', () => {
-    expect(buildCameraQueueLabel({ cvUsed: true, roiFeatures: { roiCalibrated: true, vehiclesInQueueRoi: 7 } }, { estimateUsable: false })).toBe('AI kamera vidi 7 vozila u koloni');
+  it('shows a precise queue label only for a calibrated + TRUSTED AI signal', () => {
+    expect(buildCameraQueueLabel({ cvUsed: true, roiFeatures: { roiCalibrated: true, roiTrusted: true, vehiclesInQueueRoi: 7 } }, { estimateUsable: false })).toBe('AI kamera vidi 7 vozila u koloni');
   });
 
   it('explains no-ROI as "not fully calibrated" (no raw technical token)', () => {
     const txt = buildCameraTrustText({ cvUsed: true, roiFeatures: { roiCalibrated: false } });
     expect(txt).toMatch(/nije potpuno kalibrirana/);
     expect(txt).not.toMatch(/no-detection|YOLO|fallback/i);
+  });
+});
+
+describe('Maljevac-style seeded/unverified ROI must NOT claim "no queue" (roiTrusted gate)', () => {
+  // Seeded ROI (needsEditorReview) → computeRoiCameraFeatures sets roiTrusted:false. A 0-count in a
+  // possibly mis-mapped seeded ROI must read as a neutral visual check, never "AI kamera ne vidi kolonu".
+  it('calibrated-but-untrusted ROI with 0 vehicles → neutral visual-check label', () => {
+    const label = buildCameraQueueLabel({ cvUsed: true, roiFeatures: { roiCalibrated: true, roiTrusted: false, vehiclesInQueueRoi: 0 } }, { estimateUsable: false });
+    expect(label).toBe('Kamera dostupna za vizualnu provjeru');
+    expect(label).not.toMatch(/ne vidi kolonu/);
+  });
+  it('no-detections + untrusted ROI → neutral, never a confident "no queue"', () => {
+    const label = buildCameraQueueLabel({ cvUsed: true, cvFallbackReason: 'no-detections', roiFeatures: { roiCalibrated: true, roiTrusted: false } }, { estimateUsable: false });
+    expect(label).not.toMatch(/ne vidi kolonu/);
+  });
+  it('the trust text for an untrusted ROI says "nije dovoljno kalibrirana", not a verdict', () => {
+    const txt = buildCameraTrustText({ cvUsed: true, roiFeatures: { roiCalibrated: true, roiTrusted: false } });
+    expect(txt).toMatch(/nije dovoljno kalibrirana/);
+    expect(txt).not.toMatch(/ne vidi kolonu/);
+  });
+  it('a TRUSTED, calibrated ROI with 0 vehicles MAY say "ne vidi kolonu" (genuinely empty)', () => {
+    const label = buildCameraQueueLabel({ cvUsed: true, roiFeatures: { roiCalibrated: true, roiTrusted: true, vehiclesInQueueRoi: 0 } }, { estimateUsable: false });
+    expect(label).toBe('AI kamera ne vidi kolonu');
   });
 });
 
