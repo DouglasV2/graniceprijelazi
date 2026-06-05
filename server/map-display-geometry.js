@@ -126,6 +126,86 @@ export function pathCrossesBorder(path = [], borderPoint = null, { minSideMeters
   return { crosses: true, reason: null, beforeMeters, afterMeters, borderDist: Math.round(proj.dist) };
 }
 
+// A point `targetMeters` from `origin` along the bearing origin→toward (in the local metre frame).
+export function pointAlongBearing(origin, toward, targetMeters) {
+  if (!isPoint(origin) || !isPoint(toward)) return null;
+  const originLat = Number(origin.lat);
+  const O = toXY(origin, originLat); const T = toXY(toward, originLat);
+  let dx = T.x - O.x; let dy = T.y - O.y;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return { lat: Number(origin.lat), lng: Number(origin.lng) };
+  dx /= len; dy /= len;
+  return fromXY({ x: O.x + dx * targetMeters, y: O.y + dy * targetMeters }, originLat);
+}
+
+// Build a CLEAN, manually-calibrated display corridor straight along the road bearing through the
+// border: [outerApproach, borderPoint, outerExit]. Each side is clamped to [minPerSide, maxPerSide]
+// so it is never a stub and never an absurd city route. Guaranteed to cross the border, follow the
+// approach/exit bearing, and have NO loop — independent of Google. Returns [] if anchors are bad.
+export function buildCalibratedCorridor(anchor = {}, { minPerSideMeters = 1000, maxPerSideMeters = 1600 } = {}) {
+  const border = anchor.borderPoint; const approach = anchor.approachStart; const exit = anchor.exitPoint;
+  if (!isPoint(border) || !isPoint(approach) || !isPoint(exit)) return [];
+  const clampSide = (p) => Math.max(minPerSideMeters, Math.min(maxPerSideMeters, distanceMetersLL(border, p)));
+  const outerApproach = pointAlongBearing(border, approach, clampSide(approach));
+  const outerExit = pointAlongBearing(border, exit, clampSide(exit));
+  return [outerApproach, border, outerExit].filter(isPoint);
+}
+
+// Largest turn angle (deg) at any interior vertex: 0 = straight, ~180 = U-turn. Catches loops.
+function maxTurnAngleDeg(pts) {
+  if (pts.length < 3) return 0;
+  const originLat = Number(pts[0].lat);
+  let max = 0;
+  for (let i = 1; i < pts.length - 1; i += 1) {
+    const A = toXY(pts[i - 1], originLat); const B = toXY(pts[i], originLat); const C = toXY(pts[i + 1], originLat);
+    const v1x = B.x - A.x; const v1y = B.y - A.y; const v2x = C.x - B.x; const v2y = C.y - B.y;
+    const m1 = Math.hypot(v1x, v1y); const m2 = Math.hypot(v2x, v2y);
+    if (m1 < 1 || m2 < 1) continue;
+    let cos = (v1x * v2x + v1y * v2y) / (m1 * m2);
+    cos = Math.max(-1, Math.min(1, cos));
+    const turn = (Math.acos(cos) * 180) / Math.PI;
+    if (turn > max) max = turn;
+  }
+  return max;
+}
+
+// Validate a candidate display path against the calibrated anchors. Used to REJECT a bad Google
+// polyline (loop / wiggle / one-sided / too short / wrong order) in favour of the manual corridor.
+export function validateDisplayPathQuality(path = [], anchor = {}, {
+  minSideMeters = 500, minTotalMeters = 1500, maxWiggleRatio = 2.0, nearToleranceM = 700, maxTurnDeg = 150,
+} = {}) {
+  const pts = (path || []).filter(isPoint);
+  const reasons = [];
+  const border = anchor.borderPoint; const approach = anchor.approachStart; const exit = anchor.exitPoint;
+  const total = pathLengthMeters(pts);
+  if (pts.length < 3) reasons.push('too-few-points');
+  if (total < minTotalMeters) reasons.push('too-short');
+
+  const cross = isPoint(border) ? pathCrossesBorder(pts, border, { minSideMeters, borderNearToleranceM: nearToleranceM }) : { crosses: false, reason: 'no-border', beforeMeters: 0, afterMeters: 0 };
+  if (!cross.crosses) reasons.push(`no-cross:${cross.reason || '?'}`);
+
+  if (pts.length >= 2 && isPoint(approach) && isPoint(border) && isPoint(exit)) {
+    const pa = projectOntoPath(pts, approach); const pb = projectOntoPath(pts, border); const pe = projectOntoPath(pts, exit);
+    if (pa.dist > nearToleranceM) reasons.push('approach-off-path');
+    if (pe.dist > nearToleranceM) reasons.push('exit-off-path');
+    const inc = pa.beforeLen <= pb.beforeLen && pb.beforeLen <= pe.beforeLen;
+    const dec = pa.beforeLen >= pb.beforeLen && pb.beforeLen >= pe.beforeLen;
+    if (!inc && !dec) reasons.push('bad-order');
+  }
+
+  const direct = isPoint(approach) && isPoint(exit) ? distanceMetersLL(approach, exit) : 0;
+  const wiggleRatio = direct > 0 ? total / direct : 1;
+  if (wiggleRatio > maxWiggleRatio) reasons.push(`wiggle:${wiggleRatio.toFixed(2)}`);
+  const turn = maxTurnAngleDeg(pts);
+  if (turn > maxTurnDeg) reasons.push(`u-turn:${Math.round(turn)}`);
+
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    metrics: { totalMeters: Math.round(total), beforeMeters: cross.beforeMeters, afterMeters: cross.afterMeters, wiggleRatio: Math.round(wiggleRatio * 100) / 100, maxTurnDeg: Math.round(turn) },
+  };
+}
+
 // Main entry: a clean, professional measurement-zone display model for one crossing/direction.
 // Uses EXTENDED display anchors when provided (so the zone is longer along the real main road) while
 // the precise anchors stay reserved for route-guard validation + live-location. If the supplied path
