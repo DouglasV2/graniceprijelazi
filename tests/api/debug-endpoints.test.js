@@ -88,6 +88,13 @@ describe('GET /api/admin/traffic-vision/:crossingId/:direction — decision + so
     expect(sb.verifiedLocation).toHaveProperty('sampleCount');
     expect(sb.verifiedLocation).toHaveProperty('enabled'); // per-crossing flag visibility
     expect(sb.camera).toHaveProperty('visualBand');
+    // Camera signal-path transparency: WHY the camera signal is used or ignored, the canonical
+    // camera for this direction, and the analytics wait the fusion saw (no silent visualBand:null).
+    expect(typeof sb.camera.reason).toBe('string');
+    expect(sb.camera.reason.length).toBeGreaterThan(0);
+    expect(sb.camera).toHaveProperty('cameraAnalyticsWait');
+    expect(sb.camera).toHaveProperty('visualSnapshotAgeSeconds');
+    expect(sb.camera.expectedCameraId).toBe('mal-hak-hr-exit'); // toBih → exit camera
     // The "why": which signal led, what floor, and the readable reason.
     expect(res.body.decision).toHaveProperty('selectedPrimarySignal');
     expect(res.body.decision).toHaveProperty('conflictKind');

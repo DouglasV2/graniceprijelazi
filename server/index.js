@@ -2566,12 +2566,18 @@ async function buildCameraSourceSnapshots({ forceSnapshot = false } = {}) {
       });
     }
 
-    // (2) VISUAL signal — the camera's qualitative band, emitted for ANY band (even visual-only
-    // cameras) whenever there is a real frame. Carries NO wait (never drives the number), only
-    // the band — so the fusion can flag BOTH conflicts: a big queue while the wait is low
-    // (Maljevac), AND no/small queue while the wait is very high (Šamac).
+    // (2) VISUAL signal — the camera's qualitative band, emitted for ANY fresh frame that produced a
+    // band, even when the wait is NOT camera-driven (visual-only / heuristic occupancy). This is the
+    // signal that lets the fusion SEE a queue the detector couldn't count, so a visibly busy lane
+    // can't collapse to a false-low estimate — and it no longer depends on a snapshot-counter/cv
+    // frame (previously a heuristic occupancy band never reached effectiveBorderSignal → the live
+    // "visualBand:null while camera-analytics shows a queue" bug). Carries NO wait (never drives the
+    // number), only the band — so the fusion can flag a big queue while the wait is low (Maljevac)
+    // and a small/no queue while the wait is very high (Šamac).
     const band = analytics.queueBand;
-    if (band && (hasActualSnapshot || hasIngestOrCv)) {
+    const frameCount = (analytics.cameraSnapshots || []).length;
+    if (band && frameCount > 0) {
+      const occ = Math.max(0, ...(analytics.cameraSnapshots || []).map((s) => Number(s.occupancyPct ?? s.metadata?.occupancyPct ?? 0)));
       out.push({
         crossingId,
         direction,
@@ -2584,7 +2590,14 @@ async function buildCameraSourceSnapshots({ forceSnapshot = false } = {}) {
         normalizedWaitMin: null,
         confidence: 60,
         weight: 0,
-        metadata: { queueBand: band, queueBandLabel: analytics.queueBandLabel, waitIsCameraDriven: Boolean(analytics.waitIsCameraDriven) },
+        metadata: {
+          queueBand: band,
+          queueBandLabel: analytics.queueBandLabel,
+          waitIsCameraDriven: Boolean(analytics.waitIsCameraDriven),
+          occupancyPct: Number.isFinite(occ) ? occ : null,
+          cameraIds: (analytics.cameraSnapshots || []).map((s) => s.cameraId).filter(Boolean),
+          cameraAnalyticsWait: analytics.wait ?? null,
+        },
         fetchedAt: new Date().toISOString(),
       });
     }
@@ -4201,10 +4214,39 @@ app.get('/api/admin/traffic-vision/:crossingId/:direction', authRequired, adminR
     const verWaits = verified.map((s) => Number(s.measuredWaitMin)).filter(Number.isFinite).sort((a, b) => a - b);
     const medianOf = (arr) => (arr.length ? arr[Math.floor((arr.length - 1) / 2)] : null);
     const ageSecOf = (ts) => (ts ? Math.round((Date.now() - new Date(ts).getTime()) / 1000) : null);
+    // Canonical camera signal as the FUSION sees it (stored source snapshots — not the on-demand
+    // Camera-tab call). This is what makes the disconnect explainable: did a camera-visual/-model
+    // snapshot actually reach effectiveBorderSignal, how old is it, and was it used or ignored.
+    const cameraStored = await readLatestSourceSnapshots(crossing.id, direction, 8);
+    const camVisual = cameraStored.filter((s) => s.sourceType === 'camera-visual').sort((a, b) => new Date(b.fetchedAt) - new Date(a.fetchedAt))[0] || null;
+    const camModel = cameraStored.filter((s) => s.sourceType === 'camera-snapshot-model').sort((a, b) => new Date(b.fetchedAt) - new Date(a.fetchedAt))[0] || null;
+    const expectedCameraId = (CAMERA_FEEDS[crossing.id] || []).find((c) => Array.isArray(c.validForDirections) && c.validForDirections.includes(direction))?.id || null;
+    let cameraReason;
+    if (sig.visualBand) {
+      cameraReason = sig.conflictKind === 'camera-congestion'
+        ? `Kamera vizualno pokazuje '${sig.visualBand}' → primijenjen floor (vidi decision.appliedFloor).`
+        : `Kamera vizualno pokazuje '${sig.visualBand}' (ne diže estimate iznad trenutnog broja).`;
+    } else if (camVisual) {
+      cameraReason = 'Camera-visual snapshot postoji ali je izvan svježine (stale) → fusion ga ignorira.';
+    } else {
+      cameraReason = 'Nema svježeg camera-visual signala u fusionu (refresh nije proizveo band — kamera nedostupna ili nema kolone). Pokreni POST /api/admin/sources/refresh.';
+    }
     const sourceBreakdown = {
       publicSource: sig.explanationPayload?.publicSource || null,
       googleTraffic: sig.explanationPayload?.googleTraffic || null,
-      camera: { visualBand: sig.visualBand || null, hasStrongCameraQueue: Boolean(sig.hasStrongCameraQueue), roiTrusted: Boolean(sig.predictionV2?.sourceBreakdown?.yoloCamera?.roiTrusted), vehiclesInQueueRoi: sig.predictionV2?.sourceBreakdown?.yoloCamera?.vehiclesInQueueRoi ?? null },
+      camera: {
+        visualBand: sig.visualBand || null,
+        hasStrongCameraQueue: Boolean(sig.hasStrongCameraQueue),
+        roiTrusted: Boolean(sig.predictionV2?.sourceBreakdown?.yoloCamera?.roiTrusted),
+        vehiclesInQueueRoi: sig.predictionV2?.sourceBreakdown?.yoloCamera?.vehiclesInQueueRoi ?? null,
+        expectedCameraId, // toHr → mal-hak-hr-entry, toBih → mal-hak-hr-exit
+        cameraIds: camVisual?.metadata?.cameraIds || (camModel?.metadata?.snapshots || []).map((s) => s.cameraId) || [],
+        cameraAnalyticsWait: camVisual?.metadata?.cameraAnalyticsWait ?? (camModel ? camModel.normalizedWaitMin : null),
+        cameraWaitDriven: Boolean(camModel && camModel.normalizedWaitMin != null),
+        visualSnapshotAgeSeconds: ageSecOf(camVisual?.fetchedAt),
+        visualOccupancyPct: camVisual?.metadata?.occupancyPct ?? null,
+        reason: cameraReason,
+      },
       userReports: { sampleCount: reps.length, medianWaitMin: medianOf(repWaits), latestAgeSeconds: ageSecOf(reps[0]?.createdAt), measuredCount: reps.filter((r) => r.measured).length },
       verifiedLocation: { sampleCount: verified.length, medianWaitMin: medianOf(verWaits), latestAgeSeconds: ageSecOf(verified[0]?.serverCompletedAt), enabled: verifiedLocationEnabledFor(crossing.id) },
     };
