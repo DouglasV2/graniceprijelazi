@@ -3054,8 +3054,15 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
       window.google.maps.event.trigger(map, 'resize');
       recenter();
     };
-    const tA = window.setTimeout(ensureSized, 80);
-    const tB = window.setTimeout(ensureSized, 400);
+    // The reliable nudge is the map's OWN `idle` event — it fires once Google has attempted the first
+    // tile render against the (now laid-out) container. Triggering resize there forces the tiles to
+    // paint instead of leaving the grey/gradient placeholder on the FIRST visit (the timers alone were
+    // timing-dependent and got cleared when this effect re-ran). Double rAF covers the layout settle.
+    const idleListener = window.google.maps.event.addListenerOnce(map, 'idle', ensureSized);
+    let raf1 = 0; let raf2 = 0;
+    raf1 = window.requestAnimationFrame(() => { raf2 = window.requestAnimationFrame(ensureSized); });
+    const tA = window.setTimeout(ensureSized, 120);
+    const tB = window.setTimeout(ensureSized, 600);
     let resizeObs = null;
     if (typeof ResizeObserver !== 'undefined' && mapEl.current) {
       resizeObs = new ResizeObserver(() => ensureSized());
@@ -3066,6 +3073,9 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
       isMounted = false;
       window.clearTimeout(tA);
       window.clearTimeout(tB);
+      if (raf1) window.cancelAnimationFrame(raf1);
+      if (raf2) window.cancelAnimationFrame(raf2);
+      if (idleListener && window.google?.maps?.event) window.google.maps.event.removeListener(idleListener);
       if (resizeObs) resizeObs.disconnect();
       markersRef.current.forEach((item) => {
         if (item.marker?.map !== undefined) item.marker.map = null;
