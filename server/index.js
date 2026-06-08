@@ -3351,6 +3351,11 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     });
     const cameraCongestionOverride = cameraCongestionResult.override;
     finalWait = cameraCongestionResult.wait;
+    // The committed camera floor is a HARD MINIMUM for everything downstream (predictionV2, baseline,
+    // smoothing, public state). Nothing may lower the number below what the camera-congestion
+    // label/decision already promised — otherwise the UI shows "od 3 min" while saying "kamera vidi
+    // gužvu" (the live NO-GO). Captured here so the invariant can be re-asserted after every later step.
+    const cameraCongestionFloor = cameraCongestionOverride ? Number(finalWait) : null;
 
     // ── SMART RANGE (spec §8) ── never show false precision below high confidence.
     const range = computeSmartRange(finalWait, calibratedProfile, { agreementSpread, heavyGoogle: googleLooksHeavy(googleSignal) });
@@ -3562,7 +3567,11 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     } catch (error) {
       predictionV2 = { error: String(error.message).slice(0, 120), modelVersion: TRAFFIC_VISION_MODEL_VERSION };
     }
-    if (PREDICTION_V2_ENABLED && predictionV2 && !predictionV2.error && predictionV2.lead && predictionV2.lead !== 'baseline') {
+    // PredictionV2 may lead the number — UNLESS a camera-congestion floor was committed. A low
+    // prediction must NOT overwrite the camera floor (Scenario M): that produced the "appliedFloor:
+    // visual-band:srednja" + "finalEstimateMin: 3" contradiction. The v2 object is still returned for
+    // shadow analysis; it just can't pull the committed camera number down.
+    if (PREDICTION_V2_ENABLED && predictionV2 && !predictionV2.error && predictionV2.lead && predictionV2.lead !== 'baseline' && !cameraCongestionOverride) {
       finalWait = predictionV2.expectedWaitMin;
       outRangeMin = predictionV2.rangeMin;
       outRangeMax = predictionV2.rangeMax;
@@ -3572,6 +3581,17 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
       outPrecision = predictionV2.rangeMax - predictionV2.rangeMin > 4 ? 'range' : 'exact';
       note = predictionV2.explanation;
       conflictKind = predictionV2.lead.includes('conflict') ? 'prediction-conflict' : conflictKind;
+    } else if (cameraCongestionOverride && PREDICTION_V2_ENABLED && predictionV2 && !predictionV2.error && predictionV2.lead && predictionV2.lead !== 'baseline') {
+      predictionV2 = { ...predictionV2, demotedBy: 'camera-congestion-floor' };
+    }
+
+    // FINAL CONSISTENCY CLAMP — the number can never contradict the camera-congestion floor the
+    // label/decision already promised, no matter what ran in between. Range is widened to bracket it.
+    if (cameraCongestionFloor != null && Number(finalWait) < cameraCongestionFloor) {
+      finalWait = cameraCongestionFloor;
+      outRangeMin = Math.max(0, Math.min(Number(outRangeMin ?? finalWait), finalWait));
+      outRangeMax = Math.max(Number(outRangeMax ?? finalWait), finalWait);
+      conflictKind = 'camera-congestion';
     }
 
     return {
@@ -3726,9 +3746,10 @@ async function buildEffectiveWaitMaps(store) {
       const key = `${crossing.id}:${direction}`;
       const isLive = signal.displayReady !== false && Number.isFinite(Number(signal.wait));
       if (isLive) {
-        // Admin override and driver-report-driven values bypass smoothing — they are
-        // already authoritative human signals that should appear instantly.
-        const bypassSmoothing = signal.sourceType === 'admin-override' || signal.sourceType === 'driver-reports';
+        // Admin override, driver-report and committed CAMERA-CONGESTION values bypass smoothing — they
+        // are authoritative/committed and must appear instantly. Crucially, smoothing the camera floor
+        // would let the blue card show a number BELOW the floor the debug/label promised (Scenario P).
+        const bypassSmoothing = signal.sourceType === 'admin-override' || signal.sourceType === 'driver-reports' || signal.sourceType === 'camera-congestion-override';
         effectiveWaits[key] = bypassSmoothing ? Number(signal.wait) : emaSmoothWait(key, Number(signal.wait));
       } else {
         // Clear the cache when source goes dark so we don't blend stale values back in.

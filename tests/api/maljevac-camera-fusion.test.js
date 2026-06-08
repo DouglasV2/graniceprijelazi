@@ -53,6 +53,30 @@ describe('Maljevac camera-visual signal reaches Traffic Vision fusion', () => {
   });
 });
 
+describe('Maljevac camera-congestion CONSISTENCY invariant (number must match the applied floor)', () => {
+  const floorFor = (band) => (band === 'ekstremna' ? 50 : band === 'velika' ? 30 : 22);
+  for (const band of ['srednja', 'velika', 'ekstremna']) {
+    it(`${band}: label + sourceType + conflictKind all agree AND wait >= floor (no "od 3 min" + "gužva")`, async () => {
+      for (const direction of ['toHr', 'toBih']) {
+        const sig = await effectiveBorderSignal(crossing(), direction, 'car', cleanStore(), [cameraVisual(direction, band), googleClear(direction)]);
+        expect(sig.cameraCongestionOverride).toBe(true);
+        expect(sig.sourceType).toBe('camera-congestion-override');
+        expect(sig.label).toBe('Gužva — prema kameri');
+        expect(sig.conflictKind).toBe('camera-congestion');
+        // The number can NEVER contradict the applied floor — this is the whole bug.
+        expect(sig.wait).toBeGreaterThanOrEqual(floorFor(band));
+      }
+    });
+  }
+
+  it('mala band → NO camera-congestion override/label (no false congestion copy)', async () => {
+    const sig = await effectiveBorderSignal(crossing(), 'toHr', 'car', cleanStore(), [cameraVisual('toHr', 'mala', 20), googleClear('toHr')]);
+    expect(sig.cameraCongestionOverride).toBeFalsy();
+    expect(sig.conflictKind === 'camera-congestion').toBe(false);
+    expect(sig.label).not.toBe('Gužva — prema kameri');
+  });
+});
+
 describe('Maljevac camera direction mapping is canonical', () => {
   it('toHr → mal-hak-hr-entry (Ulaz u HR iz BiH), toBih → mal-hak-hr-exit (Izlaz iz HR u BiH)', () => {
     const feeds = CAMERA_FEEDS.maljevac || [];
