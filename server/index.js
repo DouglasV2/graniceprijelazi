@@ -1599,6 +1599,14 @@ function signalSourceMix(signal = {}) {
     googleOnly: signal.explanationPayload?.googleAsAuthority === true,
     sourceCount: signal.independentSources ?? null,
     calibrationVersion: CALIBRATION_VERSION,
+    // ── Calibration debug fields (what each signal said, so evaluation can attribute error) ──────
+    googleTrafficSeverity: signal.googleTrafficSeverity || signal.googleTraffic?.severity || null,
+    googleDelayMin: Number.isFinite(Number(signal.googleTraffic?.delayMin)) ? Number(signal.googleTraffic.delayMin) : null,
+    visualBand: signal.visualBand || null,
+    conflictKind: signal.conflictKind || null,
+    hasStrongCameraQueue: Boolean(signal.hasStrongCameraQueue),
+    finalLabel: signal.label || null,
+    confidenceLevel: signal.confidenceLevel || null,
   };
 }
 
@@ -3380,7 +3388,7 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     let outRangeMax = range.rangeMax;
     let note = capReason ? `${explanation} ${capReason}` : explanation;
     let conflictKind = null;
-    const bandWord = visualBand === 'ekstremna' ? 'ekstremnu' : 'veliku';
+    const bandWord = visualBand === 'ekstremna' ? 'ekstremnu' : visualBand === 'srednja' ? 'moguću' : 'veliku';
     if (cameraCongestionOverride) {
       // Camera led: we COMMITTED to a higher, camera-based number. Confident estimate + tight
       // upward range. Keep the calibrated confidence (camera-heuristic, typically srednja/niska).
@@ -4187,6 +4195,24 @@ app.get('/api/admin/traffic-vision/:crossingId/:direction', authRequired, adminR
       googleTraffic: sig.explanationPayload?.googleTraffic || null,
       conflictKind: sig.conflictKind || null,
       visualBand: sig.visualBand || null,
+      // WHY this estimate: which signal led, what floor (if any) was applied, and per-source strength.
+      decision: {
+        finalLabel: sig.label || null,
+        selectedPrimarySignal: sig.sourceType || null,
+        conflictKind: sig.conflictKind || null,
+        appliedFloor: sig.conflictKind === 'camera-congestion' ? `visual-band:${sig.visualBand}` : null,
+        reason: sig.note || sig.explanation || null,
+      },
+      sourceStrength: {
+        hasHardPublic: Boolean(sig.hasHardPublicSignal),
+        hasGoogle: Boolean(sig.hasGoogleSignal),
+        googleTrafficSeverity: sig.googleTrafficSeverity || null,
+        googleClearWhileQueue: Boolean(sig.googleClearWhileQueue),
+        visualBand: sig.visualBand || null,
+        hasStrongCameraQueue: Boolean(sig.hasStrongCameraQueue),
+        hasMeasuredSession: Boolean(sig.hasMeasuredSession),
+        confidenceLevel: sig.confidenceLevel || null,
+      },
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: 'Traffic-vision debug nije uspio.', detail: safeError(error) });
@@ -4297,8 +4323,9 @@ app.get('/api/internal/traffic-vision/readiness', optionalAuth, trafficVisionInt
     googleTrafficHealthy: GOOGLE_TRAFFIC_V2_ENABLED && Boolean(serverKey),
     predictionSnapshotsCount24h: fallback.sampleSize,
     fallbackRate: fallback.fallbackRate,
-    medianErrorMin: stats?.overall?.medianAbsoluteErrorMin ?? null,
-    p90ErrorMin: stats?.overall?.p90ErrorMin ?? null,
+    medianErrorMin: stats?.overall?.medianError ?? null,
+    p90ErrorMin: stats?.overall?.p90Error ?? null,
+    catastrophicMisses: stats?.overall?.catastrophicMisses ?? 0,
     accuracySampleSize: stats.sampleSize || 0,
     extremePredictionSafetyOk: true,
   };
@@ -4325,6 +4352,74 @@ app.get('/api/internal/traffic-vision/readiness', optionalAuth, trafficVisionInt
       maxMedianErrorMin: TRAFFIC_VISION_MAX_MEDIAN_ERROR_MIN,
       maxP90ErrorMin: TRAFFIC_VISION_MAX_P90_ERROR_MIN,
     },
+  });
+});
+
+// ── PREDICTION CALIBRATION / EVALUATION (internal, debug-gated) ────────────────────────────────
+// The only way to KNOW if a crossing's estimate is good: log what each signal said + the final
+// estimate, then compare to a ground-truth wait. No guessing. Maljevac is the flagship test case.
+
+// Record a real observed wait and close the loop against the most recent prediction for that
+// crossing/direction, so we can measure |predicted - actual|. Stores NO GPS.
+app.post('/api/internal/traffic-vision/ground-truth', optionalAuth, trafficVisionInternalGuard, writeLimiter, (req, res) => {
+  const crossingId = String(req.body?.crossingId || '').trim();
+  const direction = req.body?.direction === 'toHr' ? 'toHr' : 'toBih';
+  if (!BORDER_CROSSINGS[crossingId]) return res.status(400).json({ ok: false, error: 'Nepoznat prijelaz.' });
+  const observedWaitMin = Number(req.body?.observedWaitMin);
+  if (!Number.isFinite(observedWaitMin) || observedWaitMin < 0 || observedWaitMin > 360) return res.status(400).json({ ok: false, error: 'observedWaitMin mora biti 0–360.' });
+  const source = ['manual', 'official', 'test-drive', 'verified-location'].includes(req.body?.source) ? req.body.source : 'manual';
+  const note = String(req.body?.note || '').slice(0, 280);
+
+  // Match to the most recent prediction sample (≤ 3h old) → predicted-vs-actual.
+  const cutoff = Date.now() - 3 * 60 * 60 * 1000;
+  const sample = predictionAccuracyBuffer.find((r) => r.crossingId === crossingId && r.direction === direction
+    && Number.isFinite(Number(r.predictedWait)) && new Date(r.predictedAt).getTime() >= cutoff);
+  recordResolvedAccuracy({
+    crossingId,
+    direction,
+    predictedWait: sample ? sample.predictedWait : null,
+    actualWait: observedWaitMin,
+    confidenceLevel: sample?.confidenceLevel || null,
+    confidenceScore: sample?.confidenceScore || null,
+    sourceMix: { ...(sample?.sourceMix || {}), groundTruthSource: source, note },
+    source: `ground-truth:${source}`,
+  });
+  const errorMin = sample ? Math.abs(sample.predictedWait - observedWaitMin) : null;
+  res.json({ ok: true, crossingId, direction, observedWaitMin, matchedPredictedWaitMin: sample?.predictedWait ?? null, errorMin, matched: Boolean(sample) });
+});
+
+// Calibration dashboard for one crossing: recent prediction snapshots (what each signal said) +
+// resolved ground-truth + accuracy metrics (MAE / median / p90 / bias / catastrophic).
+app.get('/api/internal/traffic-vision/calibration', optionalAuth, trafficVisionInternalGuard, (req, res) => {
+  const crossingId = String(req.query.crossingId || 'maljevac').trim();
+  const hours = Math.max(1, Math.min(24 * 30, Number(req.query.hours || 72)));
+  const since = Date.now() - hours * 60 * 60 * 1000;
+  const all = predictionAccuracyBuffer.filter((r) => r.crossingId === crossingId && new Date(r.predictedAt).getTime() >= since);
+  const resolved = all.filter((r) => Number.isFinite(Number(r.actualWait)));
+  const stats = computeAccuracyStats(resolved);
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    crossingId,
+    windowHours: hours,
+    sampleSize: all.length,
+    resolvedSize: resolved.length,
+    qualityTargets: { p50MaxMin: 10, p80MaxMin: 20, noCatastrophicOverMin: 30 },
+    stats,
+    recentSnapshots: all.slice(0, 60).map((r) => ({
+      predictedAt: r.predictedAt,
+      direction: r.direction,
+      predictedWait: r.predictedWait,
+      actualWait: r.actualWait,
+      confidenceLevel: r.confidenceLevel,
+      source: r.source,
+      googleDelayMin: r.sourceMix?.googleDelayMin ?? null,
+      googleTrafficSeverity: r.sourceMix?.googleTrafficSeverity ?? null,
+      visualBand: r.sourceMix?.visualBand ?? null,
+      conflictKind: r.sourceMix?.conflictKind ?? null,
+      hasStrongCameraQueue: r.sourceMix?.hasStrongCameraQueue ?? null,
+      finalLabel: r.sourceMix?.finalLabel ?? null,
+    })),
   });
 });
 

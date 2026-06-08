@@ -43,8 +43,10 @@ describe('freshnessLabelFromAge (stale must read as stale)', () => {
 
 
 describe('camera queue label honesty', () => {
-  it('does not show confident medium queue when camera is heuristic/no ROI', () => {
-    expect(buildCameraQueueLabel({ queueBandLabel: 'Srednja kolona', cvUsed: false }, { estimateUsable: false })).toBe('Vizualno djeluje kao srednja kolona');
+  it('a visible medium queue (heuristic/no ROI) reads as a possible queue, never confident "Srednja kolona"', () => {
+    const label = buildCameraQueueLabel({ queueBandLabel: 'Srednja kolona', cvUsed: false }, { estimateUsable: false });
+    expect(label).toBe('Kamera prikazuje moguću kolonu');
+    expect(label).not.toBe('Srednja kolona');
   });
 
   it('shows a precise queue label only for a calibrated + TRUSTED AI signal', () => {

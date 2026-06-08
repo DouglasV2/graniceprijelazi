@@ -521,11 +521,12 @@ export function queueBandRank(band) {
 // number — we flag it, drop confidence, and show a range / "provjeri službene izvore".
 export function detectVisualCongestionConflict({ visualBand = null, fusedWait = null, lowThreshold = 30 } = {}) {
   const rank = queueBandRank(visualBand);
-  const strong = rank >= queueBandRank('velika'); // velika or ekstremna
+  // Any visible queue (srednja+) on a low number is a conflict — the camera frame is fresher than a
+  // lagging text source, so we must not show a confident low number. srednja widens to a smaller max.
+  const strong = rank >= queueBandRank('srednja');
   if (!strong || !isNum(fusedWait)) return { conflict: false, visualBand, suggestedRangeMax: null };
   if (Number(fusedWait) >= lowThreshold) return { conflict: false, visualBand, suggestedRangeMax: null };
-  // The visual evidence says congested but the number is low → unreliable low number.
-  const suggestedRangeMax = visualBand === 'ekstremna' ? 120 : 60;
+  const suggestedRangeMax = visualBand === 'ekstremna' ? 120 : visualBand === 'velika' ? 60 : 45;
   return { conflict: true, visualBand, suggestedRangeMax };
 }
 
@@ -579,10 +580,14 @@ export function resolveCameraCongestionOverride({
   hardAuthorityPresent = false,
   googleHeavyNearBorder = false,
 } = {}) {
-  const strong = queueBandRank(visualBand) >= queueBandRank('velika'); // velika or ekstremna
+  // A visible queue of ANY real size (srednja/velika/ekstremna) must stop a confident-low estimate.
+  // srednja is a smaller floor (a medium queue is at least ~20 min at a border) so we never show
+  // "do 20 min" on a visibly queued lane; velika/ekstremna commit higher.
+  const rank = queueBandRank(visualBand);
+  const strong = rank >= queueBandRank('srednja');
   if (!strong || hardAuthorityPresent || !isNum(currentWait)) return { override: false, wait: currentWait, band: visualBand };
-  let floor = visualBand === 'ekstremna' ? 50 : 30;
-  if (googleHeavyNearBorder) floor += visualBand === 'ekstremna' ? 15 : 10; // camera + Google agree → stronger
+  let floor = visualBand === 'ekstremna' ? 50 : visualBand === 'velika' ? 30 : 22;
+  if (googleHeavyNearBorder) floor += visualBand === 'ekstremna' ? 15 : visualBand === 'velika' ? 10 : 6; // camera + Google agree → stronger
   const committed = Math.max(isNum(cameraWait) ? Number(cameraWait) : 0, floor);
   if (committed <= Number(currentWait)) return { override: false, wait: currentWait, band: visualBand };
   return { override: true, wait: committed, band: visualBand };
@@ -764,26 +769,35 @@ export function detectReportAnomalies(reports = [], referenceWait = null) {
 // Returns overall + per-crossing MAE / median error / p90 error / bias.
 export function computeAccuracyStats(records = []) {
   const matched = records.filter((r) => isNum(r.predictedWait) && isNum(r.actualWait));
+  const CATASTROPHIC_MIN = 30; // |predicted - actual| > 30 min = a trust-destroying miss
   const groupStats = (rows) => {
     if (!rows.length) return null;
     const errs = rows.map((r) => Math.abs(Number(r.predictedWait) - Number(r.actualWait)));
     const signed = rows.map((r) => Number(r.predictedWait) - Number(r.actualWait));
+    const catastrophic = errs.filter((e) => e > CATASTROPHIC_MIN).length;
     return {
       n: rows.length,
       mae: Math.round((errs.reduce((a, b) => a + b, 0) / errs.length) * 10) / 10,
       medianError: median(errs),
       p90Error: percentile(errs, 0.9),
+      // negative bias = app UNDER-estimates (worse for trust: "10 min" then 70 min queue).
       bias: Math.round((signed.reduce((a, b) => a + b, 0) / signed.length) * 10) / 10,
+      worstErrorMin: Math.max(...errs),
+      catastrophicMisses: catastrophic,
+      catastrophicRate: Math.round((catastrophic / rows.length) * 100) / 100,
     };
   };
 
   const byCrossing = {};
+  const byDirection = {};
   for (const r of matched) {
     const key = `${r.crossingId}:${r.direction}`;
     (byCrossing[key] = byCrossing[key] || []).push(r);
+    (byDirection[r.direction] = byDirection[r.direction] || []).push(r);
   }
   const perCrossing = Object.fromEntries(Object.entries(byCrossing).map(([k, rows]) => [k, groupStats(rows)]));
-  return { overall: groupStats(matched), perCrossing, sampleSize: matched.length };
+  const perDirection = Object.fromEntries(Object.entries(byDirection).map(([k, rows]) => [k, groupStats(rows)]));
+  return { overall: groupStats(matched), perCrossing, perDirection, sampleSize: matched.length };
 }
 
 // ───────────────────────────────────────────────────────────────────────────

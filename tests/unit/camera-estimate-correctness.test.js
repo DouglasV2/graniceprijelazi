@@ -162,8 +162,15 @@ describe('resolveCameraCongestionOverride — camera queue raises a low number (
     expect(r.wait).toBe(8);
   });
 
-  it('does NOT fire for a clear/small band (nema/mala/srednja)', () => {
-    for (const b of ['nema', 'mala', 'srednja']) {
+  it('a MEDIUM (srednja) visible queue fires with a small floor (prevents an optimistic "do 20")', () => {
+    const r = resolveCameraCongestionOverride({ ...base, visualBand: 'srednja' });
+    expect(r.override).toBe(true);
+    expect(r.wait).toBeGreaterThanOrEqual(20);
+    expect(r.wait).toBeLessThan(30); // below the velika floor
+  });
+
+  it('does NOT fire for a clear/small band (nema/mala)', () => {
+    for (const b of ['nema', 'mala']) {
       expect(resolveCameraCongestionOverride({ ...base, visualBand: b }).override).toBe(false);
     }
   });

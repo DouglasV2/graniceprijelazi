@@ -258,6 +258,33 @@ describe('accuracy stats', () => {
     const stats = computeAccuracyStats([{ crossingId: 'a', direction: 'toBih', predictedWait: 30, actualWait: null }]);
     expect(stats.sampleSize).toBe(0);
   });
+  it('counts catastrophic misses (|error| > 30) and reports the worst error', () => {
+    const records = [
+      { crossingId: 'maljevac', direction: 'toBih', predictedWait: 12, actualWait: 70 }, // 58 → catastrophic
+      { crossingId: 'maljevac', direction: 'toBih', predictedWait: 45, actualWait: 50 }, // 5
+      { crossingId: 'maljevac', direction: 'toBih', predictedWait: 20, actualWait: 60 }, // 40 → catastrophic
+    ];
+    const s = computeAccuracyStats(records).overall;
+    expect(s.catastrophicMisses).toBe(2);
+    expect(s.worstErrorMin).toBe(58);
+  });
+  it('bias is NEGATIVE when the app under-estimates (the dangerous direction)', () => {
+    const records = [
+      { crossingId: 'maljevac', direction: 'toBih', predictedWait: 15, actualWait: 60 },
+      { crossingId: 'maljevac', direction: 'toBih', predictedWait: 20, actualWait: 55 },
+    ];
+    expect(computeAccuracyStats(records).overall.bias).toBeLessThan(0);
+  });
+  it('breaks accuracy down per direction', () => {
+    const records = [
+      { crossingId: 'maljevac', direction: 'toBih', predictedWait: 30, actualWait: 35 },
+      { crossingId: 'maljevac', direction: 'toHr', predictedWait: 40, actualWait: 42 },
+    ];
+    const stats = computeAccuracyStats(records);
+    expect(stats.perDirection.toBih).toBeTruthy();
+    expect(stats.perDirection.toHr).toBeTruthy();
+    expect(stats.perDirection.toBih.n).toBe(1);
+  });
 });
 
 describe('alerts', () => {

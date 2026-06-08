@@ -55,6 +55,9 @@ export function buildCameraQueueLabel(analytics = {}, { estimateUsable = false }
   const roiTrusted = Boolean(roiFeatures?.roiTrusted);
   const queueVehicles = Number(roiFeatures?.vehiclesInQueueRoi ?? analytics.queueVehicles ?? NaN);
   const noDetections = normalizeText(analytics.cvFallbackReason).includes('no-detections') || queueVehicles === 0;
+  // Does the VISUAL band show a real queue (srednja/velika/ekstremna)? This is occupancy-based and
+  // independent of YOLO, so it stays valid even when AI detection is weak/untrusted.
+  const visualQueue = /srednja|velika|ekstremna/i.test(`${raw} ${analytics.visualBand || ''}`);
 
   if (estimateUsable) {
     if (roiCalibrated && roiTrusted && Number.isFinite(queueVehicles)) return `${queueVehicles} vozila u koloni`;
@@ -65,7 +68,9 @@ export function buildCameraQueueLabel(analytics = {}, { estimateUsable = false }
     if (queueVehicles <= 1 || noDetections) return 'AI kamera ne vidi kolonu';
     return `AI kamera vidi ${queueVehicles} vozila u koloni`;
   }
-  // Calibrated-but-unverified (seeded/rect-derived) → neutral, never a confident no-queue claim.
+  // AI not trusted/calibrated. If the lane VISUALLY shows a queue, say so honestly (a possible queue)
+  // — never imply it's empty just because YOLO/ROI is weak.
+  if (visualQueue) return 'Kamera prikazuje moguću kolonu';
   if (cvUsed && roiCalibrated && !roiTrusted) return 'Kamera dostupna za vizualnu provjeru';
   if (cvUsed && !roiCalibrated) return 'AI kamera nije dovoljno kalibrirana za procjenu kolone';
   return cautiousBandLabel(raw);
@@ -93,6 +98,9 @@ export function buildCameraTrustText(analytics = {}, { estimateUsable = false, c
   if (estimateUsable && cvUsed && roiCalibrated && roiTrusted) return 'Procjena koristi AI detekciju vozila unutar kalibrirane zone kolone.';
   if (estimateUsable) return analytics.message || 'Procjena iz kamere koristi svježi signal, ali i dalje je uspoređujemo s javnim izvorima.';
   if (contradictsOfficial) return 'Kamera se ne slaže dovoljno sa službenim izvorom, zato ju prikazujemo samo kao vizualnu provjeru.';
+  const visualQueue = /srednja|velika|ekstremna/i.test(`${analytics.queueBandLabel || ''} ${analytics.visualBand || ''}`);
+  // Visible queue but AI not trusted → say the camera shows a possible queue, AI count isn't reliable.
+  if (visualQueue && !roiTrusted) return 'Kamera prikazuje moguću kolonu, ali AI brojanje nije dovoljno pouzdano — procjena nije samo iz slike.';
   // Calibrated but not yet reviewed (seeded/rect-derived) → don't claim a reliable verdict.
   if (cvUsed && roiCalibrated && !roiTrusted) return 'AI kamera nije dovoljno kalibrirana za procjenu kolone — kamera prikazuje promet, ali čekanje ne izvodimo samo iz slike.';
   if (cvUsed && !roiCalibrated) return 'AI vidi vozila, ali kamera nije potpuno kalibrirana.';

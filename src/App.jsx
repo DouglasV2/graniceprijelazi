@@ -26,6 +26,7 @@ import { formatMinutes, hasKnownWait, isUsableMinuteValue, normalizeMinutes, for
 import { cameraEstimateDecision, buildCameraQueueLabel, buildCameraTrustText, cameraStatusCopy } from './utils/camera-display.js';
 import { loadGoogleMaps, mapsConstructorsReady } from './utils/google-maps-loader.js';
 import { shouldSendPing } from './utils/location-wait-client.js';
+import { rankCrossingsByLocation } from './utils/crossing-recommendation.js';
 
 
 function makeCrossingHistory(baseCars, baseTrucks, baseBuses, baseWait) {
@@ -2239,6 +2240,87 @@ function SourceExplanationCard() {
   );
 }
 
+// Location recommendation: "which crossing is best for me right now?" One-shot current location
+// (NO continuous pings, NO raw trail, NO other users). Ranks by driveTime + wait + reliability.
+function LocationRecommendation({ selectedDirection, setSelectedCrossing, openDetail, overrides = {} }) {
+  const [status, setStatus] = useState('idle'); // idle | loading | ready | denied | error | empty
+  const [pos, setPos] = useState(null);
+  const [rec, setRec] = useState(null);
+  const [hidden, setHidden] = useState(false);
+
+  const compute = useCallback((userPos) => {
+    const candidates = CROSSINGS.map((c) => {
+      const waitMin = getDisplayedWait(c, selectedDirection, overrides);
+      const meta = getWaitSourceMeta(c, selectedDirection, overrides);
+      return { id: c.id, name: c.shortName || c.name, lat: c.lat, lng: c.lng, waitMin: hasKnownWait(waitMin) ? Number(waitMin) : null, confidence: meta.confidenceLevel || meta.confidenceHint || null };
+    });
+    return rankCrossingsByLocation(userPos, candidates);
+  }, [selectedDirection, overrides]);
+
+  // Recompute when the direction changes (or after we get a position).
+  useEffect(() => {
+    if (!pos) return;
+    const r = compute(pos);
+    setRec(r);
+    setStatus(r.best ? 'ready' : 'empty');
+  }, [pos, compute]);
+
+  function useMyLocation() {
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) { setStatus('error'); return; }
+    setStatus('loading');
+    navigator.geolocation.getCurrentPosition(
+      (p) => setPos({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      (err) => setStatus(err && err.code === 1 ? 'denied' : 'error'),
+      { enableHighAccuracy: false, timeout: 12000, maximumAge: 60000 },
+    );
+  }
+
+  if (hidden) return null;
+  const pick = (id) => { const c = CROSSINGS.find((x) => x.id === id); if (c) { setSelectedCrossing(c); openDetail?.(c); } };
+  const dirLabel = selectedDirection === 'toBih' ? 'HR → BiH' : 'BiH → HR';
+
+  return (
+    <article className="loc-rec-card">
+      {status === 'idle' && (
+        <>
+          <div className="loc-rec-head"><Crosshair size={16} aria-hidden="true" /><strong>Pronađi najbolji prijelaz prema tvojoj lokaciji</strong></div>
+          <p>Usporedit ćemo vrijeme vožnje i čekanje na granici za {dirLabel}. Ne spremamo tvoju rutu i ne prikazujemo tvoju lokaciju drugima.</p>
+          <div className="loc-rec-actions">
+            <button type="button" className="loc-rec-cta" onClick={useMyLocation}>Koristi moju lokaciju</button>
+            <button type="button" className="loc-rec-secondary" onClick={() => setHidden(true)}>Ne sada</button>
+          </div>
+        </>
+      )}
+      {status === 'loading' && <p className="loc-rec-status">Dohvaćam lokaciju…</p>}
+      {status === 'denied' && <p className="loc-rec-status">Lokacija nije uključena. I dalje možeš ručno odabrati prijelaz.</p>}
+      {status === 'error' && <p className="loc-rec-status">Nismo uspjeli dohvatiti lokaciju. <button type="button" className="loc-rec-link" onClick={useMyLocation}>Pokušaj ponovno</button></p>}
+      {status === 'empty' && <p className="loc-rec-status">Nemamo dovoljno podataka za pouzdanu preporuku. Prikazujemo prijelaze ručno ispod.</p>}
+      {status === 'ready' && rec?.best && (
+        <>
+          <div className="loc-rec-head"><Navigation size={16} aria-hidden="true" /><strong>Najbolja opcija sada · {dirLabel}</strong></div>
+          <button type="button" className="loc-rec-best" onClick={() => pick(rec.best.id)}>
+            <div className="loc-rec-best-top"><b>{rec.best.name}</b><span>oko {formatMinutes(rec.best.totalMin)} ukupno</span></div>
+            <div className="loc-rec-best-detail">Vožnja {rec.best.driveApprox ? '≈ ' : ''}{formatMinutes(rec.best.driveMin)} · Čekanje od {formatMinutes(rec.best.waitMin)}{rec.best.confidence ? ` · pouzdanost ${rec.best.confidence}` : ''}</div>
+            <div className="loc-rec-badges">{rec.best.badges.map((b) => <span key={b}>{b}</span>)}</div>
+          </button>
+          {rec.similar && <p className="loc-rec-status">Slične opcije — provjeri stanje prije polaska.</p>}
+          {rec.alternatives.length > 0 && (
+            <div className="loc-rec-alts">
+              <span>Alternative</span>
+              {rec.alternatives.map((a) => (
+                <button type="button" key={a.id} onClick={() => pick(a.id)}>
+                  <b>{a.name}</b><span>oko {formatMinutes(a.totalMin)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <p className="loc-rec-note">Računamo vrijeme vožnje + trenutno čekanje na granici.{rec.best.driveApprox ? ' Vrijeme vožnje je okvirno.' : ''} Ne spremamo tvoju rutu.</p>
+        </>
+      )}
+    </article>
+  );
+}
+
 function PublicView({ selectedDirection, setSelectedDirection, selectedCrossing, setSelectedCrossing, trackedIds, toggleTracked, openDetail, overrides, addNotificationRule }) {
   const [searchQuery, setSearchQuery] = useState('');
   const sorted = useMemo(() => [...CROSSINGS].sort((a, b) => getWaitForMath(a, selectedDirection, overrides) - getWaitForMath(b, selectedDirection, overrides)), [selectedDirection, overrides]);
@@ -2274,6 +2356,7 @@ function PublicView({ selectedDirection, setSelectedDirection, selectedCrossing,
         <StatCard label="Prosjek" value={formatMinutes(avg)} hint="osobna vozila" icon={<Clock size={14} />} />
         <StatCard label="Čeka izvor" value={CROSSINGS.length - knownRows.length} hint="bez svježe brojke" icon={<ShieldCheck size={14} />} />
       </div>
+      <LocationRecommendation selectedDirection={selectedDirection} setSelectedCrossing={setSelectedCrossing} openDetail={openDetail} overrides={overrides} />
       <BestNowCard best={best} selectedDirection={selectedDirection} overrides={overrides} setSelectedCrossing={setSelectedCrossing} openDetail={openDetail} addNotificationRule={addNotificationRule} />
       <article className="direction-scope-card">
         <div><Bell size={16} /><strong>Obavijesti pokrivaju oba smjera</strong></div>

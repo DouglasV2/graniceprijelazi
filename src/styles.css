@@ -896,3 +896,27 @@
 /* Own-location blue dot (when AdvancedMarkerElement is used). */
 .user-location-dot { width: 16px; height: 16px; border-radius: 999px; background: #1a73e8; border: 3px solid #fff; box-shadow: 0 0 0 2px rgba(26,115,232,.35), 0 2px 8px rgba(15,55,110,.4); }
 @media(max-width:760px){ .map-location-control { right: 12px; bottom: 78px; } .map-location-button { width: 46px; height: 46px; } }
+
+/* Location recommendation card ("which crossing is best for me now?") */
+.loc-rec-card { border: 1px solid rgba(26,115,232,.22); border-radius: var(--radius-lg, 18px); padding: 14px 16px; margin: 0 0 14px; background: linear-gradient(180deg, rgba(26,115,232,.06), rgba(26,115,232,.02)); box-shadow: var(--softShadow, 0 8px 24px rgba(15,55,110,.08)); }
+.loc-rec-head { display: flex; align-items: center; gap: 8px; color: #1a3c6e; }
+.loc-rec-head strong { font-size: 15px; letter-spacing: -.01em; }
+.loc-rec-card p { margin: 8px 0 0; font-size: 13px; line-height: 1.45; color: #4a5b73; }
+.loc-rec-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.loc-rec-cta { border: 0; border-radius: 10px; padding: 10px 16px; background: var(--blue, #1a73e8); color: #fff; font-size: 13px; font-weight: 800; cursor: pointer; }
+.loc-rec-secondary { border: 1px solid var(--line, #d6e3f4); border-radius: 10px; padding: 10px 14px; background: #fff; color: #5f6b7a; font-size: 13px; font-weight: 700; cursor: pointer; }
+.loc-rec-link { border: 0; background: none; color: var(--blue, #1a73e8); font: inherit; font-weight: 800; cursor: pointer; padding: 0; text-decoration: underline; }
+.loc-rec-status { font-size: 13px; color: #4a5b73; }
+.loc-rec-best { display: block; width: 100%; text-align: left; margin-top: 10px; border: 1px solid rgba(26,115,232,.3); border-radius: 12px; padding: 11px 13px; background: #fff; cursor: pointer; }
+.loc-rec-best-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.loc-rec-best-top b { font-size: 17px; letter-spacing: -.02em; color: #102033; }
+.loc-rec-best-top span { font-size: 14px; font-weight: 800; color: #1a73e8; white-space: nowrap; }
+.loc-rec-best-detail { margin-top: 4px; font-size: 12.5px; color: #5f6b7a; font-weight: 650; }
+.loc-rec-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.loc-rec-badges span { font-size: 11px; font-weight: 800; color: #1a3c6e; background: rgba(26,115,232,.1); border-radius: 999px; padding: 3px 8px; }
+.loc-rec-alts { margin-top: 10px; display: grid; gap: 6px; }
+.loc-rec-alts > span { font-size: 11px; font-weight: 900; letter-spacing: .04em; text-transform: uppercase; color: #8a95a5; }
+.loc-rec-alts button { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--line, #d6e3f4); border-radius: 10px; padding: 8px 11px; background: #f8fbff; cursor: pointer; }
+.loc-rec-alts button b { font-size: 13.5px; color: #102033; }
+.loc-rec-alts button span { font-size: 12.5px; font-weight: 800; color: #5f6b7a; }
+.loc-rec-note { font-size: 11.5px; color: #8a95a5; margin-top: 10px; }

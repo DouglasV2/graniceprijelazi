@@ -328,3 +328,23 @@ describe('live "Moja lokacija" signal wiring (subtle, anonymous, no raw trail)',
     expect(server).toMatch(/verifiedLocation: VERIFIED_LOCATION_ENABLED/);
   });
 });
+
+describe('location recommendation UX is wired + privacy-safe', () => {
+  it('has the permission-CTA card with non-aggressive copy', () => {
+    expect(app).toMatch(/function LocationRecommendation/);
+    expect(app).toMatch(/Pronađi najbolji prijelaz prema tvojoj lokaciji/);
+    expect(app).toMatch(/Koristi moju lokaciju/);
+    expect(app).toMatch(/Ne sada/);
+    expect(app).toMatch(/<LocationRecommendation /);
+  });
+  it('uses a ONE-SHOT current position (no continuous pings) for the recommendation', () => {
+    expect(app).toMatch(/rankCrossingsByLocation\(/);
+    expect(app).toMatch(/geolocation\.getCurrentPosition/);
+  });
+  it('handles denied / error / empty without crashing + keeps privacy copy', () => {
+    expect(app).toMatch(/Lokacija nije uključena/);
+    expect(app).toMatch(/Nismo uspjeli dohvatiti lokaciju/);
+    expect(app).toMatch(/Ne spremamo tvoju rutu/);
+    expect(app).not.toMatch(/pratimo te|GPS trail/i);
+  });
+});

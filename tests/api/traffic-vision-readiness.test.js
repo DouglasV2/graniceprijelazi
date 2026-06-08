@@ -52,3 +52,34 @@ describe('GET /api/internal/traffic-vision/readiness', () => {
     expect(res.body.predictionV2Enabled).toBe(false);
   });
 });
+
+describe('Maljevac calibration / ground-truth (the way we KNOW the estimate is good)', () => {
+  it('ground-truth + calibration endpoints are gated', async () => {
+    expect((await request(app).post('/api/internal/traffic-vision/ground-truth').send({ crossingId: 'maljevac', direction: 'toBih', observedWaitMin: 60 })).status).toBe(401);
+    expect((await request(app).get('/api/internal/traffic-vision/calibration?crossingId=maljevac')).status).toBe(401);
+  });
+  it('records a manual ground-truth wait for Maljevac', async () => {
+    const res = await request(app).post('/api/internal/traffic-vision/ground-truth')
+      .set('x-debug-token', TOKEN)
+      .send({ crossingId: 'maljevac', direction: 'toBih', observedWaitMin: 65, source: 'test-drive', note: 'queue past the booth' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.observedWaitMin).toBe(65);
+    expect(typeof res.body.matched).toBe('boolean');
+  });
+  it('rejects an out-of-range observed wait', async () => {
+    const res = await request(app).post('/api/internal/traffic-vision/ground-truth')
+      .set('x-debug-token', TOKEN)
+      .send({ crossingId: 'maljevac', direction: 'toBih', observedWaitMin: 999 });
+    expect(res.status).toBe(400);
+  });
+  it('calibration returns metrics + the recorded ground-truth shows up resolved', async () => {
+    const res = await request(app).get('/api/internal/traffic-vision/calibration?crossingId=maljevac&hours=72').set('x-debug-token', TOKEN);
+    expect(res.status).toBe(200);
+    expect(res.body.crossingId).toBe('maljevac');
+    expect(res.body.resolvedSize).toBeGreaterThanOrEqual(1); // the ground-truth we just recorded
+    expect(res.body.stats).toHaveProperty('overall');
+    expect(res.body.qualityTargets.p50MaxMin).toBe(10);
+    expect(Array.isArray(res.body.recentSnapshots)).toBe(true);
+  });
+});

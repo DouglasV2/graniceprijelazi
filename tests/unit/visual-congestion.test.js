@@ -16,9 +16,15 @@ describe('visual congestion conflict (Maljevac/Brod core fix)', () => {
     expect(detectVisualCongestionConflict({ visualBand: 'ekstremna', fusedWait: 70 }).conflict).toBe(false);
   });
 
-  it('no conflict for a small/medium visual band', () => {
+  it('a MEDIUM (srednja) visual queue + low wait is also a conflict (prevents an optimistic "do 20")', () => {
+    const r = detectVisualCongestionConflict({ visualBand: 'srednja', fusedWait: 8 });
+    expect(r.conflict).toBe(true);
+    expect(r.suggestedRangeMax).toBe(45); // smaller than velika(60)/ekstremna(120)
+  });
+
+  it('no conflict for an empty/small visual band (nema/mala)', () => {
     expect(detectVisualCongestionConflict({ visualBand: 'mala', fusedWait: 8 }).conflict).toBe(false);
-    expect(detectVisualCongestionConflict({ visualBand: 'srednja', fusedWait: 8 }).conflict).toBe(false);
+    expect(detectVisualCongestionConflict({ visualBand: 'nema', fusedWait: 8 }).conflict).toBe(false);
   });
 
   it('no conflict without a numeric wait', () => {
