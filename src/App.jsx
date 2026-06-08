@@ -4147,7 +4147,7 @@ function ChatView({ posts, setPosts, currentUser, selectedCrossing, setSelectedC
       if (payload?.report) {
         const synced = reportToPost(payload.report);
         setPosts((current) => mergePosts([synced], current.filter((item) => item.id !== post.id)));
-        setServerNotice('Dojava je spremljena u bazu.');
+        setServerNotice('Hvala — dojava je zabilježena.');
       }
     } catch {
       setServerNotice('Dojava je dodana lokalno, ali upis u bazu trenutno nije uspio.');

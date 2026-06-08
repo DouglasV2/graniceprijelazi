@@ -1513,6 +1513,16 @@ const measuredSessionBuffer = [];    // { id, crossingId, direction, userId, ano
 // lifecycle status + the server-measured A→B wait. Capped buffer; persisted to DB in postgres mode.
 const locationWaitSessionBuffer = [];
 const VERIFIED_LOCATION_ENABLED = process.env.VERIFIED_LOCATION_ENABLED === 'true';
+// Optional per-crossing allow-list. Empty/unset = all crossings (when globally enabled). When set
+// (comma-separated ids, e.g. "maljevac"), verified A→B is armed ONLY for those crossings — the way
+// to roll the feature out to the flagship crossing first without touching the others.
+const VERIFIED_LOCATION_CROSSINGS = String(process.env.VERIFIED_LOCATION_CROSSINGS || '')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+function verifiedLocationEnabledFor(crossingId) {
+  if (!VERIFIED_LOCATION_ENABLED) return false;
+  if (!VERIFIED_LOCATION_CROSSINGS.length) return true;
+  return VERIFIED_LOCATION_CROSSINGS.includes(String(crossingId || '').trim().toLowerCase());
+}
 const LOCATION_WAIT_MAX_ACCURACY_M = Math.max(20, Number(process.env.LOCATION_WAIT_MAX_ACCURACY_M || 100));
 const LOCATION_WAIT_PING_MIN_INTERVAL_MS = Math.max(0, Number(process.env.LOCATION_WAIT_PING_MIN_INTERVAL_SECONDS ?? 20)) * 1000;
 const LOCATION_WAIT_SESSION_MAX_MS = Math.max(10, Number(process.env.LOCATION_WAIT_SESSION_MAX_MINUTES || 240)) * 60 * 1000;
@@ -3889,7 +3899,7 @@ app.get('/api/public/state', async (req, res) => {
       id: crossing.id,
       name: crossing.name,
       shortName: crossing.shortName,
-      locationWaitArmed: VERIFIED_LOCATION_ENABLED && (hasLocationWaitAnchors(crossing, 'toBih') || hasLocationWaitAnchors(crossing, 'toHr')),
+      locationWaitArmed: verifiedLocationEnabledFor(crossing.id) && (hasLocationWaitAnchors(crossing, 'toBih') || hasLocationWaitAnchors(crossing, 'toHr')),
       cameras: (CAMERA_FEEDS[crossing.id] || []).map((camera) => ({ id: camera.id, source: camera.source || 'HAK', label: camera.label })),
     })),
   });
@@ -4183,6 +4193,21 @@ app.get('/api/admin/traffic-vision/:crossingId/:direction', authRequired, adminR
   try {
     const store = await readAppStore();
     const sig = await effectiveBorderSignal(crossing, direction, 'car', store);
+    // Explicit per-source breakdown built from the live store (independent of the v2 shadow object),
+    // so this always shows whether a driver report or a completed A→B measurement is influencing it.
+    const reps = reportSignals(store, crossing.id, direction, 2);
+    const repWaits = reps.map((r) => Number(r.wait)).filter(Number.isFinite).sort((a, b) => a - b);
+    const verified = (typeof recentLocationWaitSessions === 'function') ? recentLocationWaitSessions(crossing.id, direction) : [];
+    const verWaits = verified.map((s) => Number(s.measuredWaitMin)).filter(Number.isFinite).sort((a, b) => a - b);
+    const medianOf = (arr) => (arr.length ? arr[Math.floor((arr.length - 1) / 2)] : null);
+    const ageSecOf = (ts) => (ts ? Math.round((Date.now() - new Date(ts).getTime()) / 1000) : null);
+    const sourceBreakdown = {
+      publicSource: sig.explanationPayload?.publicSource || null,
+      googleTraffic: sig.explanationPayload?.googleTraffic || null,
+      camera: { visualBand: sig.visualBand || null, hasStrongCameraQueue: Boolean(sig.hasStrongCameraQueue), roiTrusted: Boolean(sig.predictionV2?.sourceBreakdown?.yoloCamera?.roiTrusted), vehiclesInQueueRoi: sig.predictionV2?.sourceBreakdown?.yoloCamera?.vehiclesInQueueRoi ?? null },
+      userReports: { sampleCount: reps.length, medianWaitMin: medianOf(repWaits), latestAgeSeconds: ageSecOf(reps[0]?.createdAt), measuredCount: reps.filter((r) => r.measured).length },
+      verifiedLocation: { sampleCount: verified.length, medianWaitMin: medianOf(verWaits), latestAgeSeconds: ageSecOf(verified[0]?.serverCompletedAt), enabled: verifiedLocationEnabledFor(crossing.id) },
+    };
     res.set('Cache-Control', 'no-store');
     res.json({
       ok: true,
@@ -4191,6 +4216,9 @@ app.get('/api/admin/traffic-vision/:crossingId/:direction', authRequired, adminR
       modelVersion: sig.modelVersion || TRAFFIC_VISION_MODEL_VERSION,
       predictionV2Enabled: PREDICTION_V2_ENABLED,
       headlineWait: sig.wait,
+      finalEstimateMin: sig.wait,
+      finalLabel: sig.label || null,
+      sourceBreakdown,
       predictionV2: sig.predictionV2 || null,
       googleTraffic: sig.explanationPayload?.googleTraffic || null,
       conflictKind: sig.conflictKind || null,
@@ -4982,6 +5010,11 @@ app.post('/api/location-wait/session', publicWriteLimiter, optionalAuth, async (
   const direction = req.body?.direction === 'toHr' ? 'toHr' : 'toBih';
   const crossing = BORDER_CROSSINGS[crossingId];
   if (!crossing) return res.status(400).json({ ok: false, error: 'Nepoznat prijelaz.' });
+  // Per-crossing gate: when an allow-list is set, only those crossings arm the A→B signal. Others
+  // still get a working map/own-location, just no measurement session (and therefore no pings).
+  if (!verifiedLocationEnabledFor(crossingId)) {
+    return res.json({ ok: true, armed: false, status: 'disarmed', message: 'Lokacija uključena' });
+  }
 
   const anchors = buildLocationWaitAnchors(crossing, direction);
   if (!anchors) {

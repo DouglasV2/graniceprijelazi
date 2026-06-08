@@ -68,3 +68,30 @@ describe('GET /api/admin/camera/debug — directional visual-band provenance', (
     }
   });
 });
+
+describe('GET /api/admin/traffic-vision/:crossingId/:direction — decision + sourceBreakdown (WHY)', () => {
+  it('rejects anonymous callers', async () => {
+    expect([401, 403]).toContain((await request(app).get('/api/admin/traffic-vision/maljevac/toBih')).status);
+  });
+
+  it('exposes finalEstimate, a per-source breakdown (incl. userReports + verifiedLocation) and a decision reason', async () => {
+    const res = await auth(request(app).get('/api/admin/traffic-vision/maljevac/toBih'));
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('finalEstimateMin');
+    expect(res.body).toHaveProperty('finalLabel');
+    const sb = res.body.sourceBreakdown;
+    expect(sb).toBeTruthy();
+    for (const key of ['publicSource', 'googleTraffic', 'camera', 'userReports', 'verifiedLocation']) {
+      expect(sb).toHaveProperty(key);
+    }
+    expect(sb.userReports).toHaveProperty('sampleCount');
+    expect(sb.verifiedLocation).toHaveProperty('sampleCount');
+    expect(sb.verifiedLocation).toHaveProperty('enabled'); // per-crossing flag visibility
+    expect(sb.camera).toHaveProperty('visualBand');
+    // The "why": which signal led, what floor, and the readable reason.
+    expect(res.body.decision).toHaveProperty('selectedPrimarySignal');
+    expect(res.body.decision).toHaveProperty('conflictKind');
+    expect(res.body).toHaveProperty('sourceStrength');
+    expect(findIllegalJsonValue(res.body, '$')).toBeNull();
+  });
+});
