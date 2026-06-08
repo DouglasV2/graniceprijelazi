@@ -2839,7 +2839,10 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   const [routePayload, setRoutePayload] = useState({ live: false, routes: [], note: 'Ruta nije učitana.' });
   const [routeInspectorOpen, setRouteInspectorOpen] = useState(true);
   const [selectedRoute, setSelectedRoute] = useState(null);
-  const [mapsReady, setMapsReady] = useState(false);
+  // Initialise from the cached loader state: if the script was already warmed (app-startup preload or
+  // a previous visit), the init effect runs synchronously on the FIRST mount — same fast path as the
+  // working second visit — instead of waiting a tick for setMapsReady and painting a blank map.
+  const [mapsReady, setMapsReady] = useState(() => mapsConstructorsReady());
   const [mapError, setMapError] = useState('');
 
   // ── "Moja lokacija" live signal (subtle, Google-Maps style). Shows the user's own location; while
@@ -5091,6 +5094,15 @@ export default function App() {
   const [serverStateVersion, setServerStateVersion] = useState(0);
 
   useUiLanguage(uiLanguage);
+
+  // Warm the Google Maps script at app startup. The map only renders once the script + libraries are
+  // attached; loading it lazily on the FIRST "Mapa" visit is why the map showed blank until you went
+  // to "Kamere" and back (by then the script was cached). Preloading makes the first visit behave like
+  // the cached second visit. Safe no-op if the key is absent or it's already loaded.
+  useEffect(() => {
+    const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+    if (key) loadGoogleMaps(key).catch(() => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
