@@ -825,7 +825,7 @@ const BORDER_CROSSINGS = {
         exitPoint: { lat: 45.13550, lng: 17.21620 },
         // Same treatment as Gradiška: skip via-intermediate and fail open so the UI
         // prefers Google's road-following polyline over the straight calibrated fallback.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 4200, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 4700, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       },
       toHr: {
         label: 'BiH → HR',
