@@ -920,3 +920,14 @@
 .loc-rec-alts button b { font-size: 13.5px; color: #102033; }
 .loc-rec-alts button span { font-size: 12.5px; font-weight: 800; color: #5f6b7a; }
 .loc-rec-note { font-size: 11.5px; color: #8a95a5; margin-top: 10px; }
+
+/* Driver report — explicit wait-time selector */
+.wait-choice-field { margin: 4px 0 2px; }
+.wait-choice-label { font-size: 13px; font-weight: 800; color: #102033; }
+.wait-choice-helper { margin: 2px 0 8px; font-size: 12px; color: #5f6b7a; }
+.wait-choice-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.wait-choice { display: inline-flex; align-items: baseline; gap: 4px; border: 1px solid var(--line, #d6e3f4); border-radius: 999px; padding: 7px 13px; background: #fff; font-size: 13.5px; font-weight: 800; color: #1a3c6e; cursor: pointer; transition: background .12s, border-color .12s; }
+.wait-choice i { font-style: normal; font-size: 11px; font-weight: 700; color: #8a95a5; }
+.wait-choice:hover { border-color: #1a73e8; }
+.wait-choice.is-selected { background: var(--blue, #1a73e8); border-color: var(--blue, #1a73e8); color: #fff; }
+.wait-choice.is-selected i { color: rgba(255,255,255,.8); }

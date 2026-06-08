@@ -27,6 +27,7 @@ import { cameraEstimateDecision, buildCameraQueueLabel, buildCameraTrustText, ca
 import { loadGoogleMaps, mapsConstructorsReady } from './utils/google-maps-loader.js';
 import { shouldSendPing } from './utils/location-wait-client.js';
 import { rankCrossingsByLocation } from './utils/crossing-recommendation.js';
+import { resolveReportWaitMinutes, WAIT_QUICK_OPTIONS } from './utils/parse-wait-minutes.js';
 
 
 function makeCrossingHistory(baseCars, baseTrucks, baseBuses, baseWait) {
@@ -4033,6 +4034,9 @@ function ChatView({ posts, setPosts, currentUser, selectedCrossing, setSelectedC
   const [crossingId, setCrossingId] = useState(selectedCrossing?.id || initialFavorite || 'maljevac');
   const [type, setType] = useState('ok');
   const [message, setMessage] = useState('');
+  // Explicit reported wait (minutes) chosen via the quick-time selector. null = not chosen → the
+  // message is parsed, then the category default is used. This is what fusion actually receives.
+  const [waitChoice, setWaitChoice] = useState(null);
   const [activeCrossingFilter, setActiveCrossingFilter] = useState('all');
   const [activeTypeFilter, setActiveTypeFilter] = useState('all');
   const [confirmations, setConfirmations] = useState({});
@@ -4128,7 +4132,7 @@ function ChatView({ posts, setPosts, currentUser, selectedCrossing, setSelectedC
 
   async function persistPost(post) {
     if (!currentUser?.token) {
-      setServerNotice('Dojava je spremljena na ovom uređaju. Za trajno spremanje prijavi se korisničkim računom.');
+      setServerNotice('Spremljeno samo na ovom uređaju. Da dojava uđe u procjenu čekanja, prijavi se korisničkim računom.');
       return;
     }
     try {
@@ -4156,17 +4160,24 @@ function ChatView({ posts, setPosts, currentUser, selectedCrossing, setSelectedC
     }
   }
 
-  function addPost(nextType, text, nextCrossingId = crossingId) {
+  function addPost(nextType, text, nextCrossingId = crossingId, explicitWaitMin = null, { parseMessage = true } = {}) {
     const meta = typeMeta[nextType] || typeMeta.ok;
     const trimmed = String(text || meta.template).trim().slice(0, 120);
     if (!trimmed) return;
+    // What the driver actually reported: explicit choice > minutes parsed from the message > category
+    // default. This (not the category default) is what we send as waitMinutes and what fusion uses.
+    // One-tap quick reports pass parseMessage:false so their canned template can't override the category.
+    const resolvedWaitMin = parseMessage
+      ? resolveReportWaitMinutes({ explicit: explicitWaitMin, message: trimmed, categoryDefault: meta.waitMinutes })
+      : meta.waitMinutes;
+    const explicitOrParsed = parseMessage && resolvedWaitMin !== meta.waitMinutes;
     const localPost = {
       id: `post-${Date.now()}-${Math.round(Math.random() * 1000)}`,
       crossingId: nextCrossingId,
       name: currentUser?.name || 'Korisnik',
       message: trimmed,
-      wait: meta.wait,
-      waitMinutes: meta.waitMinutes,
+      wait: explicitOrParsed ? `${resolvedWaitMin} min` : meta.wait,
+      waitMinutes: resolvedWaitMin,
       type: nextType,
       createdAt: nowHHMM(),
     };
@@ -4178,15 +4189,16 @@ function ChatView({ posts, setPosts, currentUser, selectedCrossing, setSelectedC
 
   function submitPost(event) {
     event.preventDefault();
-    addPost(type, message, crossingId);
+    addPost(type, message, crossingId, waitChoice);
     setMessage('');
+    setWaitChoice(null);
   }
 
   function quickReport(nextType, nextCrossingId = crossingId) {
     const meta = typeMeta[nextType];
     chooseCrossing(nextCrossingId);
     setType(nextType);
-    addPost(nextType, meta.template, nextCrossingId);
+    addPost(nextType, meta.template, nextCrossingId, null, { parseMessage: false });
   }
 
   const normalizedPosts = useMemo(() => posts.map(normalize), [posts]);
@@ -4278,13 +4290,31 @@ function ChatView({ posts, setPosts, currentUser, selectedCrossing, setSelectedC
             <button type="button" onClick={() => toggleTracked?.(composerCrossing.id)}>{isFavorite ? 'Makni favorit' : 'Dodaj u favorite'}</button>
           </div>
 
+          <div className="wait-choice-field">
+            <span className="wait-choice-label">Koliko si čekao/la?</span>
+            <p className="wait-choice-helper">Odaberi približno vrijeme čekanja. Komentar je opcionalan.</p>
+            <div className="wait-choice-row" role="group" aria-label="Vrijeme čekanja">
+              {WAIT_QUICK_OPTIONS.map((opt) => (
+                <button
+                  key={opt.min}
+                  type="button"
+                  className={`wait-choice${waitChoice === opt.min ? ' is-selected' : ''}`}
+                  aria-pressed={waitChoice === opt.min}
+                  onClick={() => setWaitChoice((current) => (current === opt.min ? null : opt.min))}
+                >
+                  {opt.label}<i>min</i>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <label className="message-field">
-            <span>Poruka do 120 znakova</span>
+            <span>Komentar (nije obavezno)</span>
             <input
               value={message}
               onChange={(event) => setMessage(event.target.value)}
               maxLength={120}
-              placeholder="npr. Prošao sam uredno, čekao sam 10 min..."
+              placeholder="npr. Kolona se sporo pomiče, kontrola pojačana..."
             />
           </label>
 

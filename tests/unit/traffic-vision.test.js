@@ -348,3 +348,27 @@ describe('location recommendation UX is wired + privacy-safe', () => {
     expect(app).not.toMatch(/pratimo te|GPS trail/i);
   });
 });
+
+describe('driver report — explicit wait time drives waitMinutes', () => {
+  it('has an explicit wait-time selector with the requested copy', () => {
+    expect(app).toMatch(/Koliko si čekao\/la\?/);
+    expect(app).toMatch(/Odaberi približno vrijeme čekanja\. Komentar je opcionalan\./);
+    expect(app).toMatch(/WAIT_QUICK_OPTIONS/);
+    expect(app).toMatch(/setWaitChoice/);
+  });
+  it('resolves waitMinutes via explicit > message > category default (not just the category)', () => {
+    expect(app).toMatch(/resolveReportWaitMinutes\(\{ explicit: explicitWaitMin, message: trimmed, categoryDefault: meta\.waitMinutes \}\)/);
+    expect(app).toMatch(/waitMinutes: resolvedWaitMin/);
+    // submit passes the explicit choice; one-tap quick reports must NOT parse their canned template.
+    expect(app).toMatch(/addPost\(type, message, crossingId, waitChoice\)/);
+    expect(app).toMatch(/parseMessage: false/);
+  });
+  it('the report payload still sends the right crossing + selectedDirection', () => {
+    expect(app).toMatch(/crossingId: post\.crossingId/);
+    expect(app).toMatch(/direction: selectedDirection/);
+    expect(app).toMatch(/waitMinutes: post\.waitMinutes/);
+  });
+  it('makes the guest limitation explicit (report enters the estimate only when logged in)', () => {
+    expect(app).toMatch(/da dojava uđe u procjenu čekanja, prijavi se|dojava uđe u procjenu/i);
+  });
+});
