@@ -146,6 +146,18 @@ describe('queue bands', () => {
     const b = classifyQueueBand({ occupancyPct: 20, laneFullnessPct: 85, queueVehicles: 9, confidence: 72 });
     expect(['velika', 'ekstremna']).toContain(b.band);
   });
+  // Live Maljevac NO-GO: a visibly FULL lane where YOLO returned 0 detections was forced to "mala"
+  // (vehicle cap) → headline "do 5 min". High real OCCUPANCY + ~no detected vehicles = failed
+  // detection, not an empty lane → must read at least "srednja" (possible queue), never "mala".
+  it('high occupancy + zero detected vehicles (detector failed) → srednja, NOT a confident mala', () => {
+    const b = classifyQueueBand({ occupancyPct: 65, laneFullnessPct: 80, queueVehicles: 0, visibleVehicles: 0, confidence: 55 });
+    expect(b.band).toBe('srednja');
+    expect(b.band).not.toBe('mala');
+  });
+  it('but wet-asphalt pixel noise (low occupancy, high laneFullness, ~no cars) still stays mala/nema', () => {
+    const b = classifyQueueBand({ occupancyPct: 8, laneFullnessPct: 99, queueVehicles: 0, visibleVehicles: 0, confidence: 60 });
+    expect(['nema', 'mala']).toContain(b.band);
+  });
 });
 
 describe('image hash + stale detection', () => {

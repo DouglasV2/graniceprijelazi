@@ -6277,6 +6277,101 @@ app.post('/api/admin/reset-history', authRequired, adminRequired, writeLimiter, 
   }
 });
 
+// Maljevac-only operational-data reset. Surgically clears the OPERATIONAL data that can hold a stale
+// estimate (driver reports, source/camera/history snapshots, prediction accuracy, measured + location
+// sessions, admin/status overrides) for crossing_id='maljevac', BOTH directions, plus the in-memory
+// runtime caches (esp. emaWaitCache). DOES NOT touch users, ROI configs, alert subscriptions, static
+// config, env, auth, or any other crossing. DRY-RUN by default — pass {"apply":true} to mutate.
+// Postgres tables that carry crossing_id and are safe to scope-delete for this crossing:
+const MALJEVAC_RESET_DB_TABLES = [
+  'borderflow_driver_reports', 'borderflow_source_snapshots', 'borderflow_camera_snapshots',
+  'borderflow_history_snapshots', 'borderflow_prediction_accuracy', 'borderflow_measured_sessions',
+  'borderflow_location_wait_sessions', 'borderflow_admin_overrides', 'borderflow_status_overrides',
+];
+app.post('/api/admin/maljevac/reset-operational-data', authRequired, adminRequired, writeLimiter, async (req, res) => {
+  const CID = 'maljevac';
+  const apply = req.body?.apply === true || req.query.apply === 'true';
+  const isMal = (row) => row && row.crossingId === CID;
+  const keyIsMal = (key) => String(key).startsWith(`${CID}:`); // overrides keyed `maljevac:toBih` etc.
+  try {
+    const store = await readAppStore();
+    const countRuntime = () => ({
+      reports: (store.reports || []).filter(isMal).length,
+      sourceSnapshots: (store.sourceSnapshots || []).filter(isMal).length,
+      historySnapshots: (store.historySnapshots || []).filter(isMal).length,
+      adminOverrides: Object.keys(store.overrides || {}).filter(keyIsMal).length,
+      statusOverrides: Object.keys(store.statusOverrides || {}).filter(keyIsMal).length,
+      cameraSnapshotBuffer: cameraSnapshotBuffer.filter(isMal).length,
+      cameraEvents: cameraEvents.filter(isMal).length,
+      predictionAccuracy: predictionAccuracyBuffer.filter(isMal).length,
+      measuredSessions: measuredSessionBuffer.filter(isMal).length,
+      locationWaitSessions: locationWaitSessionBuffer.filter(isMal).length,
+      emaWaitCacheKeys: [...emaWaitCache.keys()].filter(keyIsMal),
+    });
+    const dbCounts = async () => {
+      if (datastoreMode !== 'postgres') return null;
+      const out = {};
+      for (const t of MALJEVAC_RESET_DB_TABLES) {
+        try { out[t] = (await dbQuery(`SELECT COUNT(*)::int AS n FROM ${t} WHERE crossing_id = $1`, [CID])).rows[0].n; }
+        catch (e) { out[t] = `err:${e.code || 'n/a'}`; }
+      }
+      return out;
+    };
+
+    const before = countRuntime();
+    const dbBefore = await dbCounts();
+
+    if (apply) {
+      // FILE / store (scope to maljevac only — every other crossing's data is preserved).
+      store.reports = (store.reports || []).filter((r) => !isMal(r));
+      store.sourceSnapshots = (store.sourceSnapshots || []).filter((r) => !isMal(r));
+      store.historySnapshots = (store.historySnapshots || []).filter((r) => !isMal(r));
+      for (const k of Object.keys(store.overrides || {})) if (keyIsMal(k)) delete store.overrides[k];
+      for (const k of Object.keys(store.statusOverrides || {})) if (keyIsMal(k)) delete store.statusOverrides[k];
+      await writeAppStore(store);
+
+      // RUNTIME buffers (in-place; keep every non-maljevac entry).
+      const spliceMal = (arr) => { for (let i = arr.length - 1; i >= 0; i--) if (isMal(arr[i])) arr.splice(i, 1); };
+      spliceMal(cameraSnapshotBuffer);
+      spliceMal(cameraEvents);
+      spliceMal(predictionAccuracyBuffer);
+      spliceMal(measuredSessionBuffer);
+      spliceMal(locationWaitSessionBuffer);
+      // emaWaitCache is the key "stuck low" suspect — drop both Maljevac directions.
+      for (const k of [...emaWaitCache.keys()]) if (keyIsMal(k)) emaWaitCache.delete(k);
+      resolvedCameraImageCache.clear(); // proxied images only — safe to clear all.
+
+      // POSTGRES (scoped DELETE per table; ROI configs / users / alert subs are NOT in the list).
+      if (datastoreMode === 'postgres') {
+        for (const t of MALJEVAC_RESET_DB_TABLES) {
+          try { await dbQuery(`DELETE FROM ${t} WHERE crossing_id = $1`, [CID]); }
+          catch (e) { console.warn(`[maljevac-reset] ${t}:`, e.message); }
+        }
+      }
+    }
+
+    const after = apply ? countRuntime() : before;
+    const dbAfter = apply ? await dbCounts() : dbBefore;
+    await audit('maljevac_operational_reset', req.user, { apply, mode: datastoreMode, before, after, dbBefore, dbAfter });
+    res.json({
+      ok: true,
+      crossingId: CID,
+      applied: apply,
+      dryRun: !apply,
+      mode: datastoreMode,
+      runtime: { before, after },
+      postgres: { before: dbBefore, after: dbAfter },
+      preserved: ['borderflow_users', 'borderflow_camera_roi_configs', 'borderflow_alert_subscriptions', 'static-config', 'env', 'auth', 'other-crossings'],
+      note: apply
+        ? 'Maljevac operativni podaci očišćeni (oba smjera) + runtime cache (uklj. emaWaitCache). Pokreni POST /api/admin/sources/refresh za fresh signal.'
+        : 'DRY-RUN: ništa nije obrisano. Pošalji {"apply":true} za stvarni reset.',
+    });
+  } catch (error) {
+    console.error('[admin/maljevac/reset-operational-data]', error);
+    res.status(500).json({ ok: false, error: 'Maljevac reset nije uspio.', note: safeError(error) });
+  }
+});
+
 // Admin-only camera audit: probes every configured CAMERA_FEEDS entry through
 // the in-app proxy endpoint to confirm it returns an image (not the
 // "izvor se ne može prikazati" iframe fallback). Reports OK/broken status,

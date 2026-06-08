@@ -11,16 +11,31 @@ import { classifyQueueBand, QUEUE_BANDS, resolveCameraClearOverride, resolveCame
 const rank = (b) => QUEUE_BANDS.indexOf(b);
 
 describe('classifyQueueBand never over-reports congestion without vehicle evidence', () => {
+  // GENUINE pixel noise = LOW real occupancy but a high laneFullness sensor reading (wet asphalt /
+  // shadows on an open road). These must stay ≤ "mala" — no real objects are present.
   const noiseFrames = [
     { name: 'empty road, lane sensor reads 99', occupancyPct: 0, laneFullnessPct: 99, queueVehicles: 0 },
     { name: 'one car, lane 99 (the live Maljevac toHr frame)', occupancyPct: 0, laneFullnessPct: 99, queueVehicles: 1 },
-    { name: 'one car, occupancy 90 (shadows)', occupancyPct: 90, laneFullnessPct: 90, queueVehicles: 1 },
-    { name: 'two cars, full-looking frame', occupancyPct: 80, laneFullnessPct: 85, queueVehicles: 2 },
+    { name: 'low occupancy (8%) but lane sensor 95 (shadows)', occupancyPct: 8, laneFullnessPct: 95, queueVehicles: 1 },
   ];
   for (const f of noiseFrames) {
     it(`${f.name} → band ≤ "mala" (never velika/ekstremna)`, () => {
       const { band } = classifyQueueBand({ occupancyPct: f.occupancyPct, laneFullnessPct: f.laneFullnessPct, queueVehicles: f.queueVehicles, confidence: 65 });
       expect(rank(band)).toBeLessThanOrEqual(rank('mala'));
+    });
+  }
+
+  // BUT high REAL occupancy + ~no detected vehicles ≠ clear. That is the live Maljevac NO-GO: a lane
+  // visibly full of cars where the detector returned ~nothing was wrongly called "mala" → "do 5 min".
+  // It must read "srednja" (possible queue) — never a confident "mala", never an unverifiable extreme.
+  const disagreementFrames = [
+    { name: 'one car but occupancy 90', occupancyPct: 90, laneFullnessPct: 90, queueVehicles: 1 },
+    { name: 'two cars, full-looking frame, occupancy 80', occupancyPct: 80, laneFullnessPct: 85, queueVehicles: 2 },
+  ];
+  for (const f of disagreementFrames) {
+    it(`${f.name} → "srednja" (possible queue), not a confident "mala" nor extreme`, () => {
+      const { band } = classifyQueueBand({ occupancyPct: f.occupancyPct, laneFullnessPct: f.laneFullnessPct, queueVehicles: f.queueVehicles, confidence: 65 });
+      expect(band).toBe('srednja');
     });
   }
 

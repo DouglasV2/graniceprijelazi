@@ -494,6 +494,15 @@ export function classifyQueueBand({ occupancyPct = 0, laneFullnessPct = 0, queue
   if (evidence <= 2) cap = 'mala';
   else if (evidence <= 5) cap = 'srednja';
   else if (evidence <= 10) cap = 'velika';
+  // DETECTION-DISAGREEMENT GUARD. A near-zero vehicle count only proves the lane is "clear" when the
+  // lane ALSO reads empty. If measured OCCUPANCY is high (≥40%) but we detected ~no vehicles, the
+  // detector probably FAILED (distant/low-light HAK frame, YOLO returned nothing) — that is NOT proof
+  // of an empty lane, so we must not cap down to a confident "mala". Treat it as a POSSIBLE queue
+  // (srednja) so a visibly busy lane can never collapse to "do 5 min". Note this keys on real
+  // occupancyPct, NOT laneFullnessPct, so wet-asphalt/shadow pixel noise (low occupancy, high
+  // fullness) still stays "mala" — preserving the earlier false-positive fix.
+  const occ = Number(occupancyPct) || 0;
+  if (cap === 'mala' && occ >= 40 && !stale) cap = 'srednja';
   if (QUEUE_BANDS.indexOf(band) > QUEUE_BANDS.indexOf(cap)) band = cap;
 
   // An unreliable frame must not scream "ekstremna". Cap the claim.
