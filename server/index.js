@@ -1707,15 +1707,39 @@ function recentResolvedAccuracy(hours = 24 * 14) {
 const CAMERA_CALIBRATION_MIN_SAMPLES = Math.max(4, Number(process.env.CAMERA_CALIBRATION_MIN_SAMPLES || 6));
 const CAMERA_CALIBRATION_MAX_MAE = Math.max(5, Number(process.env.CAMERA_CALIBRATION_MAX_MAE || 18));
 const CAMERA_CALIBRATION_WINDOW_HOURS = Math.max(24, Number(process.env.CAMERA_CALIBRATION_WINDOW_HOURS || 24 * 60));
+// Reports speed up data collection but can't auto-calibrate alone — require this many VERIFIED samples.
+const CAMERA_CALIBRATION_MIN_VERIFIED = Math.max(1, Number(process.env.CAMERA_CALIBRATION_MIN_VERIFIED || 2));
+const CALIBRATION_OPTS = { minSamples: CAMERA_CALIBRATION_MIN_SAMPLES, maxMae: CAMERA_CALIBRATION_MAX_MAE, minVerifiedSamples: CAMERA_CALIBRATION_MIN_VERIFIED };
 let calibrationModelsCache = {};
 let calibrationModelsAt = 0;
 function recomputeCalibrationModels() {
   const records = recentResolvedAccuracy(CAMERA_CALIBRATION_WINDOW_HOURS)
     .filter((r) => r.sourceMix && r.sourceMix.cameraRoiTrusted && Number.isFinite(Number(r.sourceMix.cameraVehiclesInQueueRoi)))
-    .map((r) => ({ crossingId: r.crossingId, direction: r.direction, cameraCount: Number(r.sourceMix.cameraVehiclesInQueueRoi), actualWait: Number(r.actualWait) }));
-  calibrationModelsCache = buildCalibrationModels(records, { minSamples: CAMERA_CALIBRATION_MIN_SAMPLES, maxMae: CAMERA_CALIBRATION_MAX_MAE });
+    // source → trust tier inside the engine: measured/verified = weight 1.0, driver reports = 0.35.
+    .map((r) => ({ crossingId: r.crossingId, direction: r.direction, cameraCount: Number(r.sourceMix.cameraVehiclesInQueueRoi), actualWait: Number(r.actualWait), source: r.source }));
+  calibrationModelsCache = buildCalibrationModels(records, CALIBRATION_OPTS);
   calibrationModelsAt = Date.now();
   return calibrationModelsCache;
+}
+// Feed a ground-truth observation (measured OR driver report) into the calibration stream: pair the
+// observed wait with the most-recent TRUSTED camera count for that crossing+direction. Reports come
+// in tagged source 'driver-report' (lower trust); measured/verified keep their stronger source.
+function recordCalibrationGroundTruth({ crossingId, direction, actualWait, source }) {
+  if (!Number.isFinite(Number(actualWait))) return false;
+  const since = Date.now() - 120 * 60 * 1000; // pair with a count seen in the last ~2h
+  const recent = predictionAccuracyBuffer.find((r) => r.crossingId === crossingId && r.direction === direction
+    && new Date(r.predictedAt).getTime() >= since
+    && r.sourceMix && r.sourceMix.cameraRoiTrusted && Number.isFinite(Number(r.sourceMix.cameraVehiclesInQueueRoi)));
+  if (!recent) return false;
+  recordResolvedAccuracy({
+    crossingId,
+    direction,
+    predictedWait: Number(recent.predictedWait),
+    actualWait: Number(actualWait),
+    sourceMix: { cameraVehiclesInQueueRoi: Number(recent.sourceMix.cameraVehiclesInQueueRoi), cameraRoiTrusted: true },
+    source: source || 'driver-report',
+  });
+  return true;
 }
 function getCalibrationModel(crossingId, direction) {
   if (Date.now() - calibrationModelsAt > 5 * 60 * 1000) recomputeCalibrationModels();
@@ -5000,6 +5024,9 @@ app.post('/api/reports', authRequired, writeLimiter, async (req, res) => {
   store.reports = store.reports.slice(0, 1000);
   store.audit.unshift({ id: crypto.randomUUID(), type: 'driver_report_created', actor: req.user, details: { crossingId, direction, wait, type: reportType }, createdAt: new Date().toISOString() });
   await writeAppStore(store);
+  // Feed the report into count→wait calibration as a LOWER-TRUST sample (weighted; can't auto-calibrate
+  // alone). Only lands a sample if there's a recent trusted camera count to pair the reported wait with.
+  try { recordCalibrationGroundTruth({ crossingId, direction, actualWait: wait, source: 'driver-report' }); } catch { /* best-effort */ }
   res.status(201).json({ ok: true, report });
 });
 

@@ -35,12 +35,6 @@ function normalizeText(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-function cautiousBandLabel(rawLabel = '') {
-  const label = String(rawLabel || 'Provjera na slici').trim();
-  if (!label || /^vizualna|^provjera na slici/i.test(label)) return 'Provjera na slici';
-  if (/^na slici djeluje/i.test(label)) return label;
-  return `Na slici djeluje kao ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
-}
 
 // Camera queue labels must not fake certainty. "Mala/Srednja/Velika kolona" is only confident
 // when we have an actual camera-driven estimate, or an ROI-calibrated YOLO signal. Heuristic/no-ROI
@@ -68,12 +62,17 @@ export function buildCameraQueueLabel(analytics = {}, { estimateUsable = false }
     if (queueVehicles <= 1 || noDetections) return 'Kamera ne vidi kolonu';
     return `Kamera broji ${queueVehicles} vozila u koloni`;
   }
-  // Count not reliable yet. If the lane VISUALLY shows a queue, say so honestly (a possible queue)
-  // — never imply it's empty just because the count isn't reliable.
+  // Count not reliable yet. If the lane VISUALLY shows a real queue (srednja+), say so honestly.
   if (visualQueue) return 'Kamera pokazuje moguću kolonu';
+  // An untrusted/uncalibrated ROI must NEVER claim "no queue" (its 0 may be a mis-mapped zone) — it
+  // points to the live image regardless of the count.
   if (cvUsed && roiCalibrated && !roiTrusted) return 'Provjeri kolonu na slici uživo';
   if (cvUsed && !roiCalibrated) return 'Kamera još ne broji točno — provjeri na slici';
-  return cautiousBandLabel(raw);
+  // Heuristic-only / no usable camera signal: with zero detections we must NOT claim "djeluje kao
+  // mala kolona" (that contradicts "kamera ne vidi vozila"). A clear frame reads "ne vidi kolonu";
+  // anything else just points to the live image — never a fabricated band.
+  if (noDetections) return 'Kamera trenutno ne vidi kolonu';
+  return 'Provjeri sliku uživo';
 }
 
 // Map a raw detector fallback reason to clean, user-safe Croatian copy. NEVER leak the raw token

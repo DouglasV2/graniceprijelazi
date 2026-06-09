@@ -108,6 +108,32 @@ describe('cameraStatusCopy never leaks raw fallback tokens to the user + plain l
   });
 });
 
+describe('camera copy is never self-contradictory (0 vehicles must not read as a visible queue)', () => {
+  const POSITIVE_BAND = /(mala|srednja|velika|ekstremna)\s+kolon/i;
+  it('heuristic "Mala kolona" band + 0 detected vehicles → "ne vidi kolonu", never "djeluje kao mala kolona"', () => {
+    const label = buildCameraQueueLabel({ queueBandLabel: 'Mala kolona', cvUsed: false, cvFallbackReason: 'no-detections', queueVehicles: 0 }, { estimateUsable: false });
+    expect(label).not.toMatch(/djeluje kao/i);
+    expect(label).not.toMatch(POSITIVE_BAND);
+    expect(label).toMatch(/ne vidi kolonu/i);
+  });
+  it('cvUsed but no detections + no reliable ROI → no positive band claim', () => {
+    const label = buildCameraQueueLabel({ queueBandLabel: 'Mala kolona', cvUsed: true, cvFallbackReason: 'no-detections', roiFeatures: { roiCalibrated: false } }, { estimateUsable: false });
+    expect(label).not.toMatch(POSITIVE_BAND);
+    expect(label).not.toMatch(/djeluje kao/i);
+  });
+  it('label + trust text together: "ne vidi vozila" status must not pair with a visible-queue headline', () => {
+    const analytics = { queueBandLabel: 'Mala kolona', cvUsed: false, cvFallbackReason: 'no-detections', queueVehicles: 0 };
+    const label = buildCameraQueueLabel(analytics, { estimateUsable: false });
+    const trust = buildCameraTrustText(analytics, { estimateUsable: false });
+    expect(trust).toMatch(/ne vidi vozila/i);     // status: empty
+    expect(label).not.toMatch(POSITIVE_BAND);     // headline must agree (no claimed queue)
+  });
+  it('a genuine srednja+ occupancy band is still allowed to read as a possible queue', () => {
+    const label = buildCameraQueueLabel({ queueBandLabel: 'Srednja kolona', cvUsed: false }, { estimateUsable: false });
+    expect(label).toMatch(/moguću kolonu/i);
+  });
+});
+
 describe('camera copy is driver-friendly (no AI/ROI/YOLO/kalibr jargon)', () => {
   const samples = [
     buildCameraQueueLabel({ queueBandLabel: 'Srednja kolona', cvUsed: false }),

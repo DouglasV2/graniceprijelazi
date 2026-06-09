@@ -28,6 +28,7 @@ import { loadGoogleMaps, mapsConstructorsReady } from './utils/google-maps-loade
 import { shouldSendPing } from './utils/location-wait-client.js';
 import { rankCrossingsByLocation } from './utils/crossing-recommendation.js';
 import { resolveReportWaitMinutes, clampWaitMinutes, WAIT_QUICK_OPTIONS } from './utils/parse-wait-minutes.js';
+import { routeGeometryValidated } from './utils/route-geometry.js';
 
 
 function makeCrossingHistory(baseCars, baseTrucks, baseBuses, baseWait) {
@@ -2766,6 +2767,7 @@ function makeMarkerElement(crossing, isActive, selectedDirection = 'toBih', over
 function makeInfoContent(crossing, selectedDirection, overrides = {}) {
   const direction = getDirection(crossing, selectedDirection);
   const wait = getDisplayedWait(crossing, selectedDirection, overrides);
+  const sourceMeta = getWaitSourceMeta(crossing, selectedDirection, overrides);
   const status = statusMeta[statusFromWait(wait)] || statusMeta.unknown;
   return `
     <div class="gm-info-card">
@@ -2776,8 +2778,8 @@ function makeInfoContent(crossing, selectedDirection, overrides = {}) {
       <p>${crossing.route}</p>
       <div class="gm-info-grid">
         <div><span>Smjer</span><b>${direction.label}</b></div>
-        <div><span>Osobna</span><b>${formatMinutes(wait)}</b></div>
-        <div><span>Izvor</span><b>${getWaitSourceMeta(crossing, selectedDirection, overrides).label}</b></div>
+        <div><span>Osobna</span><b>${hasKnownWait(wait) ? formatWaitDisplay(wait, sourceMeta) : '—'}</b></div>
+        <div><span>Izvor</span><b>${sourceMeta.label}</b></div>
         <div><span>Potvrda</span><b>${crossing.fieldConfirmed ? 'Teren' : 'Signal'}</b></div>
       </div>
       <p class="gm-info-note">${crossing.cause}</p>
@@ -3202,8 +3204,9 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
         if (!path.length) return;
         path.forEach((point) => bounds.extend(point));
 
-        // Soft "Provjerena zona" ribbon for the primary route (clean, professional zone visual).
-        if (route.primary && google.maps.Polygon && zone && Array.isArray(zone.measurementZonePolygon) && zone.measurementZonePolygon.length >= 4) {
+        // Soft "Provjerena zona" ribbon for the primary route — ONLY when the geometry is genuinely
+        // road-shaped. A straight-line fallback must not be painted as a validated zone.
+        if (route.primary && routeGeometryValidated(path) && google.maps.Polygon && zone && Array.isArray(zone.measurementZonePolygon) && zone.measurementZonePolygon.length >= 4) {
           const zonePolygon = new google.maps.Polygon({
             paths: zone.measurementZonePolygon,
             map,
@@ -3356,6 +3359,13 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   const isControlZoneDisplay = routePayload.displayMode === 'control_zone' || activeRoute?.displayMode === 'control_zone' || primaryRoute?.displayMode === 'control_zone';
   const zone = routePayload.zone || getZone(selectedCrossing, selectedDirection);
   const routeMeta = routeAvailabilityMeta(routePayload);
+  // Is the primary route's geometry a genuine road shape (not a straight-line fallback)? Gates the
+  // "provjerena zona" wording + the secondary zone/traffic metrics (Item 1/3: show only when validated).
+  const primaryDisplayPath = (Array.isArray(primaryRoute?.displayZone?.displayCorridorPolyline) && primaryRoute.displayZone.displayCorridorPolyline.length >= 2)
+    ? primaryRoute.displayZone.displayCorridorPolyline
+    : (primaryRoute?.path || []);
+  const routeValidated = routeGeometryValidated(primaryDisplayPath);
+  const showZoneMetrics = primaryRoute && (!isControlZoneDisplay || routeValidated);
   const borderWait = getDisplayedWait(selectedCrossing, selectedDirection, overrides);
   const borderSourceMeta = getWaitSourceMeta(selectedCrossing, selectedDirection, overrides);
   const borderRange = hasKnownWait(borderSourceMeta.rangeMin) && hasKnownWait(borderSourceMeta.rangeMax)
@@ -3433,10 +3443,15 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
                   <b>{formatWaitDisplay(borderWait, borderSourceMeta)}</b>
                   {borderSourceMeta.hasSoftUpperBoundPublic && <small className="wait-qualifier">procjena</small>}
                 </div>
-                <div><span>{isControlZoneDisplay ? 'Vožnja kroz zonu' : 'Trajanje rute'}</span><b>{formatMinutes(primaryRoute.durationMinutes)}</b></div>
-                <div><span>{isControlZoneDisplay ? 'Dionica zone' : 'Udaljenost'}</span><b>{formatDistanceKm(primaryRoute.distanceKm)}</b></div>
-                <div><span>Cestovni zastoj</span><b>{formatMinutes(primaryRoute.delayMinutes || 0)}</b></div>
+                {/* Secondary zone/traffic metrics only when the route geometry is genuinely validated
+                    (Item 1/3) — never show "Vožnja kroz zonu / Dionica" off a straight-line fallback. */}
+                {showZoneMetrics && <div><span>{isControlZoneDisplay ? 'Vožnja kroz zonu' : 'Trajanje rute'}</span><b>{formatMinutes(primaryRoute.durationMinutes)}</b></div>}
+                {showZoneMetrics && <div><span>{isControlZoneDisplay ? 'Dionica zone' : 'Udaljenost'}</span><b>{formatDistanceKm(primaryRoute.distanceKm)}</b></div>}
+                {showZoneMetrics && routePayload.trafficAvailable !== false && <div><span>Cestovni zastoj</span><b>{formatMinutes(primaryRoute.delayMinutes || 0)}</b></div>}
               </div>
+              {isControlZoneDisplay && !routeValidated && (
+                <p className="route-note">Ruta nije potvrđena — prikazujemo samo čekanje na granici.</p>
+              )}
               <div className="route-signal-badges">
                 {borderSourceMeta.hasGoogleSignal && !borderSourceMeta.hasStrongCameraQueue && routeLooksClear(primaryRoute) && (
                   <span className="signal-badge signal-google-clear">Prometnica prohodna</span>
@@ -3475,7 +3490,7 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
           )}
         </div>
       )}
-      {focusTraffic && routeInspectorOpen && activeRoute && (
+      {focusTraffic && routeInspectorOpen && activeRoute && !(isControlZoneDisplay && !routeValidated) && (
         <div className="route-inspector-card">
           <button type="button" className="mini-close" onClick={() => setRouteInspectorOpen(false)}>×</button>
           <span>{activeRoute.label}</span>
@@ -3590,7 +3605,7 @@ function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, se
                         <b>{crossing.shortName}</b>
                         <small>{crossing.route}</small>
                       </span>
-                      <strong>{hasKnownWait(wait) ? formatMinutes(wait) : '—'}</strong>
+                      <strong>{hasKnownWait(wait) ? formatWaitDisplay(wait, sourceMeta) : '—'}</strong>
                       <em>Live</em>
                       <i className={`source-badge mini ${sourceMeta.className}`}>{sourceMeta.label}</i>
                     </button>
@@ -5047,13 +5062,14 @@ function buildFavoriteAlerts(trackedIds = [], selectedDirection = 'toBih', overr
       const direction = getDirection(crossing, selectedDirection);
       const wait = getDisplayedWait(crossing, selectedDirection, overrides);
       if (!hasKnownWait(wait)) return null;
+      const waitLabel = formatWaitDisplay(wait, getWaitSourceMeta(crossing, selectedDirection, overrides));
       const status = statusFromWait(wait);
       if (status === 'normal' && direction.trend !== 'rising') return null;
       const tone = status === 'critical' ? 'critical' : direction.trend === 'rising' ? 'busy' : status;
       const title = status === 'critical' ? `${crossing.shortName}: veliko čekanje` : `${crossing.shortName}: stanje se mijenja`;
       const message = status === 'critical'
-        ? `${direction.label} je na ${formatMinutes(wait)}. Otvori dojave ili provjeri kameru prije polaska.`
-        : `${direction.label} ima trend rasta. Trenutna procjena je ${formatMinutes(wait)}.`;
+        ? `${direction.label} je na ${waitLabel}. Otvori dojave ili provjeri kameru prije polaska.`
+        : `${direction.label} ima trend rasta. Trenutna procjena je ${waitLabel}.`;
       return { id: `${crossing.id}:${selectedDirection}:${tone}:${Math.round(wait)}`, crossingId: crossing.id, title, message, tone, wait };
     })
     .filter(Boolean)
@@ -5268,7 +5284,7 @@ export default function App() {
       const title = rule.type === 'route_open' ? `${crossing.shortName}: ruta je otvorena` : `${crossing.shortName}: čekanje je palo`;
       const message = rule.type === 'route_open'
         ? `${rule.direction === 'toHr' ? 'BiH → HR' : 'HR → BiH'} ponovno izgleda prohodno.`
-        : `${rule.direction === 'toHr' ? 'BiH → HR' : 'HR → BiH'} je sada ${formatMinutes(wait)}.`;
+        : `${rule.direction === 'toHr' ? 'BiH → HR' : 'HR → BiH'} je sada ${formatWaitDisplay(wait, sourceMeta)}.`;
       triggered.push({ id: `${rule.id}:${triggerKey}`, crossingId: crossing.id, tone: 'normal', title, message });
       if ('Notification' in window && Notification.permission === 'granted') {
         try { new Notification(title, { body: message }); } catch {}

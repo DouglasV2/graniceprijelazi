@@ -329,6 +329,18 @@ describe('live "Moja lokacija" signal wiring (subtle, anonymous, no raw trail)',
   });
 });
 
+describe('wait display is one shared formatter across all surfaces (no 0-min vs do-5-min mismatch)', () => {
+  it('the sidebar list, info window, and alerts use formatWaitDisplay(wait, sourceMeta), not raw formatMinutes(wait)', () => {
+    // sidebar map-crossing list
+    expect(app).toMatch(/hasKnownWait\(wait\) \? formatWaitDisplay\(wait, sourceMeta\) : '—'\}<\/strong>\s*\n\s*<em>Live<\/em>/);
+    // map info window card (Osobna)
+    expect(app).toMatch(/<b>\$\{hasKnownWait\(wait\) \? formatWaitDisplay\(wait, sourceMeta\) : '—'\}<\/b>/);
+    // favorite alert + notification rule use the shaped label, not formatMinutes
+    expect(app).toMatch(/const waitLabel = formatWaitDisplay\(wait, getWaitSourceMeta/);
+    expect(app).toMatch(/je sada \$\{formatWaitDisplay\(wait, sourceMeta\)\}/);
+  });
+});
+
 describe('location recommendation UX is wired + privacy-safe', () => {
   it('has the permission-CTA card with non-aggressive copy', () => {
     expect(app).toMatch(/function LocationRecommendation/);
