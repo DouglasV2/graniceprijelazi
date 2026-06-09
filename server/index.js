@@ -4838,6 +4838,25 @@ app.put('/api/internal/traffic-vision/roi-config/:cameraId', optionalAuth, roiEd
   const validation = validateRoiConfig({ ...config, cameraId: req.params.cameraId });
   if (!validation.valid) return res.status(400).json({ ok: false, errors: validation.errors });
 
+  // An editor-saved polygon is a REVIEWED calibration → it becomes TRUSTED (roiVersion set, not
+  // rect-derived, no needsEditorReview flag). Surface that in the response so the operator gets
+  // immediate confirmation that the vehicle COUNT now drives the wait (vs the prior visual-only seed).
+  const roiTrustedAfterSave = Boolean(config.roiVersion) && !config.derivedFromRect && !(config.metadata && config.metadata.needsEditorReview);
+  const trustedNote = roiTrustedAfterSave
+    ? 'ROI je sada TRUSTED — broj vozila iz YOLO-a sada vodi procjenu čekanja (više nije samo vizualna provjera).'
+    : 'ROI spremljen, ali NIJE trusted (rect-derived/needsEditorReview) — ostaje vizualna provjera.';
+  // Non-blocking sanity: a polygon covering ~the whole frame is not a tight queue-ROI (it would count
+  // every vehicle like the rect-derived fallback). Warn so a trusted ROI is actually a calibrated one.
+  const polyAreaFraction = (poly) => {
+    if (!Array.isArray(poly) || poly.length < 3) return 0;
+    let a = 0;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i, i += 1) a += (poly[j].x + poly[i].x) * (poly[j].y - poly[i].y);
+    return Math.min(1, Math.abs(a / 2));
+  };
+  const roiWarning = polyAreaFraction(config.queuePolygon) > 0.85
+    ? 'Upozorenje: queue poligon pokriva >85% kadra — to nije uska kolona-ROI. Za točan broj precizno omeđi samo trake u koloni.'
+    : null;
+
   // Production source of truth = Postgres when configured; otherwise the runtime file override.
   if (datastoreMode === 'postgres') {
     try {
@@ -4852,9 +4871,11 @@ app.put('/api/internal/traffic-vision/roi-config/:cameraId', optionalAuth, roiEd
         ok: true,
         cameraId: req.params.cameraId,
         config: getRoiConfig(req.params.cameraId),
+        roiTrusted: roiTrustedAfterSave,
+        warning: roiWarning,
         persistence: 'postgres',
         staticSnippet: { [req.params.cameraId]: config },
-        note: 'Spremljeno u Postgres (borderflow_camera_roi_configs) — trajno, preživljava redeploy. staticSnippet je opcionalan backup za commit.',
+        note: `Spremljeno u Postgres (borderflow_camera_roi_configs) — trajno, preživljava redeploy. ${trustedNote}`,
       });
     } catch (error) {
       return res.status(500).json({ ok: false, error: 'Spremanje ROI configa u bazu nije uspjelo.', detail: safeError(error) });
@@ -4867,9 +4888,11 @@ app.put('/api/internal/traffic-vision/roi-config/:cameraId', optionalAuth, roiEd
     ok: true,
     cameraId: req.params.cameraId,
     config: result.config,
+    roiTrusted: roiTrustedAfterSave,
+    warning: roiWarning,
     persistence: 'runtime-override',
     staticSnippet: { [req.params.cameraId]: result.config },
-    note: 'Spremljeno u runtime override (data/camera-roi-overrides.json). Na efemernoj PaaS FS (Railway) override se gubi na redeploy — kopiraj `staticSnippet` u STATIC_ROI_CONFIGS u server/camera-roi-config.js i commitaj za trajnu pohranu, ili postavi DATABASE_URL za trajnu DB pohranu.',
+    note: `Spremljeno u runtime override (data/camera-roi-overrides.json). ${trustedNote} Na efemernoj PaaS FS (Railway) override se gubi na redeploy — kopiraj staticSnippet u STATIC_ROI_CONFIGS i commitaj, ili koristi DATABASE_URL za trajnu pohranu.`,
   });
 });
 

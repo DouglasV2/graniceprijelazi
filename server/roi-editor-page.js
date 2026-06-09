@@ -253,7 +253,7 @@ export const ROI_EDITOR_HTML = `<!doctype html>
     if (!f){ document.getElementById('counts').innerHTML = ''; return; }
     var el = document.getElementById('counts');
     el.innerHTML = '';
-    [['Vidljivo', f.visibleVehicleCount],['U koloni', f.vehiclesInQueueRoi],['Ignorirano', f.vehiclesIgnored],['Izvan ROI', f.vehiclesOutsideRoi]].forEach(function(pair){
+    [['Vidljivo', f.visibleVehicleCount],['U koloni', f.vehiclesInQueueRoi],['Ignorirano', f.vehiclesIgnored],['Izvan ROI', f.vehiclesOutsideRoi],['Trusted', f.roiTrusted ? 'DA' : 'NE']].forEach(function(pair){
       var d = document.createElement('div'); d.className = 'c'; d.innerHTML = '<b>' + (pair[1] == null ? '—' : pair[1]) + '</b>' + pair[0]; el.appendChild(d);
     });
   }
@@ -269,7 +269,8 @@ export const ROI_EDITOR_HTML = `<!doctype html>
       .then(function(r){ return r.json(); }).then(function(j){
         if (!j.ok){ setStatus((j.errors||[j.error]).join(', '), 'err'); return; }
         document.getElementById('snippet').textContent = JSON.stringify(j.staticSnippet, null, 2);
-        setStatus('Spremljeno (runtime override). Kopiraj snippet u STATIC_ROI_CONFIGS za trajno.', 'ok');
+        var trusted = j.roiTrusted ? '✓ ROI TRUSTED — broj vozila sada vodi procjenu' : '⚠ ROI nije trusted (ostaje vizualna provjera)';
+        setStatus('Spremljeno (' + (j.persistence||'?') + '). ' + trusted + (j.warning ? ' — ' + j.warning : ''), j.warning ? 'warn' : (j.roiTrusted ? 'ok' : 'warn'));
       }).catch(function(e){ setStatus('Mreža: ' + e.message, 'err'); });
   };
 
