@@ -36,17 +36,17 @@ function normalizeText(value) {
 }
 
 function cautiousBandLabel(rawLabel = '') {
-  const label = String(rawLabel || 'Vizualna provjera').trim();
-  if (!label || /^vizualna/i.test(label)) return 'Vizualna provjera';
-  if (/^djeluje kao/i.test(label)) return label;
-  return `Vizualno djeluje kao ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+  const label = String(rawLabel || 'Provjera na slici').trim();
+  if (!label || /^vizualna|^provjera na slici/i.test(label)) return 'Provjera na slici';
+  if (/^na slici djeluje/i.test(label)) return label;
+  return `Na slici djeluje kao ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
 }
 
 // Camera queue labels must not fake certainty. "Mala/Srednja/Velika kolona" is only confident
 // when we have an actual camera-driven estimate, or an ROI-calibrated YOLO signal. Heuristic/no-ROI
 // states are deliberately phrased as visual assistance, not a precise AI queue verdict.
 export function buildCameraQueueLabel(analytics = {}, { estimateUsable = false } = {}) {
-  const raw = analytics.queueBandLabel || analytics.finalVisualBand || 'Vizualna provjera';
+  const raw = analytics.queueBandLabel || analytics.finalVisualBand || 'Provjera na slici';
   const cvUsed = analytics.cvUsed === true || analytics.yoloUsed === true;
   const roiFeatures = analytics.roiFeaturesPrimary || analytics.roiFeatures || analytics.yoloCamera || null;
   const roiCalibrated = Boolean(roiFeatures?.roiCalibrated || analytics.roiCalibrated);
@@ -63,16 +63,16 @@ export function buildCameraQueueLabel(analytics = {}, { estimateUsable = false }
     if (roiCalibrated && roiTrusted && Number.isFinite(queueVehicles)) return `${queueVehicles} vozila u koloni`;
     return raw;
   }
-  // Only a TRUSTED, calibrated ROI may state a precise count or "no queue".
+  // Only a reviewed, reliable camera zone may state a precise count or "no queue".
   if (cvUsed && roiCalibrated && roiTrusted && Number.isFinite(queueVehicles)) {
-    if (queueVehicles <= 1 || noDetections) return 'AI kamera ne vidi kolonu';
-    return `AI kamera vidi ${queueVehicles} vozila u koloni`;
+    if (queueVehicles <= 1 || noDetections) return 'Kamera ne vidi kolonu';
+    return `Kamera broji ${queueVehicles} vozila u koloni`;
   }
-  // AI not trusted/calibrated. If the lane VISUALLY shows a queue, say so honestly (a possible queue)
-  // — never imply it's empty just because YOLO/ROI is weak.
-  if (visualQueue) return 'Kamera prikazuje moguću kolonu';
-  if (cvUsed && roiCalibrated && !roiTrusted) return 'Kamera dostupna za vizualnu provjeru';
-  if (cvUsed && !roiCalibrated) return 'AI kamera nije dovoljno kalibrirana za procjenu kolone';
+  // Count not reliable yet. If the lane VISUALLY shows a queue, say so honestly (a possible queue)
+  // — never imply it's empty just because the count isn't reliable.
+  if (visualQueue) return 'Kamera pokazuje moguću kolonu';
+  if (cvUsed && roiCalibrated && !roiTrusted) return 'Provjeri kolonu na slici uživo';
+  if (cvUsed && !roiCalibrated) return 'Kamera još ne broji točno — provjeri na slici';
   return cautiousBandLabel(raw);
 }
 
@@ -81,11 +81,11 @@ export function buildCameraQueueLabel(analytics = {}, { estimateUsable = false }
 // result, not an outage.
 export function cameraStatusCopy(reason = '') {
   const r = String(reason || '').toLowerCase();
-  if (!r) return 'AI detekcija trenutno nije dostupna.';
-  if (r.includes('no-endpoint') || r.includes('disabled') || r.includes('not-configured')) return 'AI detekcija nije konfigurirana.';
-  if (r.includes('no-detection') || r.includes('empty')) return 'AI nije pronašao vozila u ovom kadru.';
+  if (!r) return 'Provjera s kamere trenutno nije dostupna.';
+  if (r.includes('no-endpoint') || r.includes('disabled') || r.includes('not-configured')) return 'Provjera s kamere nije uključena.';
+  if (r.includes('no-detection') || r.includes('empty')) return 'Kamera trenutno ne vidi vozila na slici.';
   // timeout / http-xxx / error / invalid-json / no-image → generic "temporarily unavailable"
-  return 'AI detekcija trenutno nije dostupna.';
+  return 'Provjera s kamere trenutno nije dostupna.';
 }
 
 export function buildCameraTrustText(analytics = {}, { estimateUsable = false, contradictsOfficial = false } = {}) {
@@ -95,15 +95,15 @@ export function buildCameraTrustText(analytics = {}, { estimateUsable = false, c
   const roiTrusted = Boolean(roiFeatures?.roiTrusted);
   const fallback = analytics.cvFallbackReason || roiFeatures?.fallbackReason || null;
 
-  if (estimateUsable && cvUsed && roiCalibrated && roiTrusted) return 'Procjena koristi AI detekciju vozila unutar kalibrirane zone kolone.';
-  if (estimateUsable) return analytics.message || 'Procjena iz kamere koristi svježi signal, ali i dalje je uspoređujemo s javnim izvorima.';
-  if (contradictsOfficial) return 'Kamera se ne slaže dovoljno sa službenim izvorom, zato ju prikazujemo samo kao vizualnu provjeru.';
+  if (estimateUsable && cvUsed && roiCalibrated && roiTrusted) return 'Procjenu računamo iz broja vozila koja kamera vidi u koloni.';
+  if (estimateUsable) return analytics.message || 'Procjena s kamere je svježa; svejedno je uspoređujemo s javnim izvorima.';
+  if (contradictsOfficial) return 'Kamera se ne slaže dovoljno sa službenim izvorom, pa je koristimo samo za provjeru na slici.';
   const visualQueue = /srednja|velika|ekstremna/i.test(`${analytics.queueBandLabel || ''} ${analytics.visualBand || ''}`);
-  // Visible queue but AI not trusted → say the camera shows a possible queue, AI count isn't reliable.
-  if (visualQueue && !roiTrusted) return 'Kamera prikazuje moguću kolonu, ali AI brojanje nije dovoljno pouzdano — procjena nije samo iz slike.';
+  // Visible queue but count not reliable → say the camera shows a possible queue, count isn't reliable yet.
+  if (visualQueue && !roiTrusted) return 'Kamera pokazuje moguću kolonu, ali broj vozila još nije pouzdan — procjenu ne radimo samo iz slike.';
   // Calibrated but not yet reviewed (seeded/rect-derived) → don't claim a reliable verdict.
-  if (cvUsed && roiCalibrated && !roiTrusted) return 'AI kamera nije dovoljno kalibrirana za procjenu kolone — kamera prikazuje promet, ali čekanje ne izvodimo samo iz slike.';
-  if (cvUsed && !roiCalibrated) return 'AI vidi vozila, ali kamera nije potpuno kalibrirana.';
-  if (!cvUsed && fallback) return `Kamera trenutno služi kao vizualna provjera. ${cameraStatusCopy(fallback)}`;
-  return 'Kamera trenutno služi kao vizualna provjera — čekanje ne izvodimo iz same slike.';
+  if (cvUsed && roiCalibrated && !roiTrusted) return 'Kamera još ne broji točan broj vozila — pokazuje promet, ali čekanje ne računamo samo iz slike.';
+  if (cvUsed && !roiCalibrated) return 'Kamera vidi vozila, ali još ne broji posve točno.';
+  if (!cvUsed && fallback) return `Kamera je za provjeru na slici. ${cameraStatusCopy(fallback)}`;
+  return 'Kamera je za provjeru na slici — čekanje ne računamo iz same slike.';
 }

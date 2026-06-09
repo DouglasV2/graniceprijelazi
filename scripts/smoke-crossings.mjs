@@ -17,7 +17,8 @@ const BASE = (process.env.SMOKE_BASE_URL || 'http://localhost:8080').replace(/\/
 const ADMIN_TOKEN = process.env.SMOKE_ADMIN_TOKEN || '';
 const DEBUG_TOKEN = process.env.SMOKE_DEBUG_TOKEN || '';
 const APPLY_RESET = process.env.SMOKE_APPLY_RESET === 'true';
-const CROSSINGS = (process.env.SMOKE_CROSSINGS || 'maljevac,gornji-varos').split(',').map((s) => s.trim()).filter(Boolean);
+// SMOKE_CROSSINGS=all → every camera-equipped crossing (resolved from cv-readiness at runtime).
+const CROSSINGS_ENV = (process.env.SMOKE_CROSSINGS || 'maljevac,gornji-varos').trim();
 const DIRECTIONS = ['toBih', 'toHr'];
 
 if (!ADMIN_TOKEN) { console.error('FATAL: set SMOKE_ADMIN_TOKEN (admin bearer token).'); process.exit(2); }
@@ -76,7 +77,14 @@ async function smokeCrossing(crossingId) {
   record(`${crossingId} public state lists crossing`, Boolean(crossing), crossing ? `armed=${crossing.locationWaitArmed}` : 'missing');
 }
 
+async function resolveCrossings() {
+  if (CROSSINGS_ENV.toLowerCase() !== 'all') return CROSSINGS_ENV.split(',').map((s) => s.trim()).filter(Boolean);
+  const r = await api('GET', '/api/admin/cv-readiness'); // defaults to every camera-equipped crossing
+  return (r.json?.crossings || []).map((c) => c.crossingId);
+}
+
 (async () => {
+  const CROSSINGS = await resolveCrossings();
   console.log(`Smoke against ${BASE} — crossings: ${CROSSINGS.join(', ')} — reset=${APPLY_RESET ? 'APPLY' : 'dry-run'}`);
   for (const id of CROSSINGS) {
     try { await smokeCrossing(id); } catch (e) { record(`${id} smoke run`, false, String(e?.message || e)); }

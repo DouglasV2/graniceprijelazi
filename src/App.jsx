@@ -3052,23 +3052,26 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
       if (mapCrossings.length === 1) { map.setCenter({ lat: mapCrossings[0].lat, lng: mapCrossings[0].lng }); map.setZoom(11); }
       else if (!bounds.isEmpty()) map.fitBounds(bounds, 84);
     };
-    const ensureSized = () => {
+    // A plain resize nudge fixes grey/unpainted tiles WITHOUT touching the viewport (it preserves the
+    // user's center/zoom). recenter() (setZoom/fitBounds) must run ONLY ONCE for the initial framing —
+    // calling it on the 120/600 ms timers was snapping the viewport back the instant the user started
+    // zooming ("zoom pa odmah odzoom"). After the first framing we never override the user again.
+    const nudgeResize = () => {
       if (!isMounted || !mapEl.current) return;
       window.google.maps.event.trigger(map, 'resize');
-      recenter();
     };
-    // The reliable nudge is the map's OWN `idle` event — it fires once Google has attempted the first
-    // tile render against the (now laid-out) container. Triggering resize there forces the tiles to
-    // paint instead of leaving the grey/gradient placeholder on the FIRST visit (the timers alone were
-    // timing-dependent and got cleared when this effect re-ran). Double rAF covers the layout settle.
-    const idleListener = window.google.maps.event.addListenerOnce(map, 'idle', ensureSized);
+    let framed = false;
+    const frameOnce = () => { nudgeResize(); if (!framed) { framed = true; recenter(); } };
+    // The reliable first nudge is the map's OWN `idle` event (fires once Google attempts the first tile
+    // render against the laid-out container) — there we resize AND do the one-time initial framing.
+    const idleListener = window.google.maps.event.addListenerOnce(map, 'idle', frameOnce);
     let raf1 = 0; let raf2 = 0;
-    raf1 = window.requestAnimationFrame(() => { raf2 = window.requestAnimationFrame(ensureSized); });
-    const tA = window.setTimeout(ensureSized, 120);
-    const tB = window.setTimeout(ensureSized, 600);
+    raf1 = window.requestAnimationFrame(() => { raf2 = window.requestAnimationFrame(nudgeResize); });
+    const tA = window.setTimeout(nudgeResize, 120);
+    const tB = window.setTimeout(nudgeResize, 600);
     let resizeObs = null;
     if (typeof ResizeObserver !== 'undefined' && mapEl.current) {
-      resizeObs = new ResizeObserver(() => ensureSized());
+      resizeObs = new ResizeObserver(() => nudgeResize());
       resizeObs.observe(mapEl.current);
     }
 
@@ -3634,7 +3637,7 @@ function PredictionBreakdown({ sourceMeta = {} }) {
       if (cam.queueMovingSlowly || Number(cam.stoppedVehicleRatio || 0) >= 0.6) movePart = ' — većina stoji';
       else if (Number(cam.movingVehicleRatio || 0) >= 0.6) movePart = ' — kolona se pomiče';
     }
-    rows.push({ icon: '📷', text: `AI kamera: ${camQueue} vozila${roiPart}${movePart}` });
+    rows.push({ icon: '📷', text: `Kamera: ${camQueue} vozila${roiPart}${movePart}` });
   }
   if (b.googleTraffic && b.googleTraffic.delayMin !== null && b.googleTraffic.delayMin !== undefined) {
     rows.push({ icon: '🚗', text: `Google promet: ${b.googleTraffic.delayMin > 0 ? `+${b.googleTraffic.delayMin} min usporenja` : 'bez zastoja'} na prilazu` });
@@ -3949,7 +3952,7 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
           {analytics.cvEnabled ? (
             <p className="camera-source-note">
               {analytics.cvUsed
-                ? 'AI kamera: broji vozila unutar kalibrirane zone kad je ROI dostupan.'
+                ? 'Kamera broji vozila u koloni kad je zona za brojanje postavljena.'
                 : cameraStatusCopy(analytics.cvFallbackReason)}
             </p>
           ) : null}

@@ -4389,7 +4389,11 @@ async function probeCvDetectorHealth() {
 // first rollout batch (Maljevac + Gornji Varoš); pass ?crossingId= for one.
 app.get('/api/admin/cv-readiness', authRequired, adminRequired, async (req, res) => {
   const requested = String(req.query.crossingId || '').trim();
-  const ids = requested ? [requested] : ['maljevac', 'gornji-varos'];
+  // Default: EVERY crossing that has cameras (so you can audit/calibrate them all — the rollout is no
+  // longer Maljevac+GV-only). ?crossingId=<id> for one. The same honest camera copy + floor guards +
+  // ROI-editor trust path apply to every crossing; this just surfaces them all in one call.
+  const allCameraCrossings = Object.keys(BORDER_CROSSINGS).filter((id) => (CAMERA_FEEDS[id] || []).length > 0);
+  const ids = requested ? [requested] : allCameraCrossings;
   const unknown = ids.filter((id) => !BORDER_CROSSINGS[id]);
   if (unknown.length) return res.status(404).json({ ok: false, error: `Nepoznat prijelaz: ${unknown.join(', ')}` });
   try {

@@ -231,9 +231,9 @@ describe('v2 wiring (server + UI) is in place and safe', () => {
     expect(server).toMatch(/\/api\/admin\/traffic-vision\/:crossingId\/:direction/);
     expect(server).toMatch(/\/api\/admin\/traffic-vision-accuracy/);
   });
-  it('UI renders the source breakdown (AI camera + Google + public)', () => {
+  it('UI renders the source breakdown (camera + Google + public) in plain language', () => {
     expect(app).toMatch(/function PredictionBreakdown/);
-    expect(app).toMatch(/AI kamera:/);
+    expect(app).toMatch(/Kamera: \$\{camQueue\}/);
     expect(app).toMatch(/Google promet:/);
     expect(app).toMatch(/<PredictionBreakdown sourceMeta=/);
   });
