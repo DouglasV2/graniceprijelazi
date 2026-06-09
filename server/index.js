@@ -74,6 +74,7 @@ import { ROI_EDITOR_HTML } from './roi-editor-page.js';
 import { buildMeasurementZone, pathCrossesBorder, buildCalibratedCorridor, validateDisplayPathQuality, pointAlongBearing } from './map-display-geometry.js';
 import { classifyLocationPing, aggregateVerifiedLocation } from './location-wait.js';
 import { buildLocationWaitAnchors, hasLocationWaitAnchors } from './location-wait-anchors.js';
+import { applyCalibratedWait, buildCalibrationModels, calibrationKey } from './camera-calibration.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1638,6 +1639,11 @@ function signalSourceMix(signal = {}) {
     hasStrongCameraQueue: Boolean(signal.hasStrongCameraQueue),
     finalLabel: signal.label || null,
     confidenceLevel: signal.confidenceLevel || null,
+    // Camera count + trust at prediction time → when this sample later resolves against a measured
+    // ground truth, the (count → measuredWait) pair feeds the count→wait calibration.
+    cameraVehiclesInQueueRoi: Number.isFinite(Number(signal.predictionV2?.sourceBreakdown?.yoloCamera?.vehiclesInQueueRoi))
+      ? Number(signal.predictionV2.sourceBreakdown.yoloCamera.vehiclesInQueueRoi) : null,
+    cameraRoiTrusted: Boolean(signal.predictionV2?.sourceBreakdown?.yoloCamera?.roiTrusted),
   };
 }
 
@@ -1692,6 +1698,28 @@ function recordResolvedAccuracy({ crossingId, direction, predictedWait, actualWa
 function recentResolvedAccuracy(hours = 24 * 14) {
   const since = Date.now() - hours * 60 * 60 * 1000;
   return predictionAccuracyBuffer.filter((r) => r.actualWait !== null && new Date(r.predictedAt).getTime() >= since);
+}
+
+// ── COUNT → WAIT CALIBRATION (learned per crossing+direction; falls back to heuristic until ready) ──
+// Samples come from resolved predictions that had a TRUSTED camera count at the time — when they
+// resolve against a measured ground truth we get (count → measuredWait) pairs. Recomputed lazily +
+// cached. Until a crossing has enough low-error samples it stays UNcalibrated → heuristic is used.
+const CAMERA_CALIBRATION_MIN_SAMPLES = Math.max(4, Number(process.env.CAMERA_CALIBRATION_MIN_SAMPLES || 6));
+const CAMERA_CALIBRATION_MAX_MAE = Math.max(5, Number(process.env.CAMERA_CALIBRATION_MAX_MAE || 18));
+const CAMERA_CALIBRATION_WINDOW_HOURS = Math.max(24, Number(process.env.CAMERA_CALIBRATION_WINDOW_HOURS || 24 * 60));
+let calibrationModelsCache = {};
+let calibrationModelsAt = 0;
+function recomputeCalibrationModels() {
+  const records = recentResolvedAccuracy(CAMERA_CALIBRATION_WINDOW_HOURS)
+    .filter((r) => r.sourceMix && r.sourceMix.cameraRoiTrusted && Number.isFinite(Number(r.sourceMix.cameraVehiclesInQueueRoi)))
+    .map((r) => ({ crossingId: r.crossingId, direction: r.direction, cameraCount: Number(r.sourceMix.cameraVehiclesInQueueRoi), actualWait: Number(r.actualWait) }));
+  calibrationModelsCache = buildCalibrationModels(records, { minSamples: CAMERA_CALIBRATION_MIN_SAMPLES, maxMae: CAMERA_CALIBRATION_MAX_MAE });
+  calibrationModelsAt = Date.now();
+  return calibrationModelsCache;
+}
+function getCalibrationModel(crossingId, direction) {
+  if (Date.now() - calibrationModelsAt > 5 * 60 * 1000) recomputeCalibrationModels();
+  return calibrationModelsCache[calibrationKey(crossingId, direction)] || null;
 }
 
 // Learned bias model (spec V5 §2). Recomputed from resolved accuracy. Application into the
@@ -4438,6 +4466,25 @@ app.get('/api/admin/cv-readiness', authRequired, adminRequired, async (req, res)
   } catch (error) {
     res.status(500).json({ ok: false, error: 'CV readiness nije uspio.', detail: safeError(error) });
   }
+});
+
+// Count→wait calibration status per crossing+direction: the learned min/vehicle rate, sample size,
+// MAE, and whether it's calibrated yet (else heuristic is used). Recomputes on read.
+app.get('/api/admin/camera-calibration', authRequired, adminRequired, async (req, res) => {
+  const models = recomputeCalibrationModels();
+  const requested = String(req.query.crossingId || '').trim();
+  const entries = Object.entries(models)
+    .filter(([key]) => !requested || key.startsWith(`${requested}:`))
+    .map(([key, m]) => ({ crossingId: key.split(':')[0], direction: key.split(':')[1], ...m }));
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    minSamples: CAMERA_CALIBRATION_MIN_SAMPLES,
+    maxMae: CAMERA_CALIBRATION_MAX_MAE,
+    windowHours: CAMERA_CALIBRATION_WINDOW_HOURS,
+    note: 'Naučena stopa (min/vozilo) iz parova (kamera-broj → izmjereno čekanje). Dok calibrated=false koristi se heuristika. reason: insufficient-samples / mae-too-high / ok.',
+    models: entries,
+  });
 });
 
 // Internal health check for the real cv-detector/YOLO service. It is token/admin-gated and never
@@ -7723,6 +7770,21 @@ async function runSnapshotCounter(camera, crossingId, direction, previousSnapsho
       analysis.multiFrame = frames.length >= 2
         ? trackStoppedMoving(frames, { roiConfig: roiCfgMf, imageMeta, frameHashes })
         : { multiFrameUsed: true, multiFrameFrameCount: frames.length, stoppedVehicleRatio: null, movingVehicleRatio: null, multiFrameFallbackReason: 'INSUFFICIENT_FRAMES' };
+      // STABILITY: a single noisy frame (a missed or extra car) must not swing the estimate. Take the
+      // MEDIAN in-queue-ROI vehicle count across the captured frames and use that as the effective
+      // count (fed to the band + calibrated wait). Robust to outliers; falls back to the single frame
+      // when only one usable frame exists.
+      if (frames.length >= 2) {
+        const perFrame = frames
+          .map((f) => computeRoiCameraFeatures(f, roiCfgMf, imageMeta)?.vehiclesInQueueRoi)
+          .filter((n) => Number.isFinite(Number(n)))
+          .map(Number);
+        if (perFrame.length >= 2) {
+          const sorted = [...perFrame].sort((a, b) => a - b);
+          analysis.multiFrame.frameQueueCounts = perFrame;
+          analysis.multiFrame.medianVehiclesInQueueRoi = sorted[Math.floor((sorted.length - 1) / 2)];
+        }
+      }
       analysis.multiFrame.multiFrameDurationMs = Date.now() - startedMf;
     } catch (error) {
       analysis.multiFrame = { multiFrameUsed: false, multiFrameFallbackReason: `ERROR:${String(error.message).slice(0, 50)}`, multiFrameDurationMs: Date.now() - startedMf };
@@ -7990,10 +8052,15 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
   };
   // ROI v2 + multi-frame features from the direction's wait-driving camera (prefer a roiCalibrated
   // one) — surfaced on analytics so the camera source snapshot + the v2 fusion can consume them.
-  const roiFeaturesPrimary = snapshotAnalyses.find((a) => a && a.roiFeatures && a.roiFeatures.roiCalibrated)?.roiFeatures
+  let roiFeaturesPrimary = snapshotAnalyses.find((a) => a && a.roiFeatures && a.roiFeatures.roiCalibrated)?.roiFeatures
     || snapshotAnalyses.find((a) => a && a.roiFeatures)?.roiFeatures || null;
   const multiFramePrimary = snapshotAnalyses.find((a) => a && a.multiFrame && a.multiFrame.multiFrameUsed && a.multiFrame.stoppedVehicleRatio !== null)?.multiFrame
     || snapshotAnalyses.find((a) => a && a.multiFrame)?.multiFrame || null;
+  // Multi-frame STABILITY: prefer the median in-ROI count across frames over the single-frame count.
+  const mfMedian = snapshotAnalyses.find((a) => a && a.multiFrame && Number.isFinite(a.multiFrame.medianVehiclesInQueueRoi))?.multiFrame?.medianVehiclesInQueueRoi;
+  if (roiFeaturesPrimary && Number.isFinite(mfMedian)) {
+    roiFeaturesPrimary = { ...roiFeaturesPrimary, vehiclesInQueueRoi: mfMedian, multiFrameSmoothed: true };
+  }
   const snapshotRows = snapshotAnalyses
     .filter(Boolean)
     .map((snapshot) => ({ ...snapshot, crossingId: crossing.id, direction, metadata: { ...(snapshot.metadata || {}), roi: snapshot.roi, occupancyPct: snapshot.occupancyPct, componentCount: snapshot.componentCount, rawCounts: snapshot.rawCounts } }));
@@ -8060,11 +8127,19 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
     };
   });
   const laneProfile = sumLaneGroupsFromEvents(recentEvents) || aggregateLaneProfile(laneSignals);
+  // ── COUNT → WAIT CALIBRATION (auto-use the learned rate when this crossing+direction is calibrated)
+  // Only when the ROI is TRUSTED and a calibrated model exists; otherwise calibratedWaitMin is null
+  // and we keep the heuristic below. This is what turns a trusted count into a data-fitted wait.
+  const calibModel = getCalibrationModel(crossing.id, direction);
+  const calibCount = roiFeaturesPrimary && roiFeaturesPrimary.roiTrusted ? Number(roiFeaturesPrimary.vehiclesInQueueRoi) : null;
+  const calibratedWaitMin = applyCalibratedWait(calibCount, calibModel);
+  const calibrationUsed = Number.isFinite(calibratedWaitMin);
+
   // `cameraWaitDriven` is the linchpin of direction safety: the camera estimate is only a
   // real signal when a provably-correct-direction, non-stale camera actually drove it.
-  const cameraWaitDriven = Boolean(aggregatedSnapshots && aggregatedSnapshots.wait !== null && aggregatedSnapshots.wait !== undefined);
+  const cameraWaitDriven = calibrationUsed || Boolean(aggregatedSnapshots && aggregatedSnapshots.wait !== null && aggregatedSnapshots.wait !== undefined);
   const snapshotCounts = displayAggregate?.counts ? normalizeCounts(displayAggregate.counts) : null;
-  const liveWait = cameraWaitDriven ? clampWait(aggregatedSnapshots.wait) : wait;
+  const liveWait = calibrationUsed ? calibratedWaitMin : (cameraWaitDriven ? clampWait(aggregatedSnapshots.wait) : wait);
   const liveThroughputPerHour = aggregatedSnapshots?.throughputPerHour ? Math.max(8, Number(aggregatedSnapshots.throughputPerHour)) : throughputPerHour;
   const livePassed15 = Math.max(0, Math.round(aggregatedSnapshots?.flowVehicles15 ?? aggregatedSnapshots?.passed15 ?? liveThroughputPerHour / 4));
   const liveRhythmSeconds = Math.round(3600 / Math.max(liveThroughputPerHour, 1));
@@ -8142,8 +8217,13 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
       laneSignals,
       history,
       dailyTotals: sumCounts(history),
-      // source reflects ACTUAL usage: cv-detector only when YOLO truly drove a frame this cycle.
-      source: hasIngest ? 'camera-ingest' : (cvSummary.cvUsed ? 'cv-detector' : (hasSnapshotCounter ? 'snapshot-counter' : 'baseline-camera-model')),
+      // source reflects ACTUAL usage: a calibrated count→wait rate when the crossing is calibrated,
+      // else cv-detector only when YOLO truly drove a frame this cycle.
+      source: calibrationUsed ? 'cv-detector-calibrated' : (hasIngest ? 'camera-ingest' : (cvSummary.cvUsed ? 'cv-detector' : (hasSnapshotCounter ? 'snapshot-counter' : 'baseline-camera-model'))),
+      // Count→wait calibration status for THIS crossing+direction (used | learning + why).
+      calibration: calibModel
+        ? { used: calibrationUsed, calibrated: Boolean(calibModel.calibrated), minutesPerVehicle: calibModel.minutesPerVehicle, mae: calibModel.mae, sampleSize: calibModel.sampleSize, reason: calibModel.reason, count: calibCount }
+        : { used: false, calibrated: false, minutesPerVehicle: null, mae: null, sampleSize: 0, reason: 'no-samples', count: calibCount },
       // ROI v2 + multi-frame features (rich) for the v2 fusion + admin debug.
       roiFeatures: roiFeaturesPrimary,
       multiFrame: multiFramePrimary,

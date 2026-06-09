@@ -85,3 +85,16 @@ describe('GET /api/admin/cv-readiness — per-crossing rollout view', () => {
     expect((await auth(request(app).get('/api/admin/cv-readiness?crossingId=nepostoji'))).status).toBe(404);
   });
 });
+
+describe('GET /api/admin/camera-calibration — count→wait learned rate', () => {
+  it('rejects anonymous', async () => {
+    expect([401, 403]).toContain((await request(app).get('/api/admin/camera-calibration')).status);
+  });
+  it('returns calibration config + models array (empty until enough samples → heuristic)', async () => {
+    const res = await auth(request(app).get('/api/admin/camera-calibration'));
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('minSamples');
+    expect(res.body).toHaveProperty('maxMae');
+    expect(Array.isArray(res.body.models)).toBe(true);
+  });
+});
