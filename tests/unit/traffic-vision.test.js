@@ -357,7 +357,9 @@ describe('driver report — explicit wait time drives waitMinutes', () => {
     expect(app).toMatch(/setWaitChoice/);
   });
   it('resolves waitMinutes via explicit > message > category default (not just the category)', () => {
-    expect(app).toMatch(/resolveReportWaitMinutes\(\{ explicit: explicitWaitMin, message: trimmed, categoryDefault: meta\.waitMinutes \}\)/);
+    // explicit selector > TYPED message > category default. The canned template is NEVER parsed
+    // (it has a fixed "...45 min" that previously overrode the "60+" choice → reported 45).
+    expect(app).toMatch(/message: parseMessage \? userTyped : ''/);
     expect(app).toMatch(/waitMinutes: resolvedWaitMin/);
     // submit passes the explicit choice; one-tap quick reports must NOT parse their canned template.
     expect(app).toMatch(/addPost\(type, message, crossingId, waitChoice\)/);

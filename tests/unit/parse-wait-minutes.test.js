@@ -67,6 +67,14 @@ describe('resolveReportWaitMinutes (explicit > message > category default)', () 
     expect(resolveReportWaitMinutes({ explicit: '', message: '30 min', categoryDefault: 12 })).toBe(30);
     expect(resolveReportWaitMinutes({ explicit: -3, message: '30 min', categoryDefault: 12 })).toBe(30);
   });
+  it('an explicit "60+" choice (90) beats a "45 min" mentioned in the text (the live report bug)', () => {
+    expect(resolveReportWaitMinutes({ explicit: 90, message: 'Kolona se pomiče sporo, čekanje je preko 45 min.', categoryDefault: 65 })).toBe(90);
+  });
+  it('an EMPTY typed message uses the category default — it must NOT parse a canned template', () => {
+    // addPost passes message:'' (not the template) when the user typed nothing, so the slow default
+    // (65) is used, not the "45 min" from the template.
+    expect(resolveReportWaitMinutes({ explicit: null, message: '', categoryDefault: 65 })).toBe(65);
+  });
 });
 
 describe('WAIT_QUICK_OPTIONS', () => {

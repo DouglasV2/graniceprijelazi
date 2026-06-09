@@ -1498,6 +1498,27 @@ const CAMERA_SNAPSHOT_TIMEOUT_MS = Math.max(1500, Number(process.env.CAMERA_SNAP
 const CAMERA_SNAPSHOT_MIN_CONFIDENCE = Math.max(35, Math.min(95, Number(process.env.CAMERA_SNAPSHOT_MIN_CONFIDENCE || 46)));
 const CAMERA_SNAPSHOT_REFRESH_INTERVAL_MS = Math.max(2, Number(process.env.CAMERA_SNAPSHOT_REFRESH_INTERVAL_MINUTES || 5)) * 60 * 1000;
 
+// ── BOUNDED CV/CAMERA CONCURRENCY (production scaling safety) ──────────────────────────────────
+// As we add crossings/cameras, a full refresh must not fire every camera + YOLO call at once. Two
+// limits: how many (crossing,direction) jobs a refresh runs in parallel, and a GLOBAL cap on how
+// many YOLO inferences hit the cv-detector at once (so it never gets an inference storm / OOM).
+const CAMERA_REFRESH_CONCURRENCY = Math.max(1, Number(process.env.CAMERA_REFRESH_CONCURRENCY || 3));
+const CAMERA_CV_CONCURRENCY = Math.max(1, Number(process.env.CAMERA_CV_CONCURRENCY || 2));
+// Minimal async semaphore: acquire() resolves when a slot is free; release() frees one. Tracks
+// active/queued depth for the readiness/debug endpoints.
+class AsyncSemaphore {
+  constructor(max) { this.max = Math.max(1, max); this.active = 0; this._queue = []; }
+  get queued() { return this._queue.length; }
+  async acquire() {
+    if (this.active < this.max) { this.active += 1; return; }
+    await new Promise((resolve) => this._queue.push(resolve));
+    this.active += 1;
+  }
+  release() { this.active -= 1; const next = this._queue.shift(); if (next) next(); }
+  async run(fn) { await this.acquire(); try { return await fn(); } finally { this.release(); } }
+}
+const cvInferenceSemaphore = new AsyncSemaphore(CAMERA_CV_CONCURRENCY);
+
 const authLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 20, keyPrefix: 'auth' });
 const writeLimiter = rateLimit({ windowMs: 60 * 1000, max: 45, keyPrefix: 'write' });
 // Anonymous measured-wait can be started without an account, so it gets its own,
@@ -2520,7 +2541,10 @@ async function buildCameraSourceSnapshots({ forceSnapshot = false } = {}) {
   for (const crossing of targets) {
     for (const direction of ['toBih', 'toHr']) jobs.push({ crossingId: crossing.id, direction });
   }
-  const results = await Promise.allSettled(jobs.map(async ({ crossingId, direction }) => {
+  // Bounded fan-out: at most CAMERA_REFRESH_CONCURRENCY (crossing,direction) jobs at once, so adding
+  // more crossings can't fire every camera+YOLO call simultaneously. The global cvInferenceSemaphore
+  // further caps the actual detector load inside runYoloDetector.
+  const results = await mapWithConcurrency(jobs, CAMERA_REFRESH_CONCURRENCY, async ({ crossingId, direction }) => {
     // forceSnapshot (from an admin/forced refresh) bypasses the cached camera frame and re-fetches.
     const payload = await buildCameraAnalyticsPayload(crossingId, direction, { storeScan: true, forceSnapshot });
     const analytics = payload.analytics || {};
@@ -2602,9 +2626,9 @@ async function buildCameraSourceSnapshots({ forceSnapshot = false } = {}) {
       });
     }
     return out;
-  }));
+  });
   return results
-    .flatMap((result) => result.status === 'fulfilled' ? (result.value || []) : [])
+    .flatMap((result) => Array.isArray(result) ? result : [])
     .filter(Boolean);
 }
 
@@ -2973,7 +2997,10 @@ async function buildGoogleTrafficSnapshots() {
 async function refreshProductionSources({ force = false } = {}) {
   if (!SOURCE_FETCH_ENABLED) return { ok: true, skipped: true, reason: 'SOURCE_FETCH_ENABLED=false', snapshots: [] };
   const now = Date.now();
-  if (!force && sourceRefreshState.running) return sourceRefreshState.running;
+  // NEVER overlap a full refresh — if one is in flight, every caller (forced or not) joins it. This
+  // is what stops the public-state poll + an admin forced refresh from running two camera/CV bursts
+  // at once. `force` only bypasses the throttle interval below, not the in-flight guard.
+  if (sourceRefreshState.running) return sourceRefreshState.running;
   if (!force && now - sourceRefreshState.lastRunAt < SOURCE_REFRESH_INTERVAL_MS) return { ok: true, skipped: true, reason: 'fresh-enough', snapshots: [] };
 
   sourceRefreshState.running = (async () => {
@@ -4330,6 +4357,84 @@ app.get('/api/admin/traffic-vision-accuracy', authRequired, adminRequired, async
   });
 });
 
+
+// Probe the cv-detector's own /health (derived from the configured /detect endpoint). One short
+// fetch; surfaces model/memory/concurrency/failure stats without leaking secrets.
+async function probeCvDetectorHealth() {
+  if (!yoloEndpoint) return { configured: false };
+  let healthUrl;
+  try {
+    const u = new URL(yoloEndpoint);
+    u.pathname = /\/detect\/?$/.test(u.pathname) ? u.pathname.replace(/\/detect\/?$/, '/health') : '/health';
+    u.search = '';
+    healthUrl = u.toString();
+  } catch { return { configured: true, reachable: false, error: 'bad-endpoint-url' }; }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const r = await fetch(healthUrl, { signal: controller.signal, headers: yoloApiKey ? { Authorization: `Bearer ${yoloApiKey}` } : {} });
+    if (!r.ok) return { configured: true, reachable: true, healthy: false, status: r.status };
+    const body = await r.json().catch(() => ({}));
+    return { configured: true, reachable: true, healthy: body?.ok !== false, ...body };
+  } catch (e) {
+    return { configured: true, reachable: false, error: e?.name === 'AbortError' ? 'timeout' : 'error' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Per-crossing CV readiness — ONE admin call to see, per direction, the camera/CV signal and whether
+// it reaches the fusion (for crossing-by-crossing rollout). Reads STORED signals (the periodic
+// refresh keeps them fresh) so it does NOT itself trigger a camera/inference burst. Defaults to the
+// first rollout batch (Maljevac + Gornji Varoš); pass ?crossingId= for one.
+app.get('/api/admin/cv-readiness', authRequired, adminRequired, async (req, res) => {
+  const requested = String(req.query.crossingId || '').trim();
+  const ids = requested ? [requested] : ['maljevac', 'gornji-varos'];
+  const unknown = ids.filter((id) => !BORDER_CROSSINGS[id]);
+  if (unknown.length) return res.status(404).json({ ok: false, error: `Nepoznat prijelaz: ${unknown.join(', ')}` });
+  try {
+    const store = await readAppStore();
+    const cvDetector = await probeCvDetectorHealth();
+    const ageSecOf = (ts) => (ts ? Math.round((Date.now() - new Date(ts).getTime()) / 1000) : null);
+    const byFetchedDesc = (a, b) => new Date(b.fetchedAt) - new Date(a.fetchedAt);
+    const crossings = [];
+    for (const id of ids) {
+      const crossing = BORDER_CROSSINGS[id];
+      const feeds = CAMERA_FEEDS[id] || [];
+      const directions = {};
+      for (const direction of ['toBih', 'toHr']) {
+        const sig = await effectiveBorderSignal(crossing, direction, 'car', store);
+        const stored = await readLatestSourceSnapshots(id, direction, 8);
+        const camVisual = stored.filter((s) => s.sourceType === 'camera-visual').sort(byFetchedDesc)[0] || null;
+        const camModel = stored.filter((s) => s.sourceType === 'camera-snapshot-model').sort(byFetchedDesc)[0] || null;
+        const yoloCam = sig.predictionV2?.sourceBreakdown?.yoloCamera || null;
+        directions[direction] = {
+          finalEstimateMin: sig.wait,
+          finalLabel: sig.label || null,
+          appliedFloor: sig.conflictKind === 'camera-congestion' ? `visual-band:${sig.visualBand}` : null,
+          visualBand: sig.visualBand || null,
+          usedInFusion: Boolean(sig.visualBand) || sig.conflictKind === 'camera-congestion',
+          roiTrusted: Boolean(yoloCam?.roiTrusted),
+          vehiclesInQueueRoi: yoloCam?.vehiclesInQueueRoi ?? null,
+          cameraAnalyticsWait: camVisual?.metadata?.cameraAnalyticsWait ?? (camModel ? camModel.normalizedWaitMin : null),
+          cameraSnapshotAgeSeconds: ageSecOf(camVisual?.fetchedAt || camModel?.fetchedAt),
+          cvStatus: camModel ? 'wait-driving' : camVisual ? 'visual-only' : 'no-camera-signal',
+          expectedCameraId: feeds.find((c) => Array.isArray(c.validForDirections) && c.validForDirections.includes(direction))?.id || null,
+          reason: sig.note || sig.explanation || null,
+        };
+      }
+      crossings.push({
+        crossingId: id,
+        cameras: feeds.map((c) => ({ cameraId: c.id, imageUrl: (c.imageUrls && c.imageUrls[0]) || c.url || null, roiExists: cameraHasQueueRoi(c), validForDirections: c.validForDirections || [] })),
+        directions,
+      });
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ ok: true, cvDetector, refreshConcurrency: CAMERA_REFRESH_CONCURRENCY, cvConcurrency: CAMERA_CV_CONCURRENCY, cvInFlight: cvInferenceSemaphore.active, cvQueued: cvInferenceSemaphore.queued, crossings });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'CV readiness nije uspio.', detail: safeError(error) });
+  }
+});
 
 // Internal health check for the real cv-detector/YOLO service. It is token/admin-gated and never
 // called by the public app. A missing/unhealthy endpoint keeps Prediction v2 in shadow/readiness=false.
@@ -6896,6 +7001,9 @@ async function runYoloDetector(camera, crossingId, direction, buffer, contentTyp
   if (!yoloEndpoint) return fail('no-endpoint');
   if (!YOLO_ENABLED && !YOLO_SHADOW_MODE) return fail('disabled');
   if (!buffer) return fail('no-image');
+  // Global CV gate: never let more than CAMERA_CV_CONCURRENCY inferences hit the detector at once
+  // (a full multi-crossing refresh would otherwise burst them all in parallel → detector OOM/503).
+  return cvInferenceSemaphore.run(async () => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CAMERA_CV_TIMEOUT_MS);
   try {
@@ -6944,6 +7052,7 @@ async function runYoloDetector(camera, crossingId, direction, buffer, contentTyp
   } finally {
     clearTimeout(timer);
   }
+  }); // end cvInferenceSemaphore.run
 }
 
 
@@ -7109,6 +7218,12 @@ async function resolveCameraImageUrl(camera = {}) {
   const index = Math.max(0, Number(camera.imageIndex || 0) || 0);
   const resolved = extracted[index] || extracted[0] || '';
   if (!resolved) throw new Error(`Nije pronađen direktni image URL na stranici kamere: ${camera.url}`);
+  // Bounded (values are small resolved-URL strings, never raw image bytes). Evict the oldest entry
+  // past the cap so the cache can't grow unbounded as more cameras are added.
+  if (resolvedCameraImageCache.size >= 500) {
+    const oldestKey = resolvedCameraImageCache.keys().next().value;
+    if (oldestKey !== undefined) resolvedCameraImageCache.delete(oldestKey);
+  }
   resolvedCameraImageCache.set(cacheKey, { url: resolved, createdAt: Date.now() });
   return resolved;
 }

@@ -27,7 +27,7 @@ import { cameraEstimateDecision, buildCameraQueueLabel, buildCameraTrustText, ca
 import { loadGoogleMaps, mapsConstructorsReady } from './utils/google-maps-loader.js';
 import { shouldSendPing } from './utils/location-wait-client.js';
 import { rankCrossingsByLocation } from './utils/crossing-recommendation.js';
-import { resolveReportWaitMinutes, WAIT_QUICK_OPTIONS } from './utils/parse-wait-minutes.js';
+import { resolveReportWaitMinutes, clampWaitMinutes, WAIT_QUICK_OPTIONS } from './utils/parse-wait-minutes.js';
 
 
 function makeCrossingHistory(baseCars, baseTrucks, baseBuses, baseWait) {
@@ -4175,21 +4175,28 @@ function ChatView({ posts, setPosts, currentUser, selectedCrossing, setSelectedC
 
   function addPost(nextType, text, nextCrossingId = crossingId, explicitWaitMin = null, { parseMessage = true } = {}) {
     const meta = typeMeta[nextType] || typeMeta.ok;
-    const trimmed = String(text || meta.template).trim().slice(0, 120);
-    if (!trimmed) return;
-    // What the driver actually reported: explicit choice > minutes parsed from the message > category
-    // default. This (not the category default) is what we send as waitMinutes and what fusion uses.
-    // One-tap quick reports pass parseMessage:false so their canned template can't override the category.
-    const resolvedWaitMin = parseMessage
-      ? resolveReportWaitMinutes({ explicit: explicitWaitMin, message: trimmed, categoryDefault: meta.waitMinutes })
-      : meta.waitMinutes;
-    const explicitOrParsed = parseMessage && resolvedWaitMin !== meta.waitMinutes;
+    const userTyped = String(text || '').trim().slice(0, 120); // what the user ACTUALLY typed (may be empty)
+    const hasExplicit = clampWaitMinutes(explicitWaitMin) !== null;
+    // What the driver actually reported: explicit selector > minutes parsed from the TYPED message >
+    // category default. We never parse the canned category template (it contains a fixed "...45 min"
+    // that was overriding the explicit "60+" choice and the category default → reported 45 instead).
+    const resolvedWaitMin = resolveReportWaitMinutes({
+      explicit: explicitWaitMin,
+      message: parseMessage ? userTyped : '',
+      categoryDefault: meta.waitMinutes,
+    });
+    const parsedFromText = parseMessage && !hasExplicit && !!userTyped && resolvedWaitMin !== meta.waitMinutes;
+    // The displayed message must MATCH the reported wait: if the driver picked a time but typed nothing,
+    // synthesize a consistent line instead of the template's hardcoded minutes.
+    const message = (userTyped || (hasExplicit ? `Prijavljeno čekanje oko ${resolvedWaitMin} min.` : meta.template)).slice(0, 120);
+    if (!message) return;
+    const showWaitNumber = hasExplicit || parsedFromText;
     const localPost = {
       id: `post-${Date.now()}-${Math.round(Math.random() * 1000)}`,
       crossingId: nextCrossingId,
       name: currentUser?.name || 'Korisnik',
-      message: trimmed,
-      wait: explicitOrParsed ? `${resolvedWaitMin} min` : meta.wait,
+      message,
+      wait: showWaitNumber ? `${resolvedWaitMin} min` : meta.wait,
       waitMinutes: resolvedWaitMin,
       type: nextType,
       createdAt: nowHHMM(),
