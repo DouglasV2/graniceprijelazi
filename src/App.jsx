@@ -3222,6 +3222,11 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
           routePolylinesRef.current.push(zonePolygon);
         }
 
+        // Don't draw a straight-line fallback as a route line — if the geometry isn't a genuine
+        // road shape, drawing it would imply a confirmed route we don't have (the box already says
+        // "Rutu trenutno ne možemo potvrditi"). The crossing marker still shows; the line does not.
+        if (!routeGeometryValidated(path)) return;
+
         const basePolyline = new google.maps.Polyline({
           path,
           map,
@@ -3450,7 +3455,10 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
                 {showZoneMetrics && routePayload.trafficAvailable !== false && <div><span>Cestovni zastoj</span><b>{formatMinutes(primaryRoute.delayMinutes || 0)}</b></div>}
               </div>
               {isControlZoneDisplay && !routeValidated && (
-                <p className="route-note">Ruta nije potvrđena — prikazujemo samo čekanje na granici.</p>
+                <div className="route-unconfirmed-panel">
+                  <strong>⚠ Rutu trenutno ne možemo potvrditi</strong>
+                  <p>Nemamo pouzdanu geometriju ceste preko ovog prijelaza (često zbog mosta ili radova). Prikazujemo samo čekanje na granici — provjeri stanje prije polaska.</p>
+                </div>
               )}
               <div className="route-signal-badges">
                 {borderSourceMeta.hasGoogleSignal && !borderSourceMeta.hasStrongCameraQueue && routeLooksClear(primaryRoute) && (
@@ -3477,7 +3485,7 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
           ) : (
             <p className="route-note">{routePayload.note || 'Ruta trenutno nije dostupna.'}</p>
           )}
-          {!!routes.length && (
+          {!!routes.length && !(isControlZoneDisplay && !routeValidated) && (
             <div className="traffic-segments">
               {routes.map((route) => (
                 <button type="button" className={selectedRoute?.id === route.id ? 'traffic-segment-row active' : 'traffic-segment-row'} key={route.id} onClick={() => { setSelectedRoute(route); setRouteInspectorOpen(true); }}>

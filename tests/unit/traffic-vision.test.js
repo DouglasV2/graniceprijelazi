@@ -329,6 +329,20 @@ describe('live "Moja lokacija" signal wiring (subtle, anonymous, no raw trail)',
   });
 });
 
+describe('route geometry honesty — unconfirmed/straight-fallback route is not drawn as a real route', () => {
+  it('a non-validated control-zone route shows a prominent "ne možemo potvrditi" warning, not a fake zone', () => {
+    expect(app).toMatch(/route-unconfirmed-panel/);
+    expect(app).toMatch(/Rutu trenutno ne možemo potvrditi/);
+  });
+  it('the straight-line fallback polyline is NOT drawn, and alternatives are hidden when unvalidated', () => {
+    expect(app).toMatch(/if \(!routeGeometryValidated\(path\)\) return;/);
+    expect(app).toMatch(/!\(isControlZoneDisplay && !routeValidated\) && \(/); // traffic-segments gated
+  });
+  it('the "Provjerena zona" ribbon is gated on validated geometry', () => {
+    expect(app).toMatch(/route\.primary && routeGeometryValidated\(path\)/);
+  });
+});
+
 describe('wait display is one shared formatter across all surfaces (no 0-min vs do-5-min mismatch)', () => {
   it('the sidebar list, info window, and alerts use formatWaitDisplay(wait, sourceMeta), not raw formatMinutes(wait)', () => {
     // sidebar map-crossing list

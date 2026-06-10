@@ -931,3 +931,8 @@
 .wait-choice:hover { border-color: #1a73e8; }
 .wait-choice.is-selected { background: var(--blue, #1a73e8); border-color: var(--blue, #1a73e8); color: #fff; }
 .wait-choice.is-selected i { color: rgba(255,255,255,.8); }
+
+/* Route "not confirmed / not passable" warning (straight-line fallback / bridge out) */
+.route-unconfirmed-panel{margin:8px 0;padding:10px 12px;border:1px solid var(--yellowSoft,#fff4ce);border-left:3px solid var(--yellow,#b7791f);border-radius:12px;background:#fffaf0}
+.route-unconfirmed-panel strong{display:block;font-size:13.5px;color:#92600f}
+.route-unconfirmed-panel p{margin:4px 0 0;font-size:12.5px;color:#6b5326;line-height:1.4}
