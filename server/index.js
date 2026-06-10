@@ -813,29 +813,37 @@ const BORDER_CROSSINGS = {
       toHr: { car: 56, truck: 96, bus: 63 },
     },
     anchors: {
-      // Re-calibrated for the new motorway Sava bridge (A5 BiH / D5 HR). Previous
-      // borderPoint sat north of the river on the HR mainland which produced a
-      // diagonal straight-line fallback because Google's bridge polyline never
-      // came within the strict pass distance of an off-bridge anchor.
+      // Road-snapped anchors from OpenStreetMap (verified 2026-06): the D5/E-661 corridor runs
+      // N→S at lng ≈ 17.204. HR border control "Granični prijelaz Gornji Varoš" is at
+      // 45.1631, 17.2049 (OSM node 5399468678); the Sava bridge spans lat 45.1475–45.1513 with the
+      // state border mid-river at ≈ 45.1493; the BiH control plaza sits at ≈ 45.1357, 17.2030.
+      // The PREVIOUS anchors were wrong on all three points (borderPoint ~760 m inside BiH,
+      // exitPoint ~1 km east of the road), which made the drawn route look like it lived entirely
+      // on the BiH side. The HR→BiH zone must START on the HR approach (before the HR control),
+      // cross the bridge, and end past the BiH control — hence the asymmetric per-side corridor:
+      // the HR (before) side gets the longer slice + request extension.
       toBih: {
         label: 'HR → BiH',
         fromLabel: 'Gornji Varoš · HR prilaz',
         toLabel: 'Gradiška Novi Most · BiH izlaz',
-        approachStart: { lat: 45.15050, lng: 17.19700 },
-        borderPoint: { lat: 45.14250, lng: 17.20650 },
-        exitPoint: { lat: 45.13550, lng: 17.21620 },
-        // Same treatment as Gradiška: skip via-intermediate and fail open so the UI
-        // prefers Google's road-following polyline over the straight calibrated fallback.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 4900, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
+        approachStart: { lat: 45.16310, lng: 17.20490 },
+        borderPoint: { lat: 45.14930, lng: 17.20450 },
+        exitPoint: { lat: 45.13570, lng: 17.20300 },
+        // Fail open (rejectOnFail false) so a Google quirk degrades to the calibrated corridor
+        // instead of hiding the crossing; per-side displayCorridor keeps the HR approach long.
+        // requestExtend*Meters are TOTAL road metres from the border (extendedAlongRoad takes
+        // max(anchorDistance, extend)): HR side ≈1.53 km to the control + approach beyond it.
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayMaxMeters: 4800, displayCorridor: { requestExtendBeforeMeters: 2400, requestExtendAfterMeters: 2000, sliceBeforeMeters: 2400, sliceAfterMeters: 1900, fallbackPerSideMeters: 1500, fallbackMaxPerSideMeters: 2400 } },
       },
       toHr: {
         label: 'BiH → HR',
         fromLabel: 'Gradiška Novi Most · BiH prilaz',
         toLabel: 'Gornji Varoš · HR izlaz',
-        approachStart: { lat: 45.13550, lng: 17.21620 },
-        borderPoint: { lat: 45.14250, lng: 17.20650 },
-        exitPoint: { lat: 45.15050, lng: 17.19700 },
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 2200, displayAfterMeters: 4900, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
+        approachStart: { lat: 45.13570, lng: 17.20300 },
+        borderPoint: { lat: 45.14930, lng: 17.20450 },
+        exitPoint: { lat: 45.16310, lng: 17.20490 },
+        // Mirrored: the HR side is now the AFTER (exit) side, so it gets the longer slice.
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayMaxMeters: 4800, displayCorridor: { requestExtendBeforeMeters: 2000, requestExtendAfterMeters: 2400, sliceBeforeMeters: 1900, sliceAfterMeters: 2400, fallbackPerSideMeters: 1500, fallbackMaxPerSideMeters: 2400 } },
       },
     },
   },
@@ -2633,6 +2641,14 @@ async function buildCameraSourceSnapshots({ forceSnapshot = false } = {}) {
           vehicleMix15: analytics.vehicleMix15,
           visibleVehicles: analytics.roiFeatures?.visibleVehicleCount ?? analytics.queueVehicles,
           source: analytics.source,
+          // History honesty (T4/T6): per-class counts are flagged as OBSERVED only when a CV
+          // detector / camera ingest actually classified vehicles this cycle. Heuristic
+          // occupancy counters know "vehicles in zone", never a cars-vs-trucks split.
+          countsObserved: ['camera-ingest', 'cv-detector', 'cv-detector-calibrated'].includes(String(analytics.source || ''))
+            && Boolean(analytics.roiFeatures?.vehicleCountByClass || analytics.source === 'camera-ingest'),
+          realCounts: analytics.roiFeatures?.vehicleCountByClass
+            || (String(analytics.source || '') === 'camera-ingest' ? analytics.vehicleMix15 : null),
+          vehiclesInQueueRoi: analytics.roiFeatures?.vehiclesInQueueRoi ?? null,
           // ROI v2 + multi-frame features so the v2 fusion (effectiveBorderSignal) can consume them.
           roiFeatures: analytics.roiFeatures || null,
           multiFrame: analytics.multiFrame || null,
@@ -4477,6 +4493,14 @@ app.get('/api/admin/cv-readiness', authRequired, adminRequired, async (req, res)
           cvStatus: camModel ? 'wait-driving' : camVisual ? 'visual-only' : 'no-camera-signal',
           expectedCameraId: feeds.find((c) => Array.isArray(c.validForDirections) && c.validForDirections.includes(direction))?.id || null,
           reason: sig.note || sig.explanation || null,
+          // Count→wait calibration status incl. trust-tier sample breakdown (T8): measured/verified
+          // vs driver-report samples. Reports alone can never flip `calibrated` to true.
+          calibration: (() => {
+            const model = getCalibrationModel(id, direction);
+            return model
+              ? { calibrated: Boolean(model.calibrated), sampleSize: model.sampleSize, breakdown: model.breakdown || { verified: 0, report: 0 }, minutesPerVehicle: model.minutesPerVehicle, mae: model.mae, reason: model.reason }
+              : { calibrated: false, sampleSize: 0, breakdown: { verified: 0, report: 0 }, minutesPerVehicle: null, mae: null, reason: 'no-samples' };
+          })(),
         };
       }
       crossings.push({
@@ -5027,6 +5051,19 @@ app.post('/api/reports', authRequired, writeLimiter, async (req, res) => {
   // Feed the report into count→wait calibration as a LOWER-TRUST sample (weighted; can't auto-calibrate
   // alone). Only lands a sample if there's a recent trusted camera count to pair the reported wait with.
   try { recordCalibrationGroundTruth({ crossingId, direction, actualWait: wait, source: 'driver-report' }); } catch { /* best-effort */ }
+  // Reports also land in history as the LOWEST-rank slot source: they fill hours no camera/public
+  // source covered, but can never overwrite a real observation (T4 source ranking).
+  try {
+    await upsertHistoryFromSourceSnapshot({
+      crossingId,
+      direction,
+      sourceType: 'driver-report',
+      sourceName: 'Dojava vozača',
+      normalizedWaitMin: wait,
+      fetchedAt: report.createdAt,
+      metadata: { reportType },
+    });
+  } catch { /* best-effort */ }
   res.status(201).json({ ok: true, report });
 });
 
@@ -6096,12 +6133,13 @@ function addDaysIso(dateIso, offset) {
 }
 
 function historyDateList(days) {
-  const today = new Date().toISOString().slice(0, 10);
+  // "Today" in border-local time (Europe/Zagreb), so the last calendar day matches what drivers see.
+  const today = historyTodayIso();
   return Array.from({ length: days }, (_, index) => addDaysIso(today, index - days + 1));
 }
 
 function buildHistorySeriesForDate(crossing, direction, dateIso) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = historyTodayIso();
   const liveSeries = dateIso === today ? historyWithCameraEvents(crossing, direction) : buildBaselineCameraHistory(crossing, direction);
   const date = new Date(`${dateIso}T12:00:00.000Z`);
   const day = date.getUTCDay();
@@ -6139,64 +6177,88 @@ function buildHistorySeriesForDate(crossing, direction, dateIso) {
   });
 }
 
+// History timestamps are bucketed in LOCAL border time (Europe/Zagreb), not server TZ/UTC —
+// otherwise on a UTC host a 16:20 peak lands in the 14:00 slot and midnight rows land on the
+// wrong DATE (date was UTC while hour was server-local).
+const HISTORY_TIMEZONE = process.env.HISTORY_TIMEZONE || 'Europe/Zagreb';
+function historyLocalDateHour(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: HISTORY_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false,
+  }).formatToParts(date);
+  const get = (type) => parts.find((part) => part.type === type)?.value || '';
+  const hour = get('hour') === '24' ? '00' : get('hour');
+  return { dateIso: `${get('year')}-${get('month')}-${get('day')}`, hour };
+}
+function historyTodayIso() {
+  return historyLocalDateHour()?.dateIso || new Date().toISOString().slice(0, 10);
+}
+
+// Within one hour bucket a stronger observation must not be overwritten by a weaker one:
+// camera (real observation) > public text source > driver report. Equal rank = fresher wins.
+export function historySourceRank(source = '') {
+  const s = String(source || '').toLowerCase();
+  if (s.includes('camera')) return 3;
+  if (s.includes('report') || s.includes('dojav')) return 1;
+  if (s) return 2;
+  return 0;
+}
+
+async function readHistorySlotSource(crossing, direction, dateIso, hour) {
+  const existingKey = `${dateIso}:${crossing.id}:${direction}:${hour}`;
+  if (datastoreMode === 'postgres') {
+    const existing = await dbQuery('SELECT source FROM borderflow_history_snapshots WHERE id=$1 LIMIT 1', [existingKey]);
+    return existing.rows[0]?.source || null;
+  }
+  const store = readStore();
+  const existing = (store.historySnapshots || []).find((row) => row.id === existingKey);
+  return existing?.source || null;
+}
+
 async function upsertHistoryFromSourceSnapshot(snapshot) {
   const crossing = BORDER_CROSSINGS[snapshot.crossingId];
   if (!crossing || snapshot.normalizedWaitMin === null || snapshot.normalizedWaitMin === undefined) return null;
-  // Camera snapshots are stored even when BIHAMK/AMS exists because they carry throughput/flow data.
-  // Public text sources are better for wait confidence, but camera snapshots are better for hourly vehicle flow.
-  const fetched = new Date(snapshot.fetchedAt || Date.now());
-  if (Number.isNaN(fetched.getTime())) return null;
-  const hourNum = Math.min(23, Math.max(0, fetched.getHours()));
-  // Store only observable/source-derived points. No backfilling of fake days here.
-  if (hourNum < 0 || hourNum > 23) return null;
-  const dateIso = fetched.toISOString().slice(0, 10);
-  const hour = hourLabel(hourNum);
-  const wait = clampWait(snapshot.normalizedWaitMin) ?? borderDelay(crossing, snapshot.direction, 'car');
-  if (snapshot.sourceType !== 'camera-snapshot-model') {
-    const existingKey = `${dateIso}:${crossing.id}:${snapshot.direction}:${hour}`;
-    if (datastoreMode === 'postgres') {
-      const existing = await dbQuery('SELECT source FROM borderflow_history_snapshots WHERE id=$1 LIMIT 1', [existingKey]);
-      if (String(existing.rows[0]?.source || '').includes('camera')) return null;
-    } else {
-      const store = readStore();
-      const existing = (store.historySnapshots || []).find((row) => row.id === existingKey);
-      if (String(existing?.source || '').includes('camera')) return null;
-    }
-  }
+  // Google traffic is a fusion HELPER signal, never a wait observation — it must not masquerade
+  // as historical "javni izvor" rows (T4: history shows real sources: camera/public/report).
+  if (snapshot.sourceType === 'google-traffic-estimate') return null;
+  const local = historyLocalDateHour(snapshot.fetchedAt || Date.now());
+  if (!local) return null;
+  const { dateIso, hour } = local;
+  // No silent fallback to the static seed table: an unparseable wait is NOT history (T4).
+  const wait = clampWait(snapshot.normalizedWaitMin);
+  if (wait === null || wait === undefined) return null;
+
   const isCameraSource = snapshot.sourceType === 'camera-snapshot-model';
+  const isReportSource = snapshot.sourceType === 'driver-report';
   const cameraMeta = snapshot.metadata || {};
-  const throughputFromMeta = Number(cameraMeta.throughputPerHour || 0);
-  // CRITICAL (spec §7 H): only camera snapshots actually OBSERVE vehicles. A public text
-  // source reports a wait, not counted vehicles, so we must NEVER fabricate a
-  // cars/vans/trucks/buses breakdown from the wait — that would present invented numbers as
-  // fact. Public-source history stores the wait + source only; the vehicle breakdown is 0
-  // and the source label ("source-…") tells the UI the counts are not real observations.
-  let cars = 0;
-  let vans = 0;
-  let trucks = 0;
-  let buses = 0;
-  let passed = 0;
-  let queueVehicles = 0;
-  if (isCameraSource) {
-    const seed = deterministicSeed(`${snapshot.id}-${wait}`);
-    const baseThroughput = throughputFromMeta || Math.max(10, Math.round(170 * Math.max(0.22, 0.88 - wait / 180)));
-    cars = Math.max(0, Math.round(baseThroughput * (0.68 + (seed % 7) / 100)));
-    vans = Math.max(0, Math.round(baseThroughput * (0.09 + (seed % 4) / 100)));
-    trucks = Math.max(0, Math.round(baseThroughput * (0.17 + (seed % 5) / 100)));
-    buses = Math.max(0, Math.round(baseThroughput * 0.025));
-    passed = Math.max(1, baseThroughput);
-    queueVehicles = Math.max(0, Math.round((wait / 60) * passed * 0.72));
-  }
-  const totalDemand = cars + vans + trucks + buses;
+  // Per-class counts are REAL only when a CV detector / camera ingest actually classified the
+  // vehicles this cycle. A heuristic snapshot-counter knows "vehicles in zone", not cars-vs-trucks.
+  const countsObserved = isCameraSource && cameraMeta.countsObserved === true;
+  const realCounts = countsObserved ? normalizeCounts(cameraMeta.realCounts || {}) : { cars: 0, vans: 0, trucks: 0, buses: 0 };
+  const throughputFromMeta = Math.max(0, Number(cameraMeta.throughputPerHour || 0) || 0);
+  const queueVehicles = isCameraSource
+    ? Math.max(0, Number(cameraMeta.vehiclesInQueueRoi ?? cameraMeta.queueVehicles ?? 0) || 0)
+    : 0;
+  // No fabricated breakdown/throughput (the old seeded cars/vans/trucks split is gone):
+  // we persist exactly what was observed and nothing else.
+  const passed = isCameraSource ? throughputFromMeta : 0;
+  const totalDemand = realCounts.cars + realCounts.vans + realCounts.trucks + realCounts.buses;
   const source = isCameraSource
-    ? 'camera-snapshot-counter'
-    : `source-${normalizeAscii(snapshot.sourceName || 'public').replace(/[^a-z0-9]+/g, '-')}`;
+    ? (countsObserved ? 'camera-cv-counter' : 'camera-snapshot-counter')
+    : isReportSource
+      ? 'report-dojava'
+      : `source-${normalizeAscii(snapshot.sourceName || 'public').replace(/[^a-z0-9]+/g, '-')}`;
+
+  const existingSource = await readHistorySlotSource(crossing, snapshot.direction, dateIso, hour);
+  if (existingSource && historySourceRank(existingSource) > historySourceRank(source)) return null;
+
   const slot = {
     hour,
-    cars,
-    vans,
-    trucks,
-    buses,
+    cars: realCounts.cars,
+    vans: realCounts.vans,
+    trucks: realCounts.trucks,
+    buses: realCounts.buses,
     totalDemand,
     passed,
     throughput: passed,
@@ -6204,8 +6266,8 @@ async function upsertHistoryFromSourceSnapshot(snapshot) {
     queueVehicles,
     wait,
     source,
-    // Vehicle counts are real observations only for camera sources.
-    vehicleCountsObserved: isCameraSource,
+    // Per-class counts are real observations only for CV/ingest camera sources.
+    vehicleCountsObserved: countsObserved,
   };
   await upsertHistorySnapshots(crossing, snapshot.direction, dateIso, [slot]);
   return slot;
@@ -6308,7 +6370,7 @@ app.get('/api/history/:crossingId', async (req, res) => {
   const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) && dates.includes(String(req.query.date))
     ? String(req.query.date)
     : dates[dates.length - 1];
-  const today = new Date().toISOString().slice(0, 10);
+  const today = historyTodayIso();
 
   // For production readiness: history is source-derived. We refresh public/camera sources for today's date,
   // but we do not synthesize fake historical days unless explicitly enabled for demos.
@@ -6330,18 +6392,30 @@ app.get('/api/history/:crossingId', async (req, res) => {
   // Honest coverage (spec §7 H): how much of the shown history is real camera observation vs
   // public-source (wait only, no real vehicle counts) vs model backfill. The UI must not
   // present fabricated precise vehicle counts as fact.
-  const slotSourceClass = (s) => (String(s || '').includes('camera') ? 'camera' : String(s || '').includes('historical-model') ? 'model' : 'public');
+  const slotSourceClass = (s) => {
+    const src = String(s || '');
+    if (src.includes('camera')) return 'camera';
+    if (src.includes('historical-model') || src.includes('camera-model')) return 'model';
+    if (src.includes('report') || src.includes('dojav')) return 'report';
+    return 'public';
+  };
   const cameraSlots = history.filter((r) => slotSourceClass(r.source) === 'camera').length;
   const modelSlots = history.filter((r) => slotSourceClass(r.source) === 'model').length;
-  const publicSlots = history.length - cameraSlots - modelSlots;
-  const hasRealVehicleCounts = cameraSlots > 0;
-  const enoughForPatterns = cameraSlots + publicSlots >= 6; // need a meaningful number of real slots
+  const reportSlots = history.filter((r) => slotSourceClass(r.source) === 'report').length;
+  const publicSlots = history.length - cameraSlots - modelSlots - reportSlots;
+  // Per-class cars/trucks split is real ONLY when a CV-classified camera slot exists;
+  // a heuristic camera slot proves a real TOTAL, never the split (T6).
+  const hasRealVehicleCounts = history.some((r) => String(r.source || '') === 'camera-cv-counter');
+  const vehicleTotalsAreReal = cameraSlots > 0;
+  const enoughForPatterns = cameraSlots + publicSlots + reportSlots >= 6; // need a meaningful number of real slots
   const coverage = {
     totalSlots: history.length,
     cameraSlots,
     publicSlots,
+    reportSlots,
     modelSlots,
     hasRealVehicleCounts,
+    vehicleTotalsAreReal,
     enoughForPatterns,
     modelBackfillEnabled: process.env.HISTORY_ALLOW_MODEL_BACKFILL === 'true',
   };
@@ -6353,6 +6427,7 @@ app.get('/api/history/:crossingId', async (req, res) => {
     direction,
     days,
     selectedDate,
+    timezone: HISTORY_TIMEZONE,
     updatedAt: new Date().toISOString(),
     source: datastoreMode === 'postgres' ? 'postgres-source-snapshots' : 'json-source-snapshots',
     calendar,
@@ -6361,13 +6436,16 @@ app.get('/api/history/:crossingId', async (req, res) => {
     // Vehicle totals are honest only when real camera observations exist; otherwise null.
     totals: hasRealVehicleCounts ? sumCounts(history) : null,
     vehicleCountsAreReal: hasRealVehicleCounts,
+    vehicleTotalsAreReal,
     note: !history.length
-      ? 'Za odabrani dan još nema spremljenih podataka. Povijest se puni kako scheduler/refresh dohvaća izvore.'
+      ? 'Za odabrani dan još nema spremljenih podataka. Povijest se puni kako aplikacija dohvaća izvore.'
       : !enoughForPatterns
         ? 'Još nemamo dovoljno stvarnih povijesnih podataka za pouzdane obrasce gužvi za ovaj dan.'
         : hasRealVehicleCounts
-          ? 'Povijest je građena iz spremljenih source snapshotova; broj vozila dolazi iz kamera.'
-          : 'Povijest prikazuje čekanja iz javnih izvora. Broj vozila nije stvarno brojan pa se ne prikazuje kao činjenica.',
+          ? 'Povijest je građena iz spremljenih očitanja; broj vozila dolazi iz kamere.'
+          : vehicleTotalsAreReal
+            ? 'Povijest prikazuje stvarna čekanja; kamera broji ukupna vozila, ali ne razlikuje pouzdano aute i kamione.'
+            : 'Povijest prikazuje čekanja iz javnih izvora i dojava. Broj vozila nije stvarno brojan pa se ne prikazuje kao činjenica.',
   });
 });
 app.get('/api/admin/daily-report', authRequired, adminRequired, async (req, res) => {
@@ -6511,6 +6589,99 @@ async function collectHistoryAndCameraCounts() {
   }
   return counts;
 }
+
+// Coarse wait band for audit display (mirrors how the UI tones waits; pure server-side label).
+function historyWaitBand(wait) {
+  const w = Number(wait);
+  if (!Number.isFinite(w)) return 'nepoznato';
+  if (w <= 15) return 'nisko';
+  if (w <= 40) return 'srednje';
+  if (w <= 90) return 'visoko';
+  return 'vrlo visoko';
+}
+
+// Admin history audit (T4): the raw truth about what history actually persisted — the latest
+// hourly slots per crossing+direction with timestamp, wait, band, vehicle counts (+ whether the
+// per-class breakdown was genuinely observed), source class and per-row warnings. Use this to
+// verify on live that Povijest is fed by real source/camera/report data, in Europe/Zagreb buckets.
+app.get('/api/admin/history-audit', authRequired, adminRequired, async (req, res) => {
+  const crossingFilter = String(req.query.crossingId || '').trim();
+  const slotLimit = Math.max(1, Math.min(48, Number(req.query.limit || 24) || 24));
+  const today = historyTodayIso();
+  const dates = [addDaysIso(today, -1), today];
+  const sourceClassOf = (s) => {
+    const src = String(s || '');
+    if (src === 'camera-cv-counter') return 'kamera (CV brojanje)';
+    if (src.includes('camera')) return 'kamera';
+    if (src.includes('report') || src.includes('dojav')) return 'dojava';
+    if (src.includes('historical-model') || src.includes('camera-model')) return 'model (sintetski)';
+    return 'javni izvor';
+  };
+  const results = [];
+  for (const crossing of Object.values(BORDER_CROSSINGS)) {
+    if (crossingFilter && crossing.id !== crossingFilter) continue;
+    for (const direction of ['toBih', 'toHr']) {
+      let rows = [];
+      try {
+        rows = await readHistorySnapshots(crossing.id, direction, dates);
+      } catch (error) {
+        results.push({ crossingId: crossing.id, direction, error: error.message, slots: [] });
+        continue;
+      }
+      const sorted = [...rows].sort((a, b) => `${b.date}:${b.hour}`.localeCompare(`${a.date}:${a.hour}`)).slice(0, slotLimit);
+      const seenKeys = new Set();
+      const slots = sorted.map((row) => {
+        const warnings = [];
+        const key = `${row.date}:${row.hour}`;
+        if (seenKeys.has(key)) warnings.push('duplicate-hour-slot');
+        seenKeys.add(key);
+        if (row.wait === null || row.wait === undefined) warnings.push('missing-wait');
+        const breakdownTotal = Number(row.cars || 0) + Number(row.vans || 0) + Number(row.trucks || 0) + Number(row.buses || 0);
+        const sourceStr = String(row.source || '');
+        if (breakdownTotal > 0 && sourceStr !== 'camera-cv-counter' && !row.vehicleCountsObserved) {
+          // Legacy rows written before the fabrication fix — the breakdown was synthesized.
+          warnings.push('breakdown-not-observed');
+        }
+        if (sourceStr.includes('historical-model') || sourceStr.includes('camera-model')) warnings.push('synthetic-model-row');
+        if (row.updatedAt && Date.now() - new Date(row.updatedAt).getTime() > 26 * 60 * 60 * 1000) warnings.push('stale-row');
+        return {
+          date: row.date,
+          hour: row.hour,
+          updatedAt: row.updatedAt || null,
+          wait: row.wait ?? null,
+          waitBand: historyWaitBand(row.wait),
+          queueVehicles: row.queueVehicles ?? null,
+          cars: row.cars ?? null,
+          vans: row.vans ?? null,
+          trucks: row.trucks ?? null,
+          buses: row.buses ?? null,
+          vehicleCountsObserved: row.vehicleCountsObserved === true || sourceStr === 'camera-cv-counter',
+          source: row.source || null,
+          sourceClass: sourceClassOf(row.source),
+          warnings,
+        };
+      });
+      results.push({
+        crossingId: crossing.id,
+        direction,
+        totalSlots: rows.length,
+        shownSlots: slots.length,
+        slotsWithWarnings: slots.filter((slot) => slot.warnings.length).length,
+        lastSlotAt: slots[0] ? `${slots[0].date} ${slots[0].hour}:00` : null,
+        slots,
+      });
+    }
+  }
+  res.json({
+    ok: true,
+    timezone: HISTORY_TIMEZONE,
+    today,
+    datastore: datastoreMode,
+    modelBackfillEnabled: process.env.HISTORY_ALLOW_MODEL_BACKFILL === 'true',
+    generatedAt: new Date().toISOString(),
+    crossings: results,
+  });
+});
 
 // Admin-only dev/test endpoint. Wipes camera/history/source snapshot buffers
 // and (in Postgres mode) truncates the matching tables. Users and admin
@@ -8248,9 +8419,11 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
       // else cv-detector only when YOLO truly drove a frame this cycle.
       source: calibrationUsed ? 'cv-detector-calibrated' : (hasIngest ? 'camera-ingest' : (cvSummary.cvUsed ? 'cv-detector' : (hasSnapshotCounter ? 'snapshot-counter' : 'baseline-camera-model'))),
       // Count→wait calibration status for THIS crossing+direction (used | learning + why).
+      // `breakdown` shows the trust mix of the learning samples: measured/verified vs driver
+      // reports — reports speed learning up but can never auto-calibrate alone (T8).
       calibration: calibModel
-        ? { used: calibrationUsed, calibrated: Boolean(calibModel.calibrated), minutesPerVehicle: calibModel.minutesPerVehicle, mae: calibModel.mae, sampleSize: calibModel.sampleSize, reason: calibModel.reason, count: calibCount }
-        : { used: false, calibrated: false, minutesPerVehicle: null, mae: null, sampleSize: 0, reason: 'no-samples', count: calibCount },
+        ? { used: calibrationUsed, calibrated: Boolean(calibModel.calibrated), minutesPerVehicle: calibModel.minutesPerVehicle, mae: calibModel.mae, sampleSize: calibModel.sampleSize, breakdown: calibModel.breakdown || { verified: 0, report: 0 }, reason: calibModel.reason, count: calibCount }
+        : { used: false, calibrated: false, minutesPerVehicle: null, mae: null, sampleSize: 0, breakdown: { verified: 0, report: 0 }, reason: 'no-samples', count: calibCount },
       // ROI v2 + multi-frame features (rich) for the v2 fusion + admin debug.
       roiFeatures: roiFeaturesPrimary,
       multiFrame: multiFramePrimary,
@@ -8581,17 +8754,21 @@ function extendedAlongRoad(borderPoint, target, extendMeters) {
 }
 
 // Origin/destination for the GOOGLE route request. Prefer an explicit display anchor; else, when a
-// displayCorridor.requestExtendMeters is set, extend the precise anchor along the road so Google
-// returns a LONGER road-following route on both sides; else the precise anchor.
+// displayCorridor.requestExtend(Before|After)Meters / requestExtendMeters is set, extend the precise
+// anchor along the road so Google returns a LONGER road-following route on that side; else the
+// precise anchor. Per-side values let e.g. Gornji Varoš stretch the HR approach without dragging
+// the BiH side along (T1: HR-side extension).
 function routeOriginAnchor(anchor = {}) {
   if (anchor.displayApproachStart) return anchor.displayApproachStart;
-  const ext = anchor.routeGuard?.displayCorridor?.requestExtendMeters;
+  const dc = anchor.routeGuard?.displayCorridor || {};
+  const ext = dc.requestExtendBeforeMeters ?? dc.requestExtendMeters;
   if (ext && anchor.borderPoint && anchor.approachStart) return extendedAlongRoad(anchor.borderPoint, anchor.approachStart, ext);
   return anchor.approachStart;
 }
 function routeDestinationAnchor(anchor = {}) {
   if (anchor.displayExitPoint) return anchor.displayExitPoint;
-  const ext = anchor.routeGuard?.displayCorridor?.requestExtendMeters;
+  const dc = anchor.routeGuard?.displayCorridor || {};
+  const ext = dc.requestExtendAfterMeters ?? dc.requestExtendMeters;
   if (ext && anchor.borderPoint && anchor.exitPoint) return extendedAlongRoad(anchor.borderPoint, anchor.exitPoint, ext);
   return anchor.exitPoint;
 }
@@ -8618,10 +8795,11 @@ function routeWiggleRatio(path = [], anchor = {}) {
 function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
   const guard = anchor.routeGuard || {};
   const dc = guard.displayCorridor || null;
-  // Longer-but-still-focused control zone. A displayCorridor.sliceMeters widens BOTH sides equally so
-  // the HR side is never cut short; otherwise per-anchor displayBefore/After apply.
-  let beforeMeters = Number(dc?.sliceMeters || guard.displayBeforeMeters || process.env.ROUTE_DISPLAY_BEFORE_METERS || 1300);
-  let afterMeters = Number(dc?.sliceMeters || guard.displayAfterMeters || process.env.ROUTE_DISPLAY_AFTER_METERS || 1300);
+  // Longer-but-still-focused control zone. Per-side sliceBefore/AfterMeters take priority (lets a
+  // crossing stretch one country's approach — Gornji Varoš HR side); a plain sliceMeters widens BOTH
+  // sides equally; otherwise per-anchor displayBefore/After apply.
+  let beforeMeters = Number(dc?.sliceBeforeMeters || dc?.sliceMeters || guard.displayBeforeMeters || process.env.ROUTE_DISPLAY_BEFORE_METERS || 1300);
+  let afterMeters = Number(dc?.sliceAfterMeters || dc?.sliceMeters || guard.displayAfterMeters || process.env.ROUTE_DISPLAY_AFTER_METERS || 1300);
   const hrExtra = Number(process.env.ROUTE_HR_SIDE_EXTRA_METERS || guard.hrSideExtraMeters || 0);
   if (route.direction === 'toHr') afterMeters += hrExtra;
   else beforeMeters += hrExtra;
@@ -8879,6 +9057,36 @@ function isLikelyClosedOrBlockedRoute(error, crossing, direction = 'toBih') {
   const message = String(error?.message || '');
   const googleNoRoute = /ZERO_RESULTS|NO_ROUTE|no route|route.*not.*found|cannot be calculated|not possible/i.test(message);
   return extremeDetour || googleNoRoute;
+}
+
+// Honest "route not verified" payload (T2). Used when Google cannot return a trustworthy
+// cross-border geometry. This is NOT a closure claim: `closed` stays false (only a real admin
+// status override may say "nije prohodna"), the wait stays visible, and the UI shows the
+// user-friendly warning instead of drawing a fake line.
+function routeUnverifiedPayload(crossing, direction = 'toBih', extra = {}) {
+  const anchor = crossing.anchors?.[direction] || crossing.anchors?.toBih || {};
+  return {
+    ok: true,
+    live: false,
+    closed: false,
+    direction,
+    crossingId: crossing.id,
+    crossing: crossing.name,
+    zone: {
+      from: anchor.fromLabel,
+      border: crossing.name,
+      to: anchor.toLabel,
+      label: anchor.label,
+    },
+    updatedAt: new Date().toISOString(),
+    source: 'route-verification-pending',
+    routeStatus: 'route_unverified',
+    routeUnavailable: true,
+    routeHidden: true,
+    note: 'Rutu trenutno ne možemo potvrditi — nemamo pouzdanu geometriju ceste preko ovog prijelaza. Prikazujemo samo čekanje na granici — provjeri stanje prije polaska.',
+    routes: [],
+    ...extra,
+  };
 }
 
 function routePendingPayload(crossing, direction = 'toBih', reason = 'Ruta se ne prikazuje dok ne potvrdimo stvarnu cestovnu liniju.', extra = {}) {
@@ -9588,19 +9796,35 @@ app.get('/api/camera-history/:crossingId', async (req, res) => {
     return;
   }
   const crossing = BORDER_CROSSINGS[crossingId];
-  const history = historyWithCameraEvents(crossing, direction);
-  const totals = sumCounts(history);
+  // REAL stored history only (T4): this endpoint used to serve a deterministic simulated series,
+  // which is exactly the "history that isn't history" problem. Now it returns today's persisted
+  // hourly slots; vehicle totals are exposed only when they come from real camera observations.
+  const today = historyTodayIso();
+  let history = [];
+  try {
+    history = (await readHistorySnapshots(crossing.id, direction, [today]))
+      .sort((a, b) => String(a.hour).localeCompare(String(b.hour)));
+  } catch (error) {
+    console.warn('[camera-history]', error.message);
+  }
+  const cameraSlots = history.filter((row) => String(row.source || '').includes('camera'));
   const laneProfile = sumLaneGroupsFromEvents(getRecentCameraEvents(crossing.id, direction, 60));
 
   res.json({
     ok: true,
-    live: true,
+    live: cameraSlots.length > 0,
     crossingId: crossing.id,
     direction,
+    date: today,
+    timezone: HISTORY_TIMEZONE,
     updatedAt: new Date().toISOString(),
-    totals,
+    totals: cameraSlots.length ? sumCounts(cameraSlots) : null,
+    vehicleTotalsAreReal: cameraSlots.length > 0,
     laneProfile,
     history,
+    note: history.length
+      ? (cameraSlots.length ? 'Satni podaci iz spremljenih očitanja; broj vozila dolazi iz kamere.' : 'Satni podaci iz javnih izvora/dojava — broj vozila nije stvarno brojan.')
+      : 'Još nema spremljenih satnih podataka za danas.',
   });
 });
 
@@ -9707,30 +9931,18 @@ app.get('/api/routes/:crossingId', async (req, res) => {
     res.json(payload);
   } catch (error) {
     console.error('[routes-api]', error);
-    if (isLikelyClosedOrBlockedRoute(error, crossing, direction) && crossing.routeStatusHint?.replacementCrossingId) {
-      res.json(routeClosedPayload(crossing, direction, 'Stara ruta preko ovog prijelaza ne vraća pouzdanu putanju. Ako ideš na područje Gradiške, koristi novi prijelaz Gornji Varoš / Gradiška Novi Most.', {
-        error: safeError(error),
-      }));
-      return;
-    }
-
-    // Gradiška-specific guard: when Google cannot return a real cross-border route
-    // (e.g. old bridge closed / construction), the calibrated control zone is
-    // misleading because users see a zig-zag local path. Mark the route as
-    // unavailable and point users at Gornji Varoš instead of drawing a zone.
-    if (crossing.id === 'gradiska' && isLikelyClosedOrBlockedRoute(error, crossing, direction)) {
-      const replacement = BORDER_CROSSINGS['gornji-varos'];
+    // Gradiška-style guard: when Google cannot return a real cross-border route, do NOT claim the
+    // crossing is closed (that claim is reserved for a real admin status override) and do NOT draw
+    // a calibrated zig-zag/straight zone. Be honest: route unverified, wait still shown, with a
+    // pointer at the replacement crossing where one exists.
+    if (isLikelyClosedOrBlockedRoute(error, crossing, direction)) {
+      const replacementId = crossing.routeStatusHint?.replacementCrossingId || (crossing.id === 'gradiska' ? 'gornji-varos' : null);
+      const replacement = replacementId ? BORDER_CROSSINGS[replacementId] : null;
       const replacementAnchor = replacement?.anchors?.[direction] || replacement?.anchors?.toBih || {};
-      const payload = routeClosedPayload(
-        crossing,
-        direction,
-        'Ruta preko Gradiške trenutno nije dostupna — moguće je da je most zatvoren ili Google ne može izračunati legalan prelazak. Koristi Gornji Varoš (Novi Most) ako ideš na područje Gradiške.',
-        {
-          error: safeError(error),
-          source: 'routes-api-gradiska-unavailable',
-          routeStatus: 'route_unavailable',
-        }
-      );
+      const payload = routeUnverifiedPayload(crossing, direction, {
+        error: safeError(error),
+        source: 'routes-api-route-unverified',
+      });
       if (replacement) {
         payload.suggestedCrossing = {
           crossingId: replacement.id,
@@ -9884,6 +10096,11 @@ export {
   makeMapFriendlyControlZoneRoute,
   routeOriginAnchor,
   routeDestinationAnchor,
+  // History persistence (exposed for integration tests — T4 honesty rules).
+  insertSourceSnapshots,
+  upsertHistoryFromSourceSnapshot,
+  readHistorySnapshots,
+  historyLocalDateHour,
   // Exposed for integration tests (mint an admin token against the seeded admin user).
   signToken,
 };

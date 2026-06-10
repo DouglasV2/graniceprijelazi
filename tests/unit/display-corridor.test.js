@@ -38,6 +38,12 @@ function goodThroughPath(anchor) {
 function dcOf(id, direction) {
   return BORDER_CROSSINGS[id].anchors[direction].routeGuard.displayCorridor;
 }
+// Per-side overrides (T1: Gornji Varoš stretches the HR side independently) fall back to the
+// symmetric values — the same resolution the server uses.
+const extendBefore = (dc) => dc.requestExtendBeforeMeters ?? dc.requestExtendMeters;
+const extendAfter = (dc) => dc.requestExtendAfterMeters ?? dc.requestExtendMeters;
+const sliceBefore = (dc) => dc.sliceBeforeMeters ?? dc.sliceMeters;
+const sliceAfter = (dc) => dc.sliceAfterMeters ?? dc.sliceMeters;
 function fallbackCorridor(id, direction) {
   const anchor = BORDER_CROSSINGS[id].anchors[direction];
   const dc = dcOf(id, direction);
@@ -50,8 +56,8 @@ describe('every problematic crossing has display-corridor config (extend + slice
       it(`${id} · ${direction} has requestExtendMeters + sliceMeters + fallback sizes`, () => {
         const dc = dcOf(id, direction);
         expect(dc).toBeTruthy();
-        expect(dc.requestExtendMeters).toBeGreaterThanOrEqual(1200);
-        expect(dc.sliceMeters).toBeGreaterThanOrEqual(1400);
+        expect(Math.min(extendBefore(dc), extendAfter(dc))).toBeGreaterThanOrEqual(1200);
+        expect(Math.min(sliceBefore(dc), sliceAfter(dc))).toBeGreaterThanOrEqual(1400);
         expect(dc.fallbackPerSideMeters).toBeGreaterThanOrEqual(1000);
       });
     }
@@ -67,7 +73,7 @@ describe('the Google request reaches FURTHER along the road than the precise anc
         const dest = routeDestinationAnchor(anchor);
         // Each request endpoint must be at least as far from the border as the precise anchor, and
         // reach roughly the configured extend distance (so Google draws more real road per side).
-        const ext = dcOf(id, direction).requestExtendMeters;
+        const ext = extendBefore(dcOf(id, direction));
         expect(distanceMetersLL(anchor.borderPoint, origin)).toBeGreaterThanOrEqual(Math.min(ext, distanceMetersLL(anchor.borderPoint, anchor.approachStart)) - 1);
         expect(distanceMetersLL(anchor.borderPoint, origin)).toBeGreaterThan(900);
         expect(distanceMetersLL(anchor.borderPoint, dest)).toBeGreaterThan(900);

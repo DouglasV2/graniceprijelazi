@@ -92,6 +92,14 @@ export function shapeWaitDisplay(wait, sourceMeta = {}) {
   // confident low/precise number. Camera-congestion is the "road visibly full → at least X" case.
   if (kind === 'congestion' || kind === 'google-jam' || kind === 'camera-congestion') return { primaryLabel: `od ${formatMinutes(n)}`, displayRangeLabel: null, confidence, broadRangeCollapsed: false, reason: 'congestion-floor' };
 
+  // Small-value consistency rule: every surface (sidebar, marker, overlay, history, alerts) must
+  // agree on tiny waits. "0 min" is shown ONLY as a deliberate, high-confidence "no waiting" —
+  // any other near-zero estimate reads "do 5 min" so two surfaces can't disagree (0 vs do 5).
+  if (!hasRange && n >= 0 && n <= 5) {
+    if (n === 0 && confidence === 'high') return { primaryLabel: '0 min', displayRangeLabel: null, confidence, broadRangeCollapsed: false, reason: 'no-wait' };
+    return { primaryLabel: 'do 5 min', displayRangeLabel: null, confidence, broadRangeCollapsed: false, reason: 'small-value-upper-bound' };
+  }
+
   if (hasRange) {
     const rawMin = Math.max(0, Number(sourceMeta.rangeMin));
     const rawMax = Math.max(rawMin, Number(sourceMeta.rangeMax));

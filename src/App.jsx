@@ -29,6 +29,7 @@ import { shouldSendPing } from './utils/location-wait-client.js';
 import { rankCrossingsByLocation } from './utils/crossing-recommendation.js';
 import { resolveReportWaitMinutes, clampWaitMinutes, WAIT_QUICK_OPTIONS } from './utils/parse-wait-minutes.js';
 import { routeGeometryValidated } from './utils/route-geometry.js';
+import { computeHistoryInsights, compareNowToTypical, formatHourWindow } from './utils/history-insights.js';
 
 
 function makeCrossingHistory(baseCars, baseTrucks, baseBuses, baseWait) {
@@ -553,8 +554,9 @@ const CROSSINGS = [
     shortName: 'Gornji Varoš',
     route: 'Gornji Varoš ↔ Gradiška Novi Most',
     area: 'Brod-Posavina / Posavina',
-    lat: 45.14250,
-    lng: 17.20650,
+    // Real crossing position (OSM): state border mid-Sava on the new D5/E-661 bridge.
+    lat: 45.14930,
+    lng: 17.20450,
     status: 'busy',
     confidence: 84,
     updatedAt: '14:34',
@@ -2214,7 +2216,7 @@ function BestNowCard({ best, selectedDirection, overrides, setSelectedCrossing, 
       <div className="best-now-copy">
         <span className="kicker">Najbolji izbor trenutno</span>
         <h3>{operational.status === 'closed' ? 'Trenutno nema otvorene preporuke' : best.shortName}</h3>
-        <p>{operational.status === 'open' || operational.status === 'busy' ? `${direction.label}: ${formatMinutes(wait)} · ${direction.waitAdvice}` : operational.note}</p>
+        <p>{operational.status === 'open' || operational.status === 'busy' ? `${direction.label}: ${formatWaitDisplay(wait, sourceMeta)} · ${direction.waitAdvice}` : operational.note}</p>
         <div className="best-now-meta-row">
           <span className={`operational-pill ${operational.className}`}>{operational.label}</span>
           <span className={`freshness-pill ${freshness.className}`}>{freshness.label}</span>
@@ -2280,6 +2282,12 @@ function LocationRecommendation({ selectedDirection, setSelectedCrossing, openDe
   if (hidden) return null;
   const pick = (id) => { const c = CROSSINGS.find((x) => x.id === id); if (c) { setSelectedCrossing(c); openDetail?.(c); } };
   const dirLabel = selectedDirection === 'toBih' ? 'HR → BiH' : 'BiH → HR';
+  // Same shared wait formatter as sidebar/marker/overlay — no "0 min" vs "do 5 min" drift here.
+  const waitLabelFor = (id, fallbackMin) => {
+    const c = CROSSINGS.find((x) => x.id === id);
+    if (!c) return formatMinutes(fallbackMin);
+    return formatWaitDisplay(getDisplayedWait(c, selectedDirection, overrides), getWaitSourceMeta(c, selectedDirection, overrides));
+  };
 
   return (
     <article className="loc-rec-card">
@@ -2302,7 +2310,7 @@ function LocationRecommendation({ selectedDirection, setSelectedCrossing, openDe
           <div className="loc-rec-head"><Navigation size={16} aria-hidden="true" /><strong>Najbolja opcija sada · {dirLabel}</strong></div>
           <button type="button" className="loc-rec-best" onClick={() => pick(rec.best.id)}>
             <div className="loc-rec-best-top"><b>{rec.best.name}</b><span>oko {formatMinutes(rec.best.totalMin)} ukupno</span></div>
-            <div className="loc-rec-best-detail">Vožnja {rec.best.driveApprox ? '≈ ' : ''}{formatMinutes(rec.best.driveMin)} · Čekanje od {formatMinutes(rec.best.waitMin)}{rec.best.confidence ? ` · pouzdanost ${rec.best.confidence}` : ''}</div>
+            <div className="loc-rec-best-detail">Vožnja {rec.best.driveApprox ? '≈ ' : ''}{formatMinutes(rec.best.driveMin)} · Čekanje {waitLabelFor(rec.best.id, rec.best.waitMin)}{rec.best.confidence ? ` · pouzdanost ${rec.best.confidence}` : ''}</div>
             <div className="loc-rec-badges">{rec.best.badges.map((b) => <span key={b}>{b}</span>)}</div>
           </button>
           {rec.similar && <p className="loc-rec-status">Slične opcije — provjeri stanje prije polaska.</p>}
@@ -2353,8 +2361,8 @@ function PublicView({ selectedDirection, setSelectedDirection, selectedCrossing,
         <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} />
       </div>
       <div className="stats-grid">
-        <StatCard label="Najbrže" value={knownRows.length ? best.shortName : '—'} hint={knownRows.length ? formatMinutes(getDisplayedWait(best, selectedDirection, overrides)) : 'čekam live izvor'} tone="green" icon={<Navigation size={14} />} />
-        <StatCard label="Najsporije" value={knownRows.length ? worst.shortName : '—'} hint={knownRows.length ? formatMinutes(getDisplayedWait(worst, selectedDirection, overrides)) : 'čekam live izvor'} tone="red" icon={<AlertTriangle size={14} />} />
+        <StatCard label="Najbrže" value={knownRows.length ? best.shortName : '—'} hint={knownRows.length ? formatWaitDisplay(getDisplayedWait(best, selectedDirection, overrides), getWaitSourceMeta(best, selectedDirection, overrides)) : 'čekam live izvor'} tone="green" icon={<Navigation size={14} />} />
+        <StatCard label="Najsporije" value={knownRows.length ? worst.shortName : '—'} hint={knownRows.length ? formatWaitDisplay(getDisplayedWait(worst, selectedDirection, overrides), getWaitSourceMeta(worst, selectedDirection, overrides)) : 'čekam live izvor'} tone="red" icon={<AlertTriangle size={14} />} />
         <StatCard label="Prosjek" value={formatMinutes(avg)} hint="osobna vozila" icon={<Clock size={14} />} />
         <StatCard label="Čeka izvor" value={CROSSINGS.length - knownRows.length} hint="bez svježe brojke" icon={<ShieldCheck size={14} />} />
       </div>
@@ -2727,6 +2735,8 @@ function routeAvailabilityMeta(payload = {}) {
   if (payload.closed || payload.routeStatus === 'closed_or_blocked' || payload.routeStatus === 'route_unavailable') {
     return { label: payload.routeStatus === 'route_unavailable' ? 'Ruta nedostupna' : 'Zatvoreno', className: 'closed' };
   }
+  // Honest non-closure state: geometry unverified, wait still valid (T2).
+  if (payload.routeStatus === 'route_unverified') return { label: 'Ruta nije potvrđena', className: 'pending' };
   if (payload.routeStatus === 'calibrated_fallback') return { label: 'Kalibrirana zona', className: 'pending' };
   if (payload.routeHidden || payload.routeStatus === 'pending_verification') return { label: 'Provjera rute', className: 'pending' };
   if (payload.live) return { label: 'Ažurirano', className: 'live' };
@@ -2819,7 +2829,7 @@ function StaticMapPlaceholder({ selectedDirection, selectedCrossing, setSelected
         >
           <MapPin size={20} />
           <span>{crossing.shortName}</span>
-          <small>Live · {hasKnownWait(wait) ? formatMinutes(wait) : 'čeka izvor'}</small>
+          <small>Live · {hasKnownWait(wait) ? formatWaitDisplay(wait, getWaitSourceMeta(crossing, selectedDirection, overrides)) : 'čeka izvor'}</small>
         </button>
         );
       })}
@@ -2840,6 +2850,9 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   const infoWindowRef = useRef(null);
   const [routePayload, setRoutePayload] = useState({ live: false, routes: [], note: 'Ruta nije učitana.' });
   const [routeInspectorOpen, setRouteInspectorOpen] = useState(true);
+  // Secondary route metrics live behind a "Detalji" toggle so the info box stays small and the
+  // primary answer (wait + direction + source + freshness) never competes with the map (T3).
+  const [routeDetailsOpen, setRouteDetailsOpen] = useState(false);
   const [selectedRoute, setSelectedRoute] = useState(null);
   // Initialise from the cached loader state: if the script was already warmed (app-startup preload or
   // a previous visit), the init effect runs synchronously on the FIRST mount — same fast path as the
@@ -3021,7 +3034,7 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
           infoWindowRef.current?.setContent(`
             <div class="gm-info-card gm-tooltip-card">
               <strong>${crossing.shortName}</strong>
-              <p>${direction.label} · ${formatMinutes(getDisplayedWait(crossing, selectedDirection, overrides))}</p>
+              <p>${direction.label} · ${formatWaitDisplay(getDisplayedWait(crossing, selectedDirection, overrides), getWaitSourceMeta(crossing, selectedDirection, overrides))}</p>
               <small>Klik za detalje</small>
             </div>
           `);
@@ -3440,24 +3453,32 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
                 </button>
               )}
             </div>
-          ) : primaryRoute ? (
+          ) : (
             <>
-              <div className="route-summary">
-                <div>
-                  <span>Čekanje na granici</span>
+              {/* PRIMARY summary: the answer a driver needs — wait, direction, source, freshness.
+                  Always shown, even when the route geometry is unavailable (the wait is a separate,
+                  still-valid signal). Everything route-specific lives behind "Detalji". */}
+              <div className="route-summary compact-route-summary">
+                <div className="route-summary-primary">
+                  <span>Čekanje na granici · {getDirection(selectedCrossing, selectedDirection).label}</span>
                   <b>{formatWaitDisplay(borderWait, borderSourceMeta)}</b>
                   {borderSourceMeta.hasSoftUpperBoundPublic && <small className="wait-qualifier">procjena</small>}
                 </div>
-                {/* Secondary zone/traffic metrics only when the route geometry is genuinely validated
-                    (Item 1/3) — never show "Vožnja kroz zonu / Dionica" off a straight-line fallback. */}
-                {showZoneMetrics && <div><span>{isControlZoneDisplay ? 'Vožnja kroz zonu' : 'Trajanje rute'}</span><b>{formatMinutes(primaryRoute.durationMinutes)}</b></div>}
-                {showZoneMetrics && <div><span>{isControlZoneDisplay ? 'Dionica zone' : 'Udaljenost'}</span><b>{formatDistanceKm(primaryRoute.distanceKm)}</b></div>}
-                {showZoneMetrics && routePayload.trafficAvailable !== false && <div><span>Cestovni zastoj</span><b>{formatMinutes(primaryRoute.delayMinutes || 0)}</b></div>}
+                <div className="route-summary-meta">
+                  <span className={`source-badge mini ${borderSourceMeta.className || 'pending'}`}>{borderSourceMeta.label}</span>
+                  <span className={`freshness-pill ${getFreshnessMeta(borderSourceMeta, selectedCrossing).className}`}>{getFreshnessMeta(borderSourceMeta, selectedCrossing).label}</span>
+                  <span className={`confidence-pill tone-${confidenceMetaLabel(borderSourceMeta).tone}`}>{confidenceMetaLabel(borderSourceMeta).label}</span>
+                </div>
               </div>
-              {isControlZoneDisplay && !routeValidated && (
+              {((isControlZoneDisplay && !routeValidated) || routePayload.routeUnavailable || (!primaryRoute && !routePayload.live)) && (
                 <div className="route-unconfirmed-panel">
                   <strong>⚠ Rutu trenutno ne možemo potvrditi</strong>
-                  <p>Nemamo pouzdanu geometriju ceste preko ovog prijelaza (često zbog mosta ili radova). Prikazujemo samo čekanje na granici — provjeri stanje prije polaska.</p>
+                  <p>Nemamo pouzdanu geometriju ceste preko ovog prijelaza. Prikazujemo samo čekanje na granici — provjeri stanje prije polaska.</p>
+                  {suggestedCrossing && (
+                    <button type="button" className="route-alternative-button" onClick={() => setSelectedCrossing(suggestedCrossing)}>
+                      {routePayload.suggestedCrossing?.label || `Prikaži ${suggestedCrossing.shortName}`}
+                    </button>
+                  )}
                 </div>
               )}
               <div className="route-signal-badges">
@@ -3477,24 +3498,39 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
                   <span className="signal-badge signal-soft-bound" title="Google nije vratio podatke o gustoći prometa za ovu dionicu — linija je plava jer nema žive procjene, ne zato što je dokazano prohodno.">Promet: podaci nedostupni</span>
                 )}
               </div>
-              {borderSourceMeta.note && (
-                <p className="route-note">{borderSourceMeta.note}</p>
-              )}
-              {(routePayload.note || primaryRoute.displayNote) && <p className="route-note">{routePayload.note || primaryRoute.displayNote}</p>}
-            </>
-          ) : (
-            <p className="route-note">{routePayload.note || 'Ruta trenutno nije dostupna.'}</p>
-          )}
-          {!!routes.length && !(isControlZoneDisplay && !routeValidated) && (
-            <div className="traffic-segments">
-              {routes.map((route) => (
-                <button type="button" className={selectedRoute?.id === route.id ? 'traffic-segment-row active' : 'traffic-segment-row'} key={route.id} onClick={() => { setSelectedRoute(route); setRouteInspectorOpen(true); }}>
-                  <i style={{ background: getRouteToneColor(route.level, route.primary) }} />
-                  <span>{route.label}</span>
-                  <b>{formatMinutes(route.durationMinutes)} · {formatDistanceKm(route.distanceKm)}</b>
+              {/* Route metrics ("Vožnja kroz zonu", "Dionica zone", "Cestovni zastoj") show ONLY for a
+                  validated road geometry, and only inside the collapsed Detalji section (T3). */}
+              {showZoneMetrics && (
+                <button type="button" className="route-details-toggle" onClick={() => setRouteDetailsOpen((value) => !value)}>
+                  {routeDetailsOpen ? 'Sakrij detalje rute' : 'Detalji rute'}
                 </button>
-              ))}
-            </div>
+              )}
+              {showZoneMetrics && routeDetailsOpen && (
+                <>
+                  <div className="route-summary route-details-grid">
+                    <div><span>{isControlZoneDisplay ? 'Vožnja kroz zonu' : 'Trajanje rute'}</span><b>{formatMinutes(primaryRoute.durationMinutes)}</b></div>
+                    <div><span>{isControlZoneDisplay ? 'Dionica zone' : 'Udaljenost'}</span><b>{formatDistanceKm(primaryRoute.distanceKm)}</b></div>
+                    {routePayload.trafficAvailable !== false && <div><span>Cestovni zastoj</span><b>{formatMinutes(primaryRoute.delayMinutes || 0)}</b></div>}
+                  </div>
+                  {!!routes.length && !(isControlZoneDisplay && !routeValidated) && (
+                    <div className="traffic-segments">
+                      {routes.map((route) => (
+                        <button type="button" className={selectedRoute?.id === route.id ? 'traffic-segment-row active' : 'traffic-segment-row'} key={route.id} onClick={() => { setSelectedRoute(route); setRouteInspectorOpen(true); }}>
+                          <i style={{ background: getRouteToneColor(route.level, route.primary) }} />
+                          <span>{route.label}</span>
+                          <b>{formatMinutes(route.durationMinutes)} · {formatDistanceKm(route.distanceKm)}</b>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {borderSourceMeta.note && <p className="route-note">{borderSourceMeta.note}</p>}
+                  {(routePayload.note || primaryRoute?.displayNote) && <p className="route-note">{routePayload.note || primaryRoute?.displayNote}</p>}
+                </>
+              )}
+              {!showZoneMetrics && routePayload.note && !routePayload.routeUnavailable && !(isControlZoneDisplay && !routeValidated) && (
+                <p className="route-note">{routePayload.note}</p>
+              )}
+            </>
           )}
         </div>
       )}
@@ -4505,17 +4541,21 @@ function historyPeriodTone(period) {
   return 'normal';
 }
 
-function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection }) {
+function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection, setSelectedDirection, overrides = {} }) {
   const selected = selectedCrossing || CROSSINGS[0];
   const [apiHistory, setApiHistory] = useState(null);
   const [historyCalendar, setHistoryCalendar] = useState([]);
   const [historyDays, setHistoryDays] = useState(7);
   const [selectedDate, setSelectedDate] = useState('');
   const [historySource, setHistorySource] = useState('');
+  const [historyUpdatedAt, setHistoryUpdatedAt] = useState('');
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   // Honesty contract (V5 §7 H / §8): never present fabricated vehicle counts as fact.
+  // vehicleCountsAreReal = a CV camera really classified cars/trucks; vehicleTotalsAreReal = a
+  // camera really counted TOTAL vehicles (split may still be unknown).
   const [vehicleCountsAreReal, setVehicleCountsAreReal] = useState(false);
+  const [vehicleTotalsAreReal, setVehicleTotalsAreReal] = useState(false);
   const [historyCoverage, setHistoryCoverage] = useState(null);
   const [historyNote, setHistoryNote] = useState('');
 
@@ -4531,7 +4571,9 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection 
           setApiHistory(Array.isArray(payload.history) ? payload.history : []);
           setHistoryCalendar(payload.calendar || []);
           setHistorySource(payload.source || 'api');
+          setHistoryUpdatedAt(payload.updatedAt || '');
           setVehicleCountsAreReal(payload.vehicleCountsAreReal === true);
+          setVehicleTotalsAreReal(payload.vehicleTotalsAreReal === true || payload.vehicleCountsAreReal === true);
           setHistoryCoverage(payload.coverage || null);
           setHistoryNote(payload.note || '');
           if (!selectedDate || !payload.calendar?.some((item) => item.date === selectedDate)) setSelectedDate(payload.selectedDate || payload.calendar?.at(-1)?.date || '');
@@ -4551,6 +4593,11 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection 
   }, [selected.id, selectedDirection, historyDays, selectedDate]);
 
   const focusSeries = Array.isArray(apiHistory) ? apiHistory : [];
+  // Driver-facing insights from REAL persisted slots (pure + unit-tested): peak/min/typical/best window.
+  const insights = computeHistoryInsights(focusSeries);
+  const currentWait = getDisplayedWait(selected, selectedDirection, overrides);
+  const currentMeta = getWaitSourceMeta(selected, selectedDirection, overrides);
+  const nowVsTypical = compareNowToTypical(hasKnownWait(currentWait) ? Number(currentWait) : null, insights.typicalRange);
   const periods = buildHistoryPeriods(focusSeries);
   const emptySlot = { hour: '--', wait: 0, passed: 0, cars: 0, vans: 0, trucks: 0, buses: 0 };
   const emptyPeriod = { label: 'Čeka podatke', rangeLabel: '-', passed: 0, avgWait: 0, avgThroughput: 0, peak: emptySlot };
@@ -4596,6 +4643,9 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection 
           <p className="screen-subtitle">Jednostavan pregled prošlih čekanja za odabrani prijelaz. Detalji po satu su skriveni dok ih korisnik ne zatraži.</p>
         </div>
         <div className="history-actions history-simple-actions">
+          {typeof setSelectedDirection === 'function' && (
+            <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} compact />
+          )}
           <select className="small-select" value={selected.id} onChange={(event) => setSelectedCrossing(CROSSINGS.find((crossing) => crossing.id === event.target.value))}>
             {CROSSINGS.map((crossing) => <option key={crossing.id} value={crossing.id}>{crossing.name}</option>)}
           </select>
@@ -4613,11 +4663,66 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection 
       <article className={`history-insight-card ${statusFromWait(rangeAverageWait)}`}>
         <div>
           <span>{selected.shortName} · {getDirection(selected, selectedDirection).label}</span>
-          <h3>{hasHistoryData ? `Najbolje krenuti: ${bestTimeText}` : 'Povijest se puni iz live izvora'}</h3>
-          <p>{hasHistoryData ? `Najviše čekanja se obično pojavljuje u periodu ${avoidTimeText}. Najsporiji dan u rasponu je ${rangeSlowestDay.label || '-'} (${formatMinutes(rangeSlowestDay.averageWait || 0)} prosjek).` : 'Čim se prikupe prva očitanja, ovdje će se prikazati preporuka za najbolje vrijeme polaska.'}</p>
+          <h3>{hasHistoryData
+            ? (insights.bestWindow && !insights.lowData ? `Najbolje vrijeme za polazak: ${formatHourWindow(insights.bestWindow.startHour, insights.bestWindow.endHour)}` : `Najbolje krenuti: ${bestTimeText}`)
+            : 'Još nemamo dovoljno podataka za povijest ovog prijelaza.'}</h3>
+          <p>{hasHistoryData
+            ? `Najviše čekanja se obično pojavljuje u periodu ${avoidTimeText}. Najsporiji dan u rasponu je ${rangeSlowestDay.label || '-'} (${formatMinutes(rangeSlowestDay.averageWait || 0)} prosjek).`
+            : 'Čim se prikupe prva očitanja, ovdje će se prikazati preporuka za najbolje vrijeme polaska.'}</p>
+          <div className="history-source-chips" aria-label="Izvori povijesti">
+            {historyCoverage?.cameraSlots > 0 && <span>kamera · {historyCoverage.cameraSlots}h</span>}
+            {historyCoverage?.publicSlots > 0 && <span>javni izvor · {historyCoverage.publicSlots}h</span>}
+            {historyCoverage?.reportSlots > 0 && <span>dojave · {historyCoverage.reportSlots}h</span>}
+            {historyUpdatedAt && <span>{formatLastUpdated(historyUpdatedAt)}</span>}
+            {insights.lowData && hasHistoryData && <span className="history-low-data-badge">Podaci su rijetki — okvirna procjena</span>}
+          </div>
         </div>
         <strong>{dataStatus}</strong>
       </article>
+
+      {isHistoryLoading && !focusSeries.length && (
+        <div className="history-skeleton" aria-hidden="true"><i /><i /><i /></div>
+      )}
+
+      {/* "Kada mi se najviše isplati ići?" — answer cards from real persisted slots (T5). */}
+      {focusSeries.length > 0 && (
+        <div className="history-summary-grid">
+          <article className="tone-bad">
+            <span>Najveća gužva</span>
+            <strong>{insights.peak ? formatMinutes(insights.peak.wait) : '—'}</strong>
+            <small>{insights.peak ? `najviše se čekalo u ${insights.peak.hour}:00` : 'nema podataka'}</small>
+          </article>
+          <article className="tone-good">
+            <span>Najmanje čekanje</span>
+            <strong>{insights.calm ? formatMinutes(insights.calm.wait) : '—'}</strong>
+            <small>{insights.calm ? `najmirnije u ${insights.calm.hour}:00` : 'nema podataka'}</small>
+          </article>
+          <article>
+            <span>Tipično čekanje</span>
+            <strong>{insights.typicalRange ? `${Math.round(insights.typicalRange.min)}–${Math.round(insights.typicalRange.max)} min` : '—'}</strong>
+            <small>{insights.lowData ? 'okvirna procjena' : 'uobičajen raspon kroz dan'}</small>
+          </article>
+          <article className={insights.bestWindow ? 'tone-good' : ''}>
+            <span>Najmirniji period</span>
+            <strong>{insights.bestWindow ? formatHourWindow(insights.bestWindow.startHour, insights.bestWindow.endHour) : '—'}</strong>
+            <small>{insights.bestWindow ? `prosječno ${formatMinutes(insights.bestWindow.avgWait)}` : 'nema dovoljno podataka'}</small>
+          </article>
+          {insights.worstWindow && selectedDate === historyCalendar.at(-1)?.date && (
+            <article className="tone-bad">
+              <span>Najgore vrijeme danas</span>
+              <strong>{formatHourWindow(insights.worstWindow.startHour, insights.worstWindow.endHour)}</strong>
+              <small>prosječno {formatMinutes(insights.worstWindow.avgWait)}</small>
+            </article>
+          )}
+          {nowVsTypical && hasKnownWait(currentWait) && (
+            <article className={nowVsTypical === 'better' ? 'tone-good' : nowVsTypical === 'worse' ? 'tone-bad' : ''}>
+              <span>Trenutno vs uobičajeno</span>
+              <strong>{formatWaitDisplay(currentWait, currentMeta)}</strong>
+              <small>{nowVsTypical === 'better' ? 'trenutno bolje od uobičajenog' : nowVsTypical === 'worse' ? 'trenutno gore od uobičajenog' : 'u razini uobičajenog'}</small>
+            </article>
+          )}
+        </div>
+      )}
 
       <div className="history-simple-kpis">
         <article><span>Prosjek raspona</span><strong>{formatMinutes(rangeAverageWait)}</strong><small>{historyDays} dana</small></article>
@@ -4661,7 +4766,7 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection 
           <div className="selected-day-summary">
             <div><small>Najmirnije</small><strong>{quietSlot.hour}:00</strong><em>{formatMinutes(quietSlot.wait)}</em></div>
             <div><small>Najsporije</small><strong>{peakSlot.hour}:00</strong><em>{formatMinutes(peakSlot.wait)}</em></div>
-            <div><small>Protok</small><strong>{vehicleCountsAreReal ? focusTotal : '—'}</strong><em>{vehicleCountsAreReal ? 'vozila (kamera)' : 'nije brojano'}</em></div>
+            <div><small>Protok</small><strong>{vehicleTotalsAreReal && focusTotal > 0 ? focusTotal : '—'}</strong><em>{vehicleTotalsAreReal && focusTotal > 0 ? 'vozila (kamera)' : 'nije brojano'}</em></div>
           </div>
         </article>
         <article className="history-selected-day-card subdued">
@@ -4719,16 +4824,35 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection 
                     <div className="history-flow-track"><i className={tone} style={{ width: `${flowWidth}%` }} /></div>
                     <div className="history-wait-track"><i className={tone} style={{ width: `${waitWidth}%` }} /></div>
                   </div>
-                  <div className="history-hour-vehicles" aria-label="Vozila po tipu">
-                    <span>🚗 {item.cars || 0}</span>
-                    <span>🚐 {item.vans || 0}</span>
-                    <span>🚛 {item.trucks || 0}</span>
-                    <span>🚌 {item.buses || 0}</span>
-                  </div>
-                  <div className="history-hour-count">
-                    <strong>{item.passed}</strong>
-                    <span>voz/h</span>
-                  </div>
+                  {/* Per-class icons ONLY when a CV camera really classified vehicles; a real total
+                      shows as a single count; otherwise nothing — no invented 🚗/🚛 splits (T6). */}
+                  {vehicleCountsAreReal ? (
+                    <div className="history-hour-vehicles" aria-label="Vozila po tipu">
+                      <span>🚗 {item.cars || 0}</span>
+                      <span>🚐 {item.vans || 0}</span>
+                      <span>🚛 {item.trucks || 0}</span>
+                      <span>🚌 {item.buses || 0}</span>
+                    </div>
+                  ) : vehicleTotalsAreReal && String(item.source || '').includes('camera') ? (
+                    <div className="history-hour-vehicles" aria-label="Vozila na kameri">
+                      <span>🚘 {item.queueVehicles || 0} vozila na kameri</span>
+                    </div>
+                  ) : (
+                    <div className="history-hour-vehicles muted" aria-label="Vozila nisu brojana">
+                      <span>vozila nisu brojana</span>
+                    </div>
+                  )}
+                  {vehicleTotalsAreReal && Number(item.passed) > 0 ? (
+                    <div className="history-hour-count">
+                      <strong>{item.passed}</strong>
+                      <span>voz/h</span>
+                    </div>
+                  ) : (
+                    <div className="history-hour-count muted">
+                      <strong>—</strong>
+                      <span>voz/h</span>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -5358,7 +5482,7 @@ export default function App() {
               </div>
               <div>
                 <span>Trenutno čekanje</span>
-                <strong>{formatMinutes(selectedWait)}</strong>
+                <strong>{formatWaitDisplay(selectedWait, getWaitSourceMeta(selectedCrossing, selectedDirection, overrides))}</strong>
               </div>
               <div>
                 <span>Smjer prikaza</span>
@@ -5390,7 +5514,7 @@ export default function App() {
       {activeTab === 'Moj put' && <TripPlanner selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} tripCrossing={tripCrossing} setTripCrossing={setTripCrossing} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} setActiveTab={setActiveTab} overrides={overrides} currentUser={currentUser} />}
       {activeTab === 'Mapa' && <MapView selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} requestedMode={mapModeRequest} overrides={overrides} stateVersion={serverStateVersion} />}
       {activeTab === 'Dojave' && <ChatView posts={posts} setPosts={setPosts} currentUser={viewer} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} selectedDirection={selectedDirection} trackedIds={trackedIds} toggleTracked={toggleTracked} />}
-      {activeTab === 'Povijest' && <HistoryView selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} selectedDirection={selectedDirection} />}
+      {activeTab === 'Povijest' && <HistoryView selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} overrides={overrides} />}
       {activeTab === 'Admin' && viewer.role === 'admin' && currentUser && <AdminView selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} overrides={overrides} setOverrides={setOverrides} posts={posts} currentUser={currentUser} />}
 
       <DetailModal crossing={detailCrossing} selectedDirection={selectedDirection} overrides={overrides} onClose={() => setDetailCrossing(null)} onTrack={toggleTracked} tracked={detailCrossing ? trackedIds.includes(detailCrossing.id) : false} setTripCrossing={setTripCrossing} setSelectedCrossing={selectCrossing} setActiveTab={setActiveTab} addNotificationRule={addNotificationRule} />
