@@ -39,11 +39,17 @@ function dcOf(id, direction) {
   return BORDER_CROSSINGS[id].anchors[direction].routeGuard.displayCorridor;
 }
 // Per-side overrides (T1: Gornji Varoš stretches the HR side independently) fall back to the
-// symmetric values — the same resolution the server uses.
-const extendBefore = (dc) => dc.requestExtendBeforeMeters ?? dc.requestExtendMeters;
-const extendAfter = (dc) => dc.requestExtendAfterMeters ?? dc.requestExtendMeters;
+// symmetric values — the same resolution the server uses. A side may also have NO extension at
+// all (GV's BiH motorway side — extending there hits the one-way carriageway snap trap), so the
+// meaningful invariant is the EFFECTIVE request reach from the border, not the raw config key.
 const sliceBefore = (dc) => dc.sliceBeforeMeters ?? dc.sliceMeters;
 const sliceAfter = (dc) => dc.sliceAfterMeters ?? dc.sliceMeters;
+function requestReach(anchor) {
+  return {
+    origin: distanceMetersLL(anchor.borderPoint, routeOriginAnchor(anchor)),
+    destination: distanceMetersLL(anchor.borderPoint, routeDestinationAnchor(anchor)),
+  };
+}
 function fallbackCorridor(id, direction) {
   const anchor = BORDER_CROSSINGS[id].anchors[direction];
   const dc = dcOf(id, direction);
@@ -53,10 +59,11 @@ function fallbackCorridor(id, direction) {
 describe('every problematic crossing has display-corridor config (extend + slice + fallback)', () => {
   for (const id of PROBLEMATIC_DISPLAY_CROSSINGS) {
     for (const direction of ['toBih', 'toHr']) {
-      it(`${id} · ${direction} has requestExtendMeters + sliceMeters + fallback sizes`, () => {
+      it(`${id} · ${direction} has request reach + sliceMeters + fallback sizes`, () => {
         const dc = dcOf(id, direction);
         expect(dc).toBeTruthy();
-        expect(Math.min(extendBefore(dc), extendAfter(dc))).toBeGreaterThanOrEqual(1200);
+        const reach = requestReach(BORDER_CROSSINGS[id].anchors[direction]);
+        expect(Math.min(reach.origin, reach.destination)).toBeGreaterThanOrEqual(1200);
         expect(Math.min(sliceBefore(dc), sliceAfter(dc))).toBeGreaterThanOrEqual(1400);
         expect(dc.fallbackPerSideMeters).toBeGreaterThanOrEqual(1000);
       });
@@ -71,10 +78,9 @@ describe('the Google request reaches FURTHER along the road than the precise anc
         const anchor = BORDER_CROSSINGS[id].anchors[direction];
         const origin = routeOriginAnchor(anchor);
         const dest = routeDestinationAnchor(anchor);
-        // Each request endpoint must be at least as far from the border as the precise anchor, and
-        // reach roughly the configured extend distance (so Google draws more real road per side).
-        const ext = extendBefore(dcOf(id, direction));
-        expect(distanceMetersLL(anchor.borderPoint, origin)).toBeGreaterThanOrEqual(Math.min(ext, distanceMetersLL(anchor.borderPoint, anchor.approachStart)) - 1);
+        // Each request endpoint must be at least as far from the border as the precise anchor
+        // (so Google draws at least the full calibrated road per side).
+        expect(distanceMetersLL(anchor.borderPoint, origin)).toBeGreaterThanOrEqual(distanceMetersLL(anchor.borderPoint, anchor.approachStart) - 1);
         expect(distanceMetersLL(anchor.borderPoint, origin)).toBeGreaterThan(900);
         expect(distanceMetersLL(anchor.borderPoint, dest)).toBeGreaterThan(900);
       });

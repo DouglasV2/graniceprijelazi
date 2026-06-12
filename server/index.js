@@ -779,11 +779,14 @@ const BORDER_CROSSINGS = {
             exitPoint: { lat: 45.14250, lng: 17.25900 },
           },
         ],
-        // useViaIntermediate: false → skip the strict via waypoint that triggers
-        // Google ZERO_RESULTS on this bridge. The free approach→exit route always
-        // crosses the actual border zone. For this crossing we fail open so a guard mismatch
-        // logs as a warning instead of dropping back to a straight calibrated line.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 600, displayAfterMeters: 1100 },
+        // Attempt order probed empirically 2026-06-12 (per direction!): toBih is cleanest with the
+        // STOPOVER attempt (the via route detours through town, sliced wiggle 2.17 → rejected);
+        // toHr is cleanest with the VIA attempt (stopover adds a 180° U-turn jog at the origin).
+        // maxTurnDeg 170: the legal approach takes a genuinely sharp street corner in Stara
+        // Gradiška (~151°); the default 150° U-turn guard rejected Google's REAL 2.1 km bridge
+        // route and the map fell back to the undrawable straight corridor. The wiggle-ratio
+        // check still catches actual out-and-back loops.
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 600, displayAfterMeters: 1100, displayCorridor: { maxTurnDeg: 170 } },
       },
       toHr: {
         label: 'BiH → HR',
@@ -799,7 +802,7 @@ const BORDER_CROSSINGS = {
             approachStart: { lat: 45.14250, lng: 17.25900 },
           },
         ],
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayBeforeMeters: 1100, displayAfterMeters: 600 },
+        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: true, displayBeforeMeters: 1100, displayAfterMeters: 600, displayCorridor: { maxTurnDeg: 170 } },
       },
     },
   },
@@ -822,6 +825,15 @@ const BORDER_CROSSINGS = {
       // on the BiH side. The HR→BiH zone must START on the HR approach (before the HR control),
       // cross the bridge, and end past the BiH control — hence the asymmetric per-side corridor:
       // the HR (before) side gets the longer slice + request extension.
+      // Waypoint combinations VERIFIED against the live Routes API (scripts/probe-gv-route.mjs):
+      //  * toBih: extended-D5 origin → via border → BiH control = 3.1–3.9 km clean bridge route.
+      //  * The D5/E-661 here is a DUAL carriageway (separate one-way ways ~20 m apart). A request
+      //    endpoint extended onto the BiH MOTORWAY mainline snaps to the wrong one-way carriageway
+      //    and produces an 80+ km cross-country detour (the live "ruta nije dostupna" bug) — so the
+      //    BiH-side request endpoint is the control plaza itself, never an extended motorway point.
+      //  * toHr: northbound access to the bridge legitimately goes through the interchange loop
+      //    (~7.5 km total), crossing the border on the NORTHBOUND carriageway — hence the
+      //    direction-specific borderPoint (NB lane) and the wider distance guard.
       toBih: {
         label: 'HR → BiH',
         fromLabel: 'Gornji Varoš · HR prilaz',
@@ -829,21 +841,19 @@ const BORDER_CROSSINGS = {
         approachStart: { lat: 45.16310, lng: 17.20490 },
         borderPoint: { lat: 45.14930, lng: 17.20450 },
         exitPoint: { lat: 45.13570, lng: 17.20300 },
-        // Fail open (rejectOnFail false) so a Google quirk degrades to the calibrated corridor
-        // instead of hiding the crossing; per-side displayCorridor keeps the HR approach long.
-        // requestExtend*Meters are TOTAL road metres from the border (extendedAlongRoad takes
-        // max(anchorDistance, extend)): HR side ≈1.53 km to the control + approach beyond it.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayMaxMeters: 4800, displayCorridor: { requestExtendBeforeMeters: 2400, requestExtendAfterMeters: 2000, sliceBeforeMeters: 2400, sliceAfterMeters: 1900, fallbackPerSideMeters: 1500, fallbackMaxPerSideMeters: 2400 } },
+        routeGuard: { maxCrossingDistanceKm: 6, hardMaxCrossingDistanceKm: 14, passDistanceMeters: 700, validateApproachExit: true, useViaIntermediate: true, displayMaxMeters: 4800, displayCorridor: { requestExtendBeforeMeters: 2400, sliceBeforeMeters: 2400, sliceAfterMeters: 1900, fallbackPerSideMeters: 1500, fallbackMaxPerSideMeters: 2400 } },
       },
       toHr: {
         label: 'BiH → HR',
         fromLabel: 'Gradiška Novi Most · BiH prilaz',
         toLabel: 'Gornji Varoš · HR izlaz',
         approachStart: { lat: 45.13570, lng: 17.20300 },
-        borderPoint: { lat: 45.14930, lng: 17.20450 },
+        // Northbound carriageway point on the bridge — a mid-bridge via snaps to the southbound
+        // lane and makes the northbound route impossible (Google returns NO ROUTES).
+        borderPoint: { lat: 45.15030, lng: 17.20462 },
         exitPoint: { lat: 45.16310, lng: 17.20490 },
-        // Mirrored: the HR side is now the AFTER (exit) side, so it gets the longer slice.
-        routeGuard: { maxCrossingDistanceKm: 50, hardMaxCrossingDistanceKm: 100, passDistanceMeters: 10000, validateApproachExit: false, rejectOnFail: false, useViaIntermediate: false, displayMaxMeters: 4800, displayCorridor: { requestExtendBeforeMeters: 2000, requestExtendAfterMeters: 2400, sliceBeforeMeters: 1900, sliceAfterMeters: 2400, fallbackPerSideMeters: 1500, fallbackMaxPerSideMeters: 2400 } },
+        // HR (after/exit) side keeps the long extension; ~10 km allows the real NB access loop.
+        routeGuard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 800, validateApproachExit: true, useViaIntermediate: true, displayMaxMeters: 4800, displayCorridor: { requestExtendAfterMeters: 2400, sliceBeforeMeters: 1900, sliceAfterMeters: 2400, fallbackPerSideMeters: 1500, fallbackMaxPerSideMeters: 2400 } },
       },
     },
   },

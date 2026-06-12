@@ -45,11 +45,15 @@ describe('every crossing has valid anchors in both directions', () => {
 });
 
 describe('opposite directions are mirror images (border point shared)', () => {
+  // Dual-carriageway crossings legitimately use per-direction border points (one per one-way
+  // lane — a mid-bridge via point snaps to the WRONG carriageway and Google returns NO ROUTES).
+  // They must still sit within a couple hundred metres on the same bridge.
+  const PER_CARRIAGEWAY_BORDER = new Set(['gornji-varos']);
   for (const id of crossingIds) {
     it(`${id} shares the border point across directions`, () => {
       const a = BORDER_CROSSINGS[id].anchors.toBih.borderPoint;
       const b = BORDER_CROSSINGS[id].anchors.toHr.borderPoint;
-      expect(distanceMeters(a, b)).toBeLessThan(50);
+      expect(distanceMeters(a, b)).toBeLessThan(PER_CARRIAGEWAY_BORDER.has(id) ? 250 : 50);
     });
   }
 });

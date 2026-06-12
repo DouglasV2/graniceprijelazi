@@ -41,13 +41,35 @@ describe('Gornji Varoš — HR-side display extension (T1 acceptance)', () => {
     const dc = gv.anchors.toBih.routeGuard.displayCorridor;
     expect(dc.sliceBeforeMeters).toBeGreaterThanOrEqual(2000);
     expect(dc.sliceBeforeMeters).toBeGreaterThan(dc.sliceAfterMeters);
-    expect(dc.requestExtendBeforeMeters).toBeGreaterThan(dc.requestExtendAfterMeters);
+    expect(dc.requestExtendBeforeMeters).toBeGreaterThanOrEqual(2000);
+  });
+
+  it('toBih must NOT extend the request onto the BiH motorway (one-way carriageway snap trap)', () => {
+    // An extended endpoint on the dual-carriageway E-661 mainline snaps to the wrong one-way lane
+    // and makes Google return an 80+ km cross-country detour (the live "ruta nije dostupna" bug).
+    const dc = gv.anchors.toBih.routeGuard.displayCorridor;
+    expect(dc.requestExtendAfterMeters).toBeUndefined();
+    const destination = routeDestinationAnchor(gv.anchors.toBih);
+    expect(destination.lat).toBeCloseTo(gv.anchors.toBih.exitPoint.lat, 6);
+    expect(destination.lng).toBeCloseTo(gv.anchors.toBih.exitPoint.lng, 6);
   });
 
   it('toHr displayCorridor extends the HR (after/exit) side more than the BiH side', () => {
     const dc = gv.anchors.toHr.routeGuard.displayCorridor;
     expect(dc.sliceAfterMeters).toBeGreaterThan(dc.sliceBeforeMeters);
-    expect(dc.requestExtendAfterMeters).toBeGreaterThan(dc.requestExtendBeforeMeters);
+    expect(dc.requestExtendAfterMeters).toBeGreaterThanOrEqual(2000);
+    // Same motorway trap on the BiH origin side: no before-extension for toHr.
+    expect(dc.requestExtendBeforeMeters).toBeUndefined();
+  });
+
+  it('routes through the bridge with a non-fail-open guard (junk detours get rejected)', () => {
+    for (const direction of ['toBih', 'toHr']) {
+      const guard = gv.anchors[direction].routeGuard;
+      expect(guard.useViaIntermediate).toBe(true);
+      expect(guard.rejectOnFail).not.toBe(false);
+      // An 80 km detour must never pass the distance guard again.
+      expect(guard.hardMaxCrossingDistanceKm).toBeLessThanOrEqual(20);
+    }
   });
 
   it('displayMaxMeters is large enough for the asymmetric window (no silent re-slicing)', () => {
@@ -63,9 +85,6 @@ describe('Gornji Varoš — HR-side display extension (T1 acceptance)', () => {
     const origin = routeOriginAnchor(anchor);
     // The extended origin must be FURTHER north (HR side) than the precise approach anchor.
     expect(origin.lat).toBeGreaterThan(anchor.approachStart.lat);
-    const destination = routeDestinationAnchor(anchor);
-    // And the destination further south (BiH side) than the precise exit anchor.
-    expect(destination.lat).toBeLessThan(anchor.exitPoint.lat);
   });
 
   it('per-side request extension is honoured independently (before ≠ after)', () => {
@@ -74,7 +93,8 @@ describe('Gornji Varoš — HR-side display extension (T1 acceptance)', () => {
     const destination = routeDestinationAnchor(anchor);
     const northExtension = origin.lat - anchor.approachStart.lat;
     const southExtension = anchor.exitPoint.lat - destination.lat;
-    // HR (before) side is extended more than the BiH (after) side.
+    // HR (before) side is extended; the BiH (after) side stays at the control plaza.
     expect(northExtension).toBeGreaterThan(southExtension);
+    expect(southExtension).toBeCloseTo(0, 6);
   });
 });
