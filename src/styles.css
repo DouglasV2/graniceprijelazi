@@ -996,4 +996,10 @@
     padding-top:max(10px,env(safe-area-inset-top));
   }
   .google-map{height:clamp(360px,62vh,560px)}
+  /* The premium tabs compute to display:flex (non-wrapping row, min-width:132px buttons) which pushed
+     horizontal scroll on phones — the responsive grid-template-columns was being ignored. Force a real
+     2-col grid (the base rule uses !important, so match it) and drop the button min-width so 4 tabs
+     wrap into 2×2 instead of overflowing. */
+  nav.tabs.premium-tabs{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px;overflow:visible}
+  nav.tabs.premium-tabs button{min-width:0!important}
 }
