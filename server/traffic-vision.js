@@ -1,7 +1,7 @@
 // Traffic + Vision prediction layer (v2). The app's differentiator: instead of re-printing
 // HAK/BIHAMK/AMS numbers, it COMPUTES its own border-wait estimate from (1) Google traffic on the
 // border-approach SEGMENT, (2) YOLO/ROI camera vehicle counts → a queue→wait model, fused with
-// (3) chat/verified-location ground truth, using public sources only as a fallback signal.
+// (3) verified-location ground truth, using public sources only as a fallback signal.
 //
 // This module is PURE (no network, no store, no globals) so every piece is unit-testable. The
 // server wires it behind PREDICTION_V2_ENABLED with a try/catch fallback to the legacy fusion, so
@@ -244,8 +244,8 @@ function googleDelayToWait(google) {
 
 // Combine the signals into one committed estimate + honest confidence + a plain-language reason +
 // a full source breakdown. Implements the scenario matrix in the spec (§6).
-export function fuseTrafficVision({ google = null, camera = null, publicSig = null, chat = null, verified = null, baselineWaitMin = 10 } = {}) {
-  const breakdown = { googleTraffic: google || null, yoloCamera: camera || null, publicSource: publicSig || null, chatReports: chat || null, verifiedLocation: verified || null };
+export function fuseTrafficVision({ google = null, camera = null, publicSig = null, verified = null, baselineWaitMin = 10 } = {}) {
+  const breakdown = { googleTraffic: google || null, yoloCamera: camera || null, publicSource: publicSig || null, verifiedLocation: verified || null };
   const result = (expectedWaitMin, rangeMin, rangeMax, confidenceScore, label, explanation, lead) => ({
     expectedWaitMin: clamp(round(expectedWaitMin), 0, 360),
     rangeMin: clamp(round(rangeMin), 0, 360),
@@ -278,11 +278,7 @@ export function fuseTrafficVision({ google = null, camera = null, publicSig = nu
   const cameraUsable = cameraWait !== null && cameraConf >= 0.4;
   const LOW = 12;
 
-  // 2) Strong chat consensus (§9): several recent reports (esp. with location) can lead, but a
-  // single chat report never dominates.
-  const chatLead = chat && isNum(chat.waitMin) && Number(chat.count || 0) >= 2 && Number(chat.ageMin ?? 999) <= 30;
-
-  // 3) Camera + Google fusion (the differentiator).
+  // Camera + Google fusion (the differentiator).
   if (cameraUsable && googleUsable) {
     const agreeLow = cameraWait < LOW && googleWait < LOW;
     const agreeHigh = cameraWait >= LOW && googleWait >= LOW;
@@ -318,13 +314,7 @@ export function fuseTrafficVision({ google = null, camera = null, publicSig = nu
       `Google promet na prilazu granici pokazuje +${google.delayMin} min usporenja.`, 'google');
   }
 
-  // 6) Chat consensus (no usable camera/google).
-  if (chatLead) {
-    return result(chat.waitMin, Math.max(0, chat.waitMin - 5), Number(chat.waitMin) + 8, 55, 'medium',
-      `${chat.count} svježih dojava vozača u zadnjih ${Math.round(chat.ageMin)} min.`, 'chat');
-  }
-
-  // 7) Public source = FALLBACK only — it must not alone hold an extreme wait when camera+google
+  // Public source = FALLBACK only — it must not alone hold an extreme wait when camera+google
   // don't corroborate it. Cap a high soft-public value when nothing supports it.
   if (publicSig && isNum(publicSig.waitMin)) {
     const pw = Number(publicSig.waitMin);

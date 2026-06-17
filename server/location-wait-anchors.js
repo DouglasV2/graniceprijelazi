@@ -52,3 +52,31 @@ export function buildLocationWaitAnchors(crossing, direction = 'toBih') {
 export function hasLocationWaitAnchors(crossing, direction) {
   return Boolean(buildLocationWaitAnchors(crossing, direction));
 }
+
+function anchorDistanceM(a, b) {
+  if (!pt(a) || !pt(b)) return Infinity;
+  const R = 6371000;
+  const DEG = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * DEG;
+  const dLng = (b.lng - a.lng) * DEG;
+  const la1 = a.lat * DEG;
+  const la2 = b.lat * DEG;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// Infer the A→B direction from a GPS point: the direction whose approachStart (queue-join anchor) the
+// point is nearest to. The two approachStarts sit on opposite sides of the border, so "nearest" maps
+// cleanly to which side the driver is on → which way they are crossing. Used when a session is armed
+// with direction:'auto' (the client has no per-side anchors and cannot decide this itself).
+export function inferLocationWaitDirection(crossing, point) {
+  if (!pt(point)) return null;
+  let best = null;
+  for (const direction of ['toBih', 'toHr']) {
+    const anchors = buildLocationWaitAnchors(crossing, direction);
+    if (!anchors) continue;
+    const d = anchorDistanceM(point, anchors.startAnchor);
+    if (!best || d < best.d) best = { direction, d };
+  }
+  return best ? best.direction : null;
+}

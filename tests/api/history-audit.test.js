@@ -144,21 +144,6 @@ describe('GET /api/history honesty payload', () => {
   });
 });
 
-describe('POST /api/reports feeds history as lowest-rank source', () => {
-  it('a report fills an empty hour for its crossing+direction', async () => {
-    // Use a crossing+direction nothing else in this suite writes to.
-    const res = await auth(request(app).post('/api/reports')).send({ crossingId: 'bijaca', direction: 'toHr', type: 'slow', waitMinutes: 52 });
-    expect(res.status).toBe(201);
-    const { dateIso, hour } = mod.historyLocalDateHour(new Date());
-    const rows = await mod.readHistorySnapshots('bijaca', 'toHr', [dateIso]);
-    const slot = rows.find((row) => row.hour === hour);
-    expect(slot).toBeTruthy();
-    expect(slot.source).toBe('report-dojava');
-    expect(slot.wait).toBe(52);
-    expect(slot.cars + slot.trucks).toBe(0);
-  });
-});
-
 describe('GET /api/admin/history-audit', () => {
   it('requires admin', async () => {
     const res = await request(app).get('/api/admin/history-audit');

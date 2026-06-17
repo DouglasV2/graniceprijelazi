@@ -55,7 +55,7 @@ layers (Prediction v2 headline, verified live location) ship **disabled** behind
 
 ```env
 PREDICTION_V2_ENABLED=false        # v2 runs in shadow; headline uses the proven legacy fusion
-VERIFIED_LOCATION_ENABLED=false    # "Moja lokacija" shows the user's own dot; the anonymous A→B signal does not arm
+VERIFIED_LOCATION_ENABLED=true     # CORE signal: arms anonymous A→B passes + near-border measurement prompt (set false to disable)
 YOLO_ROI_V2_ENABLED=true           # ROI queue counting (safe: no ROI → lower confidence, never crashes)
 YOLO_ROI_EDITOR_ENABLED=false      # internal polygon editor stays 404
 TRAFFIC_VISION_DEBUG=false         # internal cv-health/readiness debug stays 404

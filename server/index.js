@@ -73,7 +73,7 @@ import {
 import { ROI_EDITOR_HTML } from './roi-editor-page.js';
 import { buildMeasurementZone, pathCrossesBorder, buildCalibratedCorridor, validateDisplayPathQuality, pointAlongBearing } from './map-display-geometry.js';
 import { classifyLocationPing, aggregateVerifiedLocation } from './location-wait.js';
-import { buildLocationWaitAnchors, hasLocationWaitAnchors } from './location-wait-anchors.js';
+import { buildLocationWaitAnchors, hasLocationWaitAnchors, inferLocationWaitDirection } from './location-wait-anchors.js';
 import { applyCalibratedWait, buildCalibrationModels, calibrationKey } from './camera-calibration.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1552,7 +1552,8 @@ const measuredSessionBuffer = [];    // { id, crossingId, direction, userId, ano
 // Live-location wait sessions (subtle "Moja lokacija" signal). NO raw GPS trail is stored — only the
 // lifecycle status + the server-measured A→B wait. Capped buffer; persisted to DB in postgres mode.
 const locationWaitSessionBuffer = [];
-const VERIFIED_LOCATION_ENABLED = process.env.VERIFIED_LOCATION_ENABLED === 'true';
+// Verified A→B live-location is the CORE signal now: ON by default. Set VERIFIED_LOCATION_ENABLED=false to kill it.
+const VERIFIED_LOCATION_ENABLED = process.env.VERIFIED_LOCATION_ENABLED !== 'false';
 // Optional per-crossing allow-list. Empty/unset = all crossings (when globally enabled). When set
 // (comma-separated ids, e.g. "maljevac"), verified A→B is armed ONLY for those crossings — the way
 // to roll the feature out to the flagship crossing first without touching the others.
@@ -3643,8 +3644,6 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
         } : {}),
       } : null;
       const measuredReport = reports.filter((r) => r.measured && r.gpsVerified).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
-      const chatReports = reports.filter((r) => !r.measured);
-      const chatAvg = chatReports.length ? Math.round(chatReports.reduce((s, r) => s + Number(r.wait || 0), 0) / chatReports.length) : null;
       const bestPublic = publicSignals.length ? choosePublicSourceSignal(publicSignals) : null;
       // Anonymous live-location passes → verifiedLocation. Outlier-safe (trimmed median), age-aware.
       const verifiedAggregate = aggregateVerifiedLocation(
@@ -3659,7 +3658,6 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
         google: gV2,
         camera: cameraV2,
         publicSig: bestPublic ? { waitMin: bestPublic.normalizedWaitMin, soft: isSoftUpperBoundSource(bestPublic), confidence: bestPublic.confidence } : null,
-        chat: chatReports.length ? { waitMin: chatAvg, count: chatReports.length, ageMin: ageMinutesOf(chatReports[0].createdAt), withLocation: chatReports.some((r) => r.gpsVerified) } : null,
         verified: verifiedForFusion,
         baselineWaitMin: clampWait(staticWait) ?? 10,
       });
@@ -5044,46 +5042,6 @@ app.post('/api/admin/status-overrides', authRequired, adminRequired, writeLimite
   res.json({ ok: true, statusOverrides: store.statusOverrides });
 });
 
-app.post('/api/reports', authRequired, writeLimiter, async (req, res) => {
-  const crossingId = String(req.body?.crossingId || '').trim();
-  const direction = req.body?.direction === 'toHr' ? 'toHr' : 'toBih';
-  const reportType = ['ok', 'slow', 'truck', 'closed', 'control', 'accident'].includes(req.body?.type) ? req.body.type : 'ok';
-  const defaultWaitByType = reportType === 'slow' ? 65 : reportType === 'truck' ? 45 : reportType === 'closed' ? 180 : reportType === 'control' ? 55 : reportType === 'accident' ? 80 : 12;
-  const wait = Math.max(0, Math.min(360, Number(req.body?.waitMinutes ?? req.body?.wait ?? defaultWaitByType) || defaultWaitByType));
-  const message = String(req.body?.message || '').trim().slice(0, 280);
-  if (!BORDER_CROSSINGS[crossingId]) return res.status(400).json({ ok: false, error: 'Nepoznat prijelaz.' });
-  const store = await readAppStore();
-  const report = { id: crypto.randomUUID(), crossingId, direction, wait, message, type: reportType, user: publicUser(req.user), createdAt: new Date().toISOString() };
-  store.reports.unshift(report);
-  store.reports = store.reports.slice(0, 1000);
-  store.audit.unshift({ id: crypto.randomUUID(), type: 'driver_report_created', actor: req.user, details: { crossingId, direction, wait, type: reportType }, createdAt: new Date().toISOString() });
-  await writeAppStore(store);
-  // Feed the report into count→wait calibration as a LOWER-TRUST sample (weighted; can't auto-calibrate
-  // alone). Only lands a sample if there's a recent trusted camera count to pair the reported wait with.
-  try { recordCalibrationGroundTruth({ crossingId, direction, actualWait: wait, source: 'driver-report' }); } catch { /* best-effort */ }
-  // Reports also land in history as the LOWEST-rank slot source: they fill hours no camera/public
-  // source covered, but can never overwrite a real observation (T4 source ranking).
-  try {
-    await upsertHistoryFromSourceSnapshot({
-      crossingId,
-      direction,
-      sourceType: 'driver-report',
-      sourceName: 'Dojava vozača',
-      normalizedWaitMin: wait,
-      fetchedAt: report.createdAt,
-      metadata: { reportType },
-    });
-  } catch { /* best-effort */ }
-  res.status(201).json({ ok: true, report });
-});
-
-app.get('/api/reports', authRequired, async (req, res) => {
-  const crossingId = String(req.query.crossingId || '').trim();
-  const store = await readAppStore();
-  const reports = crossingId ? store.reports.filter((report) => report.crossingId === crossingId) : store.reports;
-  res.json({ ok: true, reports: reports.slice(0, 100) });
-});
-
 // ── MEASURED WAIT SESSIONS (spec §5) ──────────────────────────────────────────
 // The driver taps "stao sam u kolonu" when joining the queue and "prošao sam" when
 // crossing. The elapsed time is the truest ground truth in the whole system, so it
@@ -5323,7 +5281,11 @@ function locationFeatureDisabled(res) {
 app.post('/api/location-wait/session', publicWriteLimiter, optionalAuth, async (req, res) => {
   if (!VERIFIED_LOCATION_ENABLED) return locationFeatureDisabled(res);
   const crossingId = String(req.body?.crossingId || '').trim();
-  const direction = req.body?.direction === 'toHr' ? 'toHr' : 'toBih';
+  const reqDir = String(req.body?.direction || '');
+  // 'auto' arms WITHOUT binding a direction yet — the server resolves it from the first ping's
+  // position (nearest approachStart). The app uses 'auto' so the near-border prompt and the map
+  // button both pick the right way to cross without the client knowing the per-side anchors.
+  const direction = reqDir === 'auto' ? 'auto' : (reqDir === 'toHr' ? 'toHr' : 'toBih');
   const crossing = BORDER_CROSSINGS[crossingId];
   if (!crossing) return res.status(400).json({ ok: false, error: 'Nepoznat prijelaz.' });
   // Per-crossing gate: when an allow-list is set, only those crossings arm the A→B signal. Others
@@ -5332,8 +5294,12 @@ app.post('/api/location-wait/session', publicWriteLimiter, optionalAuth, async (
     return res.json({ ok: true, armed: false, status: 'disarmed', message: 'Lokacija uključena' });
   }
 
-  const anchors = buildLocationWaitAnchors(crossing, direction);
-  if (!anchors) {
+  const anchors = direction === 'auto' ? null : buildLocationWaitAnchors(crossing, direction);
+  // Arm when the requested direction has anchors, or (auto) when EITHER direction does.
+  const canArm = direction === 'auto'
+    ? (hasLocationWaitAnchors(crossing, 'toBih') || hasLocationWaitAnchors(crossing, 'toHr'))
+    : Boolean(anchors);
+  if (!canArm) {
     // The map still shows the user's own location; we just don't arm the A→B signal here.
     return res.json({ ok: true, armed: false, status: 'disarmed', message: 'Lokacija uključena' });
   }
@@ -5354,13 +5320,13 @@ app.post('/api/location-wait/session', publicWriteLimiter, optionalAuth, async (
     serverStartedAt: null,
     serverCompletedAt: null,
     measuredWaitMin: null,
-    startAnchorId: anchors.startAnchor.id,
-    endAnchorId: anchors.endAnchor.id,
+    startAnchorId: anchors ? anchors.startAnchor.id : null,
+    endAnchorId: anchors ? anchors.endAnchor.id : null,
     userSessionHash: hashUserSession(req, sessionId),
     predictedWaitAtStart: null,
     lastPingAt: 0,
     lastAccuracyM: null,
-    metadata: { pingCount: 0, duplicatePingCount: 0, source: 'map-location', anchorSource: anchors.source },
+    metadata: { pingCount: 0, duplicatePingCount: 0, source: 'map-location', anchorSource: anchors ? anchors.source : 'auto-pending' },
     createdAt: new Date().toISOString(),
   };
   locationWaitSessionBuffer.unshift(session);
@@ -5387,6 +5353,17 @@ app.post('/api/location-wait/ping', locationWaitPingLimiter, optionalAuth, async
   const lng = Number(req.body?.lng);
   const accuracyM = Number(req.body?.accuracyM);
   const crossing = BORDER_CROSSINGS[session.crossingId];
+  // Resolve an 'auto' session's direction from the first usable fix (nearest approachStart side → which
+  // way the driver is crossing). Until resolved, anchors stay null and the ping is a safe no-op.
+  if (session.direction === 'auto' && crossing && Number.isFinite(lat) && Number.isFinite(lng)) {
+    const inferred = inferLocationWaitDirection(crossing, { lat, lng });
+    if (inferred) {
+      session.direction = inferred;
+      const resolved = buildLocationWaitAnchors(crossing, inferred);
+      if (resolved) { session.startAnchorId = resolved.startAnchor.id; session.endAnchorId = resolved.endAnchor.id; session.metadata.anchorSource = resolved.source; }
+      session.metadata.directionInferred = true;
+    }
+  }
   const anchors = crossing ? buildLocationWaitAnchors(crossing, session.direction) : null;
 
   const result = classifyLocationPing(session, { lat, lng, accuracyM }, anchors, { now, maxAccuracyM: LOCATION_WAIT_MAX_ACCURACY_M });

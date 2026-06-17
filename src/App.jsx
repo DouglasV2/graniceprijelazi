@@ -13,7 +13,6 @@ import {
   Lock,
   LogOut,
   MapPin,
-  MessageCircle,
   Navigation,
   RefreshCw,
   Search,
@@ -25,8 +24,8 @@ import {
 import { formatMinutes, hasKnownWait, isUsableMinuteValue, normalizeMinutes, formatWaitDisplay, shapeWaitDisplay } from './utils/wait-format.js';
 import { cameraEstimateDecision, buildCameraQueueLabel, buildCameraTrustText, cameraStatusCopy } from './utils/camera-display.js';
 import { loadGoogleMaps, mapsConstructorsReady } from './utils/google-maps-loader.js';
-import { shouldSendPing } from './utils/location-wait-client.js';
-import { rankCrossingsByLocation } from './utils/crossing-recommendation.js';
+import { rankCrossingsByLocation, haversineKm } from './utils/crossing-recommendation.js';
+import { useCrossingMeasurement } from './hooks/use-crossing-measurement.js';
 import { resolveReportWaitMinutes, clampWaitMinutes, WAIT_QUICK_OPTIONS } from './utils/parse-wait-minutes.js';
 import { routeGeometryValidated } from './utils/route-geometry.js';
 import { computeHistoryInsights, compareNowToTypical, formatHourWindow } from './utils/history-insights.js';
@@ -388,8 +387,8 @@ const CROSSINGS = [
     updatedAt: 'live',
     fieldConfirmed: false,
     fieldConfirmedAt: '',
-    fieldNote: 'Čekanje se puni iz javnih izvora, kamera, dojava ili potvrde tima.',
-    cause: 'Live procjena iz javnih izvora + kamera/dojava kada su dostupni',
+    fieldNote: 'Čekanje se puni iz javnih izvora, kamera, izmjerenih prelazaka ili potvrde tima.',
+    cause: 'Live procjena iz javnih izvora + kamera/izmjerenih prelazaka kada su dostupni',
     sponsor: 'Mjenjačnica Kordun',
     extraDriveFromMainRoute: 0,
     directions: {
@@ -400,7 +399,7 @@ const CROSSINGS = [
         buses: 32,
         trend: 'steady',
         bottleneckSide: 'BiH strana',
-        bottleneckText: 'Procjena se ažurira iz BIHAMK/AMS/kamera/dojava ili potvrde tima.',
+        bottleneckText: 'Procjena se ažurira iz BIHAMK/AMS/kamera/izmjerenih prelazaka ili potvrde tima.',
         waitAdvice: 'Provjeriti live izvor prije odluke o alternativi.',
         publishDecision: 'Pratiti',
         publishReason: 'Za javnu objavu koristi live izvor ili potvrdu tima.',
@@ -737,16 +736,13 @@ const CROSSINGS = [
   ...ADDITIONAL_CROSSINGS,
 ];
 
-const INITIAL_POSTS = [];
-
-const TABS_USER = ['Pregled', 'Moj put', 'Mapa', 'Povijest', 'Dojave'];
-const TABS_ADMIN = ['Pregled', 'Moj put', 'Mapa', 'Povijest', 'Dojave', 'Admin'];
+const TABS_USER = ['Pregled', 'Moj put', 'Mapa', 'Povijest'];
+const TABS_ADMIN = ['Pregled', 'Moj put', 'Mapa', 'Povijest', 'Admin'];
 
 const NAV_META = {
   Pregled: { label: 'Pregled', hint: 'čekanja uživo' },
   'Moj put': { label: 'Moj put', hint: 'najbolji izbor' },
   Mapa: { label: 'Karta', hint: 'rute i kamere' },
-  Dojave: { label: 'Dojave', hint: 'stanje s puta' },
   Povijest: { label: 'Prošlost', hint: 'kada krenuti' },
   Admin: { label: 'Uredi stanje', hint: 'za tim' },
 };
@@ -755,7 +751,6 @@ const NAV_ICONS = {
   Pregled: ShieldCheck,
   'Moj put': Navigation,
   Mapa: MapPin,
-  Dojave: MessageCircle,
   Povijest: Clock,
   Admin: User,
 };
@@ -1043,7 +1038,6 @@ const UI_TEXT_EN = {
   'Karta': 'Map',
   'Mapa': 'Map',
   'Prošlost': 'History',
-  'Dojave': 'Reports',
   'Uredi stanje': 'Update status',
   'za tim': 'team only',
   'Admin': 'Team',
@@ -1059,7 +1053,7 @@ const UI_TEXT_EN = {
   'trend i povijest': 'trend and history',
   'upravljanje': 'management',
   'Granični promet uživo': 'Live border traffic',
-  'PrijelazRadar ti na jednom mjestu pokazuje čekanja, rute, kamere i dojave vozača za HR → BiH i BiH → HR.': 'PrijelazRadar shows waits, routes, cameras and driver reports for HR → BiH and BiH → HR in one place.',
+  'PrijelazRadar ti na jednom mjestu pokazuje čekanja, rute i kamere za HR → BiH i BiH → HR.': 'PrijelazRadar shows waits, routes and cameras for HR → BiH and BiH → HR in one place.',
   'Stanje na granici uživo': 'Live border status',
   'Tim': 'Team',
   'Uredi stanje za vozače': 'Update driver status',
@@ -1067,13 +1061,12 @@ const UI_TEXT_EN = {
   'Podaci se osvježavaju automatski. Najnovije stanje vidiš u karticama prijelaza.': 'Data refreshes automatically. The latest status is shown in the crossing cards.',
   'Oba smjera aktivna': 'Both directions active',
   'Znaj kada krenuti i koji prijelaz odabrati.': 'Know when to leave and which crossing to choose.',
-  'PrijelazRadar ti na jednom mjestu pokazuje čekanja, rute, kamere i dojave vozača za HR → BiH i BiH → HR.': 'PrijelazRadar shows waits, routes, cameras and driver reports for HR → BiH and BiH → HR in one place.',
+  'PrijelazRadar ti na jednom mjestu pokazuje čekanja, rute i kamere za HR → BiH i BiH → HR.': 'PrijelazRadar shows waits, routes and cameras for HR → BiH and BiH → HR in one place.',
   'Odabrani prijelaz': 'Selected crossing',
   'Trenutno čekanje': 'Current wait',
   'Smjer prikaza': 'Selected direction',
   'Prijelaz': 'Crossing',
   'Kamere': 'Cameras',
-  'Dojavi stanje': 'Report status',
   'Prijava': 'Sign in',
   'Odjava': 'Sign out',
   'Stanje za vozače': 'Driver overview',
@@ -1131,14 +1124,9 @@ const UI_TEXT_EN = {
   'Ukupno': 'Total',
   'Ruta': 'Route',
   'Granica': 'Border',
-  'Dojave vozača': 'Driver reports',
-  'Nova dojava': 'New report',
   'Što se događa na prijelazu?': 'What is happening at the crossing?',
-  'Tip dojave': 'Report type',
   'Poruka do 120 znakova': 'Message up to 120 characters',
-  'Pošalji dojavu': 'Send report',
   'Sažetak zajednice': 'Community summary',
-  'Vrsta dojave': 'Report type',
   'Sve': 'All',
   'Prošao uredno': 'Passed smoothly',
   'Uredno': 'Clear',
@@ -1531,7 +1519,7 @@ function getBaseWaitSourceMeta(crossing, directionKey, overrides = {}) {
       return {
         label: source.label || 'Čeka live izvor',
         className: source.className || 'pending',
-        note: source.note || 'Nema svježeg javnog izvora, kamere, dojave ili potvrde tima.',
+        note: source.note || 'Nema svježeg javnog izvora, kamere, izmjerenog prelaska ili potvrde tima.',
         confidence: source.confidence,
         updatedAt: source.updatedAt,
         displayReady: false,
@@ -1554,7 +1542,7 @@ function getBaseWaitSourceMeta(crossing, directionKey, overrides = {}) {
       googleTraffic: source.googleTraffic,
       googleTrafficSeverity: source.googleTrafficSeverity,
       googleTrafficConflict: source.googleTrafficConflict,
-      note: source.note || 'Vrijednost je izračunata iz javnih izvora, kamera i dojava.',
+      note: source.note || 'Vrijednost je izračunata iz javnih izvora, kamera i izmjerenih prelazaka.',
       explanation: source.explanation,
       explanationPayload: source.explanationPayload,
       confidence: source.confidence,
@@ -1572,7 +1560,7 @@ function getBaseWaitSourceMeta(crossing, directionKey, overrides = {}) {
       displayReady: true,
     };
   }
-  return { label: 'Čeka live izvor', className: 'pending', note: 'Stanje još nije stiglo iz javnog izvora, kamera, dojava ili potvrde tima.', displayReady: false };
+  return { label: 'Čeka live izvor', className: 'pending', note: 'Stanje još nije stiglo iz javnog izvora, kamera, izmjerenih prelazaka ili potvrde tima.', displayReady: false };
 }
 
 function getWaitSourceMeta(crossing, directionKey, overrides = {}) {
@@ -1660,7 +1648,7 @@ function computeRouteSanityWait(baseWait, sourceMeta = {}, route = null) {
     rangeMax: softUpperBound ? 14 : 20,
     className: 'combined route-sanity',
     expiresAt: Date.now() + 3 * 60 * 1000,
-    note: `Google promet je normalan${delayMinutes > 0 ? ` (${formatMinutes(delayMinutes)} cestovnog zastoja)` : ''}, a nema tvrdog službenog signala, jake kamere ni dojava, pa se visoka procjena ne prikazuje. Plavo ne znači 0 min. Trenutna procjena je oko ${formatMinutes(wait)}.`,
+    note: `Google promet je normalan${delayMinutes > 0 ? ` (${formatMinutes(delayMinutes)} cestovnog zastoja)` : ''}, a nema tvrdog službenog signala, jake kamere ni izmjerenih prelazaka, pa se visoka procjena ne prikazuje. Plavo ne znači 0 min. Trenutna procjena je oko ${formatMinutes(wait)}.`,
   };
 }
 
@@ -1742,21 +1730,7 @@ function getAlternativeDeltaMeta(netBenefit) {
   };
 }
 
-function getAggregateSignals(posts, crossingId) {
-  const related = posts.filter((p) => p.crossingId === crossingId);
-  const lastCount = related.slice(0, 8).length;
-  const heavy = related.filter((p) => p.wait.includes('60')).length;
-  const calm = related.filter((p) => p.wait.includes('10') || p.wait.includes('uredno')).length;
-  if (!related.length) return { count: 0, summary: 'Nema svježih dojava.', action: 'Čekati potvrdu.', agreement: 0 };
-  return {
-    count: lastCount,
-    summary: heavy > calm ? 'Dojave naginju prema većoj gužvi.' : 'Dojave su umjerene ili mirne.',
-    action: heavy > calm ? 'Provjeriti i pripremiti ažuriranje.' : 'Zadržati stanje unutar aplikacije.',
-    agreement: Math.min(92, Math.max(40, 50 + related.length * 8 + heavy * 10)),
-  };
-}
-
-function getAdminDecision({ wait, direction, signals, hasManualOverride }) {
+function getAdminDecision({ wait, direction, hasManualOverride }) {
   if (!hasKnownWait(wait)) {
     return { tone: 'watch', title: 'Čeka se live izvor', label: 'Provjeri izvor', reason: 'Još nema dovoljno svježih podataka za sigurnu objavu.' };
   }
@@ -1767,29 +1741,24 @@ function getAdminDecision({ wait, direction, signals, hasManualOverride }) {
   if (wait >= 45 || normalizedDecision.includes('objavi')) {
     return { tone: 'warning', title: 'Pripremiti objavu', label: 'Preporučena objava', reason: hasManualOverride ? 'Korekcija tima je unesena, objava je spremna za kopiranje.' : direction.publishReason };
   }
-  if (signals.count >= 3 && signals.agreement >= 65) {
-    return { tone: 'watch', title: 'Provjeriti dojave', label: 'Provjera prije objave', reason: 'Dojave vozača pokazuju signal, ali čekanje još nije kritično.' };
-  }
   return { tone: 'calm', title: 'Stanje je mirno', label: 'Nije potrebna objava', reason: 'Stanje je dovoljno mirno za prikaz u aplikaciji bez zasebne objave.' };
 }
 
-function getAdminConfidence({ crossing, signals, hasManualOverride }) {
+function getAdminConfidence({ crossing, hasManualOverride }) {
   let score = Number(crossing.confidence || 60);
   if (crossing.fieldConfirmed) score += 8;
   if (hasManualOverride) score += 10;
-  if (signals.count >= 3) score += 6;
   if (crossing.cameras?.some((cam) => cam.laneCalibration?.zones?.length)) score += 4;
   return Math.max(35, Math.min(98, Math.round(score)));
 }
 
-function getAdminSourceRows({ crossing, direction, signals, baseWait, finalWait, hasManualOverride }) {
+function getAdminSourceRows({ crossing, direction, baseWait, finalWait, hasManualOverride }) {
   const cameraCount = crossing.cameras?.length || 0;
   const laneAware = crossing.cameras?.some((cam) => cam.laneCalibration?.zones?.length);
   return [
     { label: 'Live izvor', value: formatMinutes(baseWait), note: hasKnownWait(baseWait) ? 'Vrijednost je stigla iz povezanih izvora.' : 'Nema svježe vrijednosti za prikaz.', tone: hasKnownWait(baseWait) ? 'blue' : 'muted' },
     { label: 'Ručna korekcija člana tima', value: hasManualOverride ? formatMinutes(finalWait) : 'nije unesena', note: hasManualOverride ? 'Ova brojka ide u objavu i ima prednost nad procjenom.' : 'Ako imaš bolju informaciju s terena, unesi je ovdje.', tone: hasManualOverride ? 'green' : 'muted' },
-    { label: 'Teren', value: crossing.fieldConfirmed ? 'potvrđeno' : 'nije potvrđeno', note: crossing.fieldConfirmed ? crossing.fieldNote : 'Prije veće objave poželjno je provjeriti kameru ili dojavu.', tone: crossing.fieldConfirmed ? 'green' : 'muted' },
-    { label: 'Dojave vozača', value: `${signals.count} dojava`, note: signals.summary, tone: signals.count ? 'blue' : 'muted' },
+    { label: 'Teren', value: crossing.fieldConfirmed ? 'potvrđeno' : 'nije potvrđeno', note: crossing.fieldConfirmed ? crossing.fieldNote : 'Prije veće objave poželjno je provjeriti kameru ili stanje na terenu.', tone: crossing.fieldConfirmed ? 'green' : 'muted' },
     { label: 'Kamera / trake', value: laneAware ? 'kalibrirane trake' : `${cameraCount} izvor(a)`, note: laneAware ? 'Kamera razlikuje namjenu traka, npr. EU i non‑EU.' : 'Kamera služi kao ručna vizualna provjera.', tone: laneAware ? 'green' : 'muted' },
     { label: 'Bottleneck', value: direction.bottleneckSide, note: direction.bottleneckText, tone: statusFromWait(finalWait) === 'critical' ? 'red' : hasKnownWait(finalWait) ? 'blue' : 'muted' },
   ];
@@ -2026,7 +1995,7 @@ function TermsModal({ onClose }) {
           </div>
           <button type="button" onClick={onClose} className="icon-button">×</button>
         </div>
-        <p>PrijelazRadar kombinira prometne rute, kamere, javne izvore, potvrde s terena i dojave korisnika.</p>
+        <p>PrijelazRadar kombinira prometne rute, kamere, javne izvore, potvrde s terena i izmjerene prelaske uživo.</p>
         <p>Podaci nisu službeni podatak granične policije. Stanje se može promijeniti brzo.</p>
         <button type="button" className="primary-button" onClick={onClose}>Razumijem</button>
       </section>
@@ -2054,7 +2023,7 @@ function DetailModal({ crossing, selectedDirection, overrides, onClose, onTrack,
     : `Stanje za ${direction.label} još nije stiglo iz live izvora`;
   const subline = dataKnown
     ? (direction.waitAdvice || operational.note || sourceMeta.note || '')
-    : (sourceMeta?.note || 'Čim stigne svjež javni izvor, kamera ili dojava, ovdje će se prikazati čekanje.');
+    : (sourceMeta?.note || 'Čim stigne svjež javni izvor, kamera ili izmjereni prelazak, ovdje će se prikazati čekanje.');
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -2131,7 +2100,7 @@ function DetailModal({ crossing, selectedDirection, overrides, onClose, onTrack,
 // fusion saw: its value, contribution %, trust, role and honest flags, whether sources
 // conflict, and explicitly that Google never dictates the booth wait.
 const ROLE_LABELS = { lead: 'glavni izvor', support: 'podrška', helper: 'pomoćni (prilaz)', excluded: 'isključeno' };
-const KIND_LABELS = { official: 'Službeni izvor', camera: 'Kamera', google: 'Google promet', report: 'Dojave vozača', measured: 'Izmjereno čekanje' };
+const KIND_LABELS = { official: 'Službeni izvor', camera: 'Kamera', google: 'Google promet', measured: 'Izmjereno čekanje' };
 
 function WhyThisEstimate({ payload, confMeta, meta = {} }) {
   const [open, setOpen] = useState(false);
@@ -2160,7 +2129,7 @@ function WhyThisEstimate({ payload, confMeta, meta = {} }) {
             <p className="why-estimate-conflict">⚠️ Izvori se ne slažu (raspon {payload.conflict.spreadMinutes} min) pa je procjena prikazana kao širi raspon i s nižom pouzdanošću.</p>
           )}
           {hasGoogle && !payload.googleAsAuthority && (
-            <p className="why-estimate-note">Google promet ovdje opisuje samo prilaznu cestu i <strong>ne određuje čekanje na granici</strong> — mjerodavni su službeni izvor, kamera ili dojave.</p>
+            <p className="why-estimate-note">Google promet ovdje opisuje samo prilaznu cestu i <strong>ne određuje čekanje na granici</strong> — mjerodavni su službeni izvor, kamera ili izmjereni prelasci.</p>
           )}
           <ul className="why-estimate-sources">
             {payload.sources.map((s, i) => (
@@ -2239,7 +2208,7 @@ function SourceExplanationCard() {
         <span className="kicker">Procjena čekanja</span>
         <strong>App ne bira jedan izvor naslijepo.</strong>
       </div>
-      <p>Procjena se slaže iz više tragova: HAK, BIHAMK/AMS, Google promet, kamere, dojave vozača i provjera tima. Najviše vjerujemo svježim i potvrđenim informacijama, a ako tim označi zatvaranje ili preusmjeravanje, to odmah ima prednost.</p>
+      <p>Procjena se slaže iz više tragova: HAK, BIHAMK/AMS, Google promet, kamere, izmjereni prelasci uživo i provjera tima. Najviše vjerujemo svježim i potvrđenim informacijama, a ako tim označi zatvaranje ili preusmjeravanje, to odmah ima prednost.</p>
     </article>
   );
 }
@@ -2547,7 +2516,7 @@ function TripPlanner({ selectedDirection, setSelectedDirection, tripCrossing, se
         <article className={`recommend-card smart-recommend ${bestOption?.level === 'heavy' ? 'risk' : ''}`}>
           <span className="kicker">Preporuka</span>
           <h3>{bestOption ? `Najbolje preko ${bestOption.shortName}` : 'Unesi rutu'}</h3>
-          <p>{bestOption?.waitUnknown ? 'Ruta je izračunata, ali čekanje na granici čeka live izvor/tim/kameru/dojavu.' : tripPayload.live ? 'Izračun koristi stvarnu rutu i trenutno stanje prijelaza.' : 'Procjena koristi zadnje poznato stanje prijelaza dok se rute ne osvježe.'}</p>
+          <p>{bestOption?.waitUnknown ? 'Ruta je izračunata, ali čekanje na granici čeka live izvor/tim/kameru/izmjereni prelazak.' : tripPayload.live ? 'Izračun koristi stvarnu rutu i trenutno stanje prijelaza.' : 'Procjena koristi zadnje poznato stanje prijelaza dok se rute ne osvježe.'}</p>
           {bestOption && (
             <div className="recommend-metrics">
               <div><span>Ukupno</span><b>{formatMinutes(bestOption.totalMinutes)}</b></div>
@@ -2838,7 +2807,7 @@ function StaticMapPlaceholder({ selectedDirection, selectedCrossing, setSelected
   );
 }
 
-function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossing, showTraffic, focusTraffic, visibleCrossings = CROSSINGS, overrides = {}, stateVersion = 0 }) {
+function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossing, showTraffic, focusTraffic, visibleCrossings = CROSSINGS, overrides = {}, stateVersion = 0, measurement }) {
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   const mapId = import.meta.env.VITE_GOOGLE_MAPS_MAP_ID || '';
   const mapEl = useRef(null);
@@ -2860,83 +2829,14 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   const [mapsReady, setMapsReady] = useState(() => mapsConstructorsReady());
   const [mapError, setMapError] = useState('');
 
-  // ── "Moja lokacija" live signal (subtle, Google-Maps style). Shows the user's own location; while
-  //    on, an anonymous A→B pass can quietly improve the live estimate. No other users are shown. ──
-  const [locationOn, setLocationOn] = useState(false);
-  const [locStatus, setLocStatus] = useState(''); // small toast text
-  const [locLiveStatus, setLocLiveStatus] = useState('idle'); // idle|pending|active|completed
+  // ── "Moja lokacija" + A→B measurement. The session/watch/ping live in an APP-LEVEL hook (passed in)
+  //    so a measurement keeps running across tab switches; the map only paints the user's own blue dot
+  //    and drives the button. No other users are ever shown; no raw location trail is stored. ──
   const [locInfoOpen, setLocInfoOpen] = useState(false);
-  const [userPos, setUserPos] = useState(null);
-  const watchIdRef = useRef(null);
   const userMarkerRef = useRef(null);
-  const locSessionRef = useRef(null); // { sessionId, armed }
-  const lastPingRef = useRef({ at: 0, point: null });
   const didCenterUserRef = useRef(false);
-
-  const stopLocation = useCallback(() => {
-    if (watchIdRef.current != null && navigator.geolocation) navigator.geolocation.clearWatch(watchIdRef.current);
-    watchIdRef.current = null;
-    const s = locSessionRef.current;
-    if (s?.sessionId) {
-      fetch('/api/location-wait/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: s.sessionId }) }).catch(() => {});
-    }
-    locSessionRef.current = null;
-    lastPingRef.current = { at: 0, point: null };
-    didCenterUserRef.current = false;
-    if (userMarkerRef.current) { if (userMarkerRef.current.map !== undefined) userMarkerRef.current.map = null; if (userMarkerRef.current.setMap) userMarkerRef.current.setMap(null); userMarkerRef.current = null; }
-    setUserPos(null);
-    setLocLiveStatus('idle');
-    setLocationOn(false);
-    setLocStatus('Lokacija nije uključena.');
-  }, []);
-
-  async function sendLocationPing(point) {
-    const sess = locSessionRef.current;
-    if (!sess?.armed || !sess.sessionId) return;
-    // throttle decision (cadence + min-move). distance-to-zone unknown client-side → near cadence.
-    const decision = shouldSendPing({ now: Date.now(), lastSentAt: lastPingRef.current.at, lastPoint: lastPingRef.current.point, point, status: locLiveStatus === 'idle' ? 'pending' : locLiveStatus, distanceToZoneM: 1000 });
-    if (!decision.send) return;
-    lastPingRef.current = { at: Date.now(), point };
-    try {
-      const resp = await fetch('/api/location-wait/ping', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: sess.sessionId, lat: point.lat, lng: point.lng, accuracyM: point.accuracyM }) });
-      const data = await resp.json().catch(() => null);
-      if (!data?.ok) return;
-      if (data.status === 'active') { setLocLiveStatus('active'); setLocStatus('Live signal aktivan'); }
-      else if (data.status === 'completed') { setLocLiveStatus('completed'); setLocStatus('Hvala — live procjena je ažurirana.'); locSessionRef.current = { ...sess, armed: false }; }
-    } catch { /* ignore — never break the map */ }
-  }
-
-  function enableLocation() {
-    if (!('geolocation' in navigator)) { setLocStatus('Lokacija nije dostupna na ovom uređaju.'); return; }
-    setLocationOn(true);
-    setLocStatus('Tražim lokaciju…');
-    // Arm an anonymous session for this crossing/direction (server decides if it actually arms).
-    fetch('/api/location-wait/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ crossingId: selectedCrossing.id, direction: selectedDirection }) })
-      .then((r) => r.json().catch(() => null))
-      .then((data) => {
-        if (data?.ok && data.armed && data.sessionId) { locSessionRef.current = { sessionId: data.sessionId, armed: true }; setLocLiveStatus('pending'); }
-        else locSessionRef.current = { sessionId: null, armed: false }; // disabled/disarmed → location-only
-      })
-      .catch(() => { locSessionRef.current = { sessionId: null, armed: false }; });
-
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (pos) => {
-        const point = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy };
-        setUserPos(point);
-        setLocStatus((prev) => (prev === 'Tražim lokaciju…' || prev === 'Lokacija nije uključena.') ? 'Lokacija uključena' : prev);
-        sendLocationPing(point);
-      },
-      () => { setLocStatus('Lokacija nije uključena.'); setLocationOn(false); if (watchIdRef.current != null) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; } },
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
-    );
-  }
-
-  function toggleLocation() {
-    if (locationOn) stopLocation();
-    else enableLocation();
-  }
-
-  useEffect(() => () => stopLocation(), [stopLocation]); // cleanup on unmount
+  const { userPos = null, statusText: locStatus = '', liveStatus: locLiveStatus = 'idle', on: locationOn = false } = measurement || {};
+  const toggleLocation = () => { if (measurement) measurement.toggle({ crossingId: selectedCrossing.id, direction: 'auto' }); };
 
   useEffect(() => {
     if (!apiKey) return;
@@ -3348,9 +3248,14 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   // Render ONLY the current user's own blue-dot location (never other users). First fix centres; later
   // fixes just move the dot, so we don't fight the user panning the map.
   useEffect(() => {
-    if (!mapRef.current || !window.google?.maps || !userPos) return;
+    if (!mapRef.current || !window.google?.maps) return;
     const google = window.google;
     const map = mapRef.current;
+    if (!userPos) {
+      if (userMarkerRef.current) { if (userMarkerRef.current.map !== undefined) userMarkerRef.current.map = null; if (userMarkerRef.current.setMap) userMarkerRef.current.setMap(null); userMarkerRef.current = null; }
+      didCenterUserRef.current = false;
+      return;
+    }
     const pos = { lat: userPos.lat, lng: userPos.lng };
     if (!userMarkerRef.current) {
       const dot = document.createElement('div');
@@ -3550,7 +3455,7 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
   );
 }
 
-function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, setSelectedCrossing, requestedMode = 'map', overrides = {}, stateVersion = 0 }) {
+function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, setSelectedCrossing, requestedMode = 'map', overrides = {}, stateVersion = 0, measurement }) {
   const [mode, setMode] = useState(requestedMode || 'map');
   const [showTraffic, setShowTraffic] = useState(true);
   const [focusTraffic, setFocusTraffic] = useState(true);
@@ -3601,7 +3506,7 @@ function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, se
         <div className="map-tool-panel clean-map-tools">
           <div>
             <strong>Rute i promet</strong>
-            <span>Marker prikazuje čekanje za odabrani smjer čim stigne svježi javni izvor, kamera, dojava ili potvrda tima.</span>
+            <span>Marker prikazuje čekanje za odabrani smjer čim stigne svježi javni izvor, kamera, izmjereni prelazak ili potvrda tima.</span>
           </div>
           <div className="map-layer-controls">
             <button type="button" className={showTraffic ? 'active' : ''} onClick={() => setShowTraffic((value) => !value)}>Promet</button>
@@ -3613,7 +3518,7 @@ function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, se
 
       <div className="map-layout">
         <div>{mode === 'map'
-          ? <GoogleMapView selectedDirection={selectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={setSelectedCrossing} showTraffic={showTraffic} focusTraffic={focusTraffic} visibleCrossings={visibleCrossings} overrides={overrides} stateVersion={stateVersion} />
+          ? <GoogleMapView selectedDirection={selectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={setSelectedCrossing} showTraffic={showTraffic} focusTraffic={focusTraffic} visibleCrossings={visibleCrossings} overrides={overrides} stateVersion={stateVersion} measurement={measurement} />
           : <CameraPanel crossing={selectedCrossing} selectedDirection={selectedDirection} onLiveSignalUpdated={dispatchLiveSignal} />}</div>
         <aside className="map-side">
           {mode === 'map' && (
@@ -3712,9 +3617,6 @@ function PredictionBreakdown({ sourceMeta = {} }) {
     }
   } else if (vl && vl.waitMin !== null && vl.waitMin !== undefined) {
     rows.push({ icon: '📍', text: 'Potvrđeno live signalom prolaska' });
-  }
-  if (b.chatReports && b.chatReports.waitMin !== null && b.chatReports.waitMin !== undefined) {
-    rows.push({ icon: '💬', text: `Dojave vozača: ${formatMinutes(b.chatReports.waitMin)} (${b.chatReports.count})` });
   }
   if (b.publicSource && b.publicSource.waitMin !== null && b.publicSource.waitMin !== undefined) {
     rows.push({ icon: '🏛️', text: `Javni izvor: ${formatMinutes(b.publicSource.waitMin)}` });
@@ -4103,411 +4005,6 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
   );
 }
 
-function ChatView({ posts, setPosts, currentUser, selectedCrossing, setSelectedCrossing, selectedDirection, trackedIds = [], toggleTracked }) {
-  const favoriteCrossings = useMemo(() => trackedIds.map((id) => CROSSINGS.find((item) => item.id === id)).filter(Boolean), [trackedIds]);
-  const initialFavorite = favoriteCrossings[0]?.id;
-  const [crossingId, setCrossingId] = useState(selectedCrossing?.id || initialFavorite || 'maljevac');
-  const [type, setType] = useState('ok');
-  const [message, setMessage] = useState('');
-  // Explicit reported wait (minutes) chosen via the quick-time selector. null = not chosen → the
-  // message is parsed, then the category default is used. This is what fusion actually receives.
-  const [waitChoice, setWaitChoice] = useState(null);
-  const [activeCrossingFilter, setActiveCrossingFilter] = useState('all');
-  const [activeTypeFilter, setActiveTypeFilter] = useState('all');
-  const [confirmations, setConfirmations] = useState({});
-  const [serverNotice, setServerNotice] = useState('');
-  const [isSending, setIsSending] = useState(false);
-
-  useEffect(() => {
-    if (selectedCrossing?.id && selectedCrossing.id !== crossingId) setCrossingId(selectedCrossing.id);
-  }, [selectedCrossing?.id]);
-
-  useEffect(() => {
-    if (!favoriteCrossings.length) return;
-    if (!trackedIds.includes(crossingId) && (!selectedCrossing?.id || !trackedIds.includes(selectedCrossing.id))) {
-      chooseCrossing(favoriteCrossings[0].id);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [favoriteCrossings.length]);
-
-  useEffect(() => {
-    if (!currentUser?.token) return;
-    let cancelled = false;
-    fetchJson('/api/reports', { headers: { Authorization: `Bearer ${currentUser.token}` }, timeoutMs: 5000 })
-      .then((payload) => {
-        if (cancelled || !payload?.reports?.length) return;
-        const serverPosts = payload.reports.map(reportToPost);
-        setPosts((current) => mergePosts(serverPosts, current));
-      })
-      .catch(() => {
-        if (!cancelled) setServerNotice('Dojave se trenutno prikazuju lokalno; backend dohvat nije uspio.');
-      });
-    return () => { cancelled = true; };
-  }, [currentUser?.token, setPosts]);
-
-  function chooseCrossing(id) {
-    setCrossingId(id);
-    const crossing = CROSSINGS.find((item) => item.id === id);
-    if (crossing) setSelectedCrossing(crossing);
-  }
-
-  const typeMeta = {
-    ok: { label: 'Prošao uredno', short: 'Uredno', icon: '✓', tone: 'ok', wait: '10–15 min', waitMinutes: 12, template: 'Prošao sam uredno, čekanje oko 10 min.' },
-    slow: { label: 'Gužva / sporo', short: 'Gužva', icon: '!', tone: 'slow', wait: '60+ min', waitMinutes: 65, template: 'Kolona se pomiče sporo, čekanje je preko 45 min.' },
-    truck: { label: 'Kamioni', short: 'Kamioni', icon: '▣', tone: 'truck', wait: 'Kamioni sporo', waitMinutes: 45, template: 'Kamionska traka ide sporo, osobna vozila prolaze brže.' },
-    closed: { label: 'Zatvoreno / ne puštaju', short: 'Zatvoreno', icon: '×', tone: 'closed', wait: 'Zatvoreno', waitMinutes: 180, template: 'Prijelaz/ruta trenutno izgleda zatvoreno ili ne puštaju vozila.' },
-    control: { label: 'Policija / detaljna kontrola', short: 'Kontrola', icon: '●', tone: 'control', wait: 'Detaljna kontrola', waitMinutes: 55, template: 'Kontrola je pojačana i usporava prolaz.' },
-    accident: { label: 'Zastoj/nezgoda na prilazu', short: 'Zastoj', icon: '△', tone: 'accident', wait: 'Zastoj', waitMinutes: 80, template: 'Na prilazu je zastoj ili prepreka, ruta se kreće jako sporo.' },
-  };
-
-  function resolveType(post) {
-    if (post.type) return post.type;
-    const value = `${post.wait || ''} ${post.message || ''}`.toLowerCase();
-    if (value.includes('zatvor') || value.includes('ne pu')) return 'closed';
-    if (value.includes('polic') || value.includes('kontrol')) return 'control';
-    if (value.includes('nezgod') || value.includes('zastoj')) return 'accident';
-    if (value.includes('kamion')) return 'truck';
-    if (value.includes('60') || value.includes('guž') || value.includes('sporo') || value.includes('sat')) return 'slow';
-    return 'ok';
-  }
-
-  function reportToPost(report) {
-    const resolvedType = report.type || resolveType(report);
-    return {
-      id: report.id,
-      crossingId: report.crossingId,
-      name: report.user?.name || 'Korisnik',
-      message: report.message || '',
-      wait: Number.isFinite(Number(report.wait)) ? formatMinutes(Number(report.wait)) : (typeMeta[resolvedType]?.wait || ''),
-      waitMinutes: Number(report.wait || typeMeta[resolvedType]?.waitMinutes || 0),
-      type: resolvedType,
-      createdAt: report.createdAt ? new Date(report.createdAt).toLocaleString('hr-HR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : nowHHMM(),
-      serverSynced: true,
-    };
-  }
-
-  function mergePosts(primary = [], secondary = []) {
-    const seen = new Set();
-    return [...primary, ...secondary].filter((post) => {
-      const key = post.id || `${post.crossingId}:${post.message}:${post.createdAt}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).slice(0, 160);
-  }
-
-  function normalize(post) {
-    return {
-      ...post,
-      type: resolveType(post),
-      text: post.text || post.message || '',
-      createdAt: post.createdAt || 'sad',
-    };
-  }
-
-  async function persistPost(post) {
-    if (!currentUser?.token) {
-      setServerNotice('Spremljeno samo na ovom uređaju. Da dojava uđe u procjenu čekanja, prijavi se korisničkim računom.');
-      return;
-    }
-    try {
-      setIsSending(true);
-      const payload = await fetchJson('/api/reports', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${currentUser.token}` },
-        body: JSON.stringify({
-          crossingId: post.crossingId,
-          direction: selectedDirection,
-          waitMinutes: post.waitMinutes,
-          message: post.message,
-          type: post.type,
-        }),
-      });
-      if (payload?.report) {
-        const synced = reportToPost(payload.report);
-        setPosts((current) => mergePosts([synced], current.filter((item) => item.id !== post.id)));
-        setServerNotice('Hvala — dojava je zabilježena.');
-      }
-    } catch {
-      setServerNotice('Dojava je dodana lokalno, ali upis u bazu trenutno nije uspio.');
-    } finally {
-      setIsSending(false);
-    }
-  }
-
-  function addPost(nextType, text, nextCrossingId = crossingId, explicitWaitMin = null, { parseMessage = true } = {}) {
-    const meta = typeMeta[nextType] || typeMeta.ok;
-    const userTyped = String(text || '').trim().slice(0, 120); // what the user ACTUALLY typed (may be empty)
-    const hasExplicit = clampWaitMinutes(explicitWaitMin) !== null;
-    // What the driver actually reported: explicit selector > minutes parsed from the TYPED message >
-    // category default. We never parse the canned category template (it contains a fixed "...45 min"
-    // that was overriding the explicit "60+" choice and the category default → reported 45 instead).
-    const resolvedWaitMin = resolveReportWaitMinutes({
-      explicit: explicitWaitMin,
-      message: parseMessage ? userTyped : '',
-      categoryDefault: meta.waitMinutes,
-    });
-    const parsedFromText = parseMessage && !hasExplicit && !!userTyped && resolvedWaitMin !== meta.waitMinutes;
-    // The displayed message must MATCH the reported wait: if the driver picked a time but typed nothing,
-    // synthesize a consistent line instead of the template's hardcoded minutes.
-    const message = (userTyped || (hasExplicit ? `Prijavljeno čekanje oko ${resolvedWaitMin} min.` : meta.template)).slice(0, 120);
-    if (!message) return;
-    const showWaitNumber = hasExplicit || parsedFromText;
-    const localPost = {
-      id: `post-${Date.now()}-${Math.round(Math.random() * 1000)}`,
-      crossingId: nextCrossingId,
-      name: currentUser?.name || 'Korisnik',
-      message,
-      wait: showWaitNumber ? `${resolvedWaitMin} min` : meta.wait,
-      waitMinutes: resolvedWaitMin,
-      type: nextType,
-      createdAt: nowHHMM(),
-    };
-    setPosts((current) => [localPost, ...current].slice(0, 160));
-    setActiveCrossingFilter(nextCrossingId);
-    setActiveTypeFilter('all');
-    persistPost(localPost);
-  }
-
-  function submitPost(event) {
-    event.preventDefault();
-    addPost(type, message, crossingId, waitChoice);
-    setMessage('');
-    setWaitChoice(null);
-  }
-
-  function quickReport(nextType, nextCrossingId = crossingId) {
-    const meta = typeMeta[nextType];
-    chooseCrossing(nextCrossingId);
-    setType(nextType);
-    addPost(nextType, meta.template, nextCrossingId, null, { parseMessage: false });
-  }
-
-  const normalizedPosts = useMemo(() => posts.map(normalize), [posts]);
-
-  const groupedSignal = useMemo(() => {
-    return CROSSINGS.map((crossing) => {
-      const crossingPosts = normalizedPosts.filter((post) => post.crossingId === crossing.id);
-      const ok = crossingPosts.filter((post) => post.type === 'ok').length;
-      const slow = crossingPosts.filter((post) => post.type === 'slow').length;
-      const truck = crossingPosts.filter((post) => post.type === 'truck').length;
-      const closed = crossingPosts.filter((post) => post.type === 'closed').length;
-      const control = crossingPosts.filter((post) => post.type === 'control').length;
-      const accident = crossingPosts.filter((post) => post.type === 'accident').length;
-      const dominant = closed ? 'closed' : accident ? 'accident' : slow >= ok && slow >= truck ? 'slow' : control ? 'control' : truck > ok ? 'truck' : 'ok';
-      return { crossing, total: crossingPosts.length, ok, slow, truck, closed, control, accident, dominant, latest: crossingPosts[0] };
-    }).sort((a, b) => b.total - a.total);
-  }, [normalizedPosts]);
-
-  const filteredPosts = useMemo(() => {
-    return normalizedPosts.filter((post) => {
-      const matchesCrossing = activeCrossingFilter === 'all' || post.crossingId === activeCrossingFilter;
-      const matchesType = activeTypeFilter === 'all' || post.type === activeTypeFilter;
-      return matchesCrossing && matchesType;
-    });
-  }, [normalizedPosts, activeCrossingFilter, activeTypeFilter]);
-
-  const composerCrossing = CROSSINGS.find((crossing) => crossing.id === crossingId) || CROSSINGS[0];
-  const activeSummary = groupedSignal.find((item) => item.crossing.id === composerCrossing.id) || groupedSignal[0];
-  const isFavorite = trackedIds.includes(composerCrossing.id);
-
-  return (
-    <section className="screen forum-screen">
-      <div className="screen-head forum-head">
-        <div>
-          <span className="kicker">Dojave</span>
-          <h2>Dojave vozača</h2>
-          <p className="screen-subtitle">Favorizirani prijelazi su odmah dostupni za brzu dojavu i komentar.</p>
-        </div>
-        <div className="forum-live-pill">
-          <strong>{normalizedPosts.length}</strong>
-          <span>aktivnih dojava</span>
-        </div>
-      </div>
-
-      {!!favoriteCrossings.length && (
-        <article className="favorite-report-strip">
-          <div>
-            <span className="kicker">Moji favoriti</span>
-            <strong>Brza dojava za spremljeni prijelaz</strong>
-          </div>
-          <div className="favorite-chip-row">
-            {favoriteCrossings.map((crossing) => (
-              <button key={crossing.id} type="button" className={crossing.id === crossingId ? 'favorite-chip active' : 'favorite-chip'} onClick={() => { chooseCrossing(crossing.id); setActiveCrossingFilter(crossing.id); }}>
-                ★ {crossing.shortName}
-              </button>
-            ))}
-          </div>
-        </article>
-      )}
-
-      <div className="forum-hero-grid">
-        <form className="forum-composer" onSubmit={submitPost}>
-          <div className="composer-topline">
-            <div>
-              <span className="kicker">Nova dojava</span>
-              <h3>Što se događa na prijelazu?</h3>
-            </div>
-            <span className={`composer-mood mood-${typeMeta[type].tone}`}>{typeMeta[type].icon} {typeMeta[type].short}</span>
-          </div>
-
-          <div className="forum-form-grid">
-            <label>
-              <span>Prijelaz</span>
-              <select value={crossingId} onChange={(event) => chooseCrossing(event.target.value)}>
-                {favoriteCrossings.length > 0 && <optgroup label="Favoriti">{favoriteCrossings.map((crossing) => <option key={`fav-${crossing.id}`} value={crossing.id}>★ {crossing.name}</option>)}</optgroup>}
-                <optgroup label="Svi prijelazi">{CROSSINGS.map((crossing) => <option key={crossing.id} value={crossing.id}>{crossing.name}</option>)}</optgroup>
-              </select>
-            </label>
-            <label>
-              <span>Tip dojave</span>
-              <select value={type} onChange={(event) => setType(event.target.value)}>
-                {Object.entries(typeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
-              </select>
-            </label>
-          </div>
-
-          <div className="favorite-inline-action">
-            <span>{composerCrossing.shortName} je {isFavorite ? 'u favoritima' : 'nije favorit'}.</span>
-            <button type="button" onClick={() => toggleTracked?.(composerCrossing.id)}>{isFavorite ? 'Makni favorit' : 'Dodaj u favorite'}</button>
-          </div>
-
-          <div className="wait-choice-field">
-            <span className="wait-choice-label">Koliko si čekao/la?</span>
-            <p className="wait-choice-helper">Odaberi približno vrijeme čekanja. Komentar je opcionalan.</p>
-            <div className="wait-choice-row" role="group" aria-label="Vrijeme čekanja">
-              {WAIT_QUICK_OPTIONS.map((opt) => (
-                <button
-                  key={opt.min}
-                  type="button"
-                  className={`wait-choice${waitChoice === opt.min ? ' is-selected' : ''}`}
-                  aria-pressed={waitChoice === opt.min}
-                  onClick={() => setWaitChoice((current) => (current === opt.min ? null : opt.min))}
-                >
-                  {opt.label}<i>min</i>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <label className="message-field">
-            <span>Komentar (nije obavezno)</span>
-            <input
-              value={message}
-              onChange={(event) => setMessage(event.target.value)}
-              maxLength={120}
-              placeholder="npr. Kolona se sporo pomiče, kontrola pojačana..."
-            />
-          </label>
-
-          <div className="quick-report-row" aria-label="Brze dojave">
-            {Object.entries(typeMeta).map(([key, meta]) => (
-              <button key={key} type="button" className={`quick-report quick-${meta.tone}`} disabled={isSending} onClick={() => quickReport(key)}>
-                <i>{meta.icon}</i>
-                <span>{meta.short}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="composer-actions">
-            <span>{serverNotice || `${120 - message.length} znakova ostalo`}</span>
-            <button type="submit" className="primary-button" disabled={isSending}>{isSending ? 'Spremam...' : 'Pošalji dojavu'}</button>
-          </div>
-        </form>
-
-        <aside className="forum-insight-panel">
-          <span className="kicker">Sažetak zajednice</span>
-          <h3>{composerCrossing.shortName}</h3>
-          <p>{activeSummary?.latest?.text || activeSummary?.latest?.message || 'Još nema novih dojava za ovaj prijelaz.'}</p>
-          <div className="insight-meter">
-            <span className="ok" style={{ width: `${Math.max(8, ((activeSummary?.ok || 0) / Math.max(activeSummary?.total || 1, 1)) * 100)}%` }} />
-            <span className="slow" style={{ width: `${Math.max(8, ((activeSummary?.slow || 0) / Math.max(activeSummary?.total || 1, 1)) * 100)}%` }} />
-            <span className="truck" style={{ width: `${Math.max(8, ((activeSummary?.truck || 0) / Math.max(activeSummary?.total || 1, 1)) * 100)}%` }} />
-          </div>
-          <div className="insight-stats">
-            <b className="ok">{activeSummary?.ok || 0} uredno</b>
-            <b className="slow">{activeSummary?.slow || 0} gužva</b>
-            <b className="truck">{activeSummary?.truck || 0} kamioni</b>
-            <b className="closed">{activeSummary?.closed || 0} zatvoreno</b>
-            <b className="control">{activeSummary?.control || 0} kontrola</b>
-          </div>
-        </aside>
-      </div>
-
-      <div className="forum-board">
-        <aside className="forum-filter-panel">
-          <div className="filter-block">
-            <span className="kicker">Prijelazi</span>
-            <button type="button" className={activeCrossingFilter === 'all' ? 'filter-chip active' : 'filter-chip'} onClick={() => setActiveCrossingFilter('all')}>
-              Svi prijelazi <b>{normalizedPosts.length}</b>
-            </button>
-            {favoriteCrossings.map((crossing) => {
-              const info = groupedSignal.find((item) => item.crossing.id === crossing.id) || { total: 0, dominant: 'ok' };
-              return (
-                <button key={`filter-fav-${crossing.id}`} type="button" className={activeCrossingFilter === crossing.id ? `filter-chip active mood-${info.dominant}` : `filter-chip mood-${info.dominant}`} onClick={() => setActiveCrossingFilter(crossing.id)}>
-                  ★ {crossing.shortName} <b>{info.total}</b>
-                </button>
-              );
-            })}
-            {groupedSignal.filter(({ crossing }) => !trackedIds.includes(crossing.id)).map(({ crossing, total, dominant }) => (
-              <button
-                key={crossing.id}
-                type="button"
-                className={activeCrossingFilter === crossing.id ? `filter-chip active mood-${dominant}` : `filter-chip mood-${dominant}`}
-                onClick={() => setActiveCrossingFilter(crossing.id)}
-              >
-                {crossing.shortName} <b>{total}</b>
-              </button>
-            ))}
-          </div>
-
-          <div className="filter-block">
-            <span className="kicker">Vrsta dojave</span>
-            <button type="button" className={activeTypeFilter === 'all' ? 'filter-chip active' : 'filter-chip'} onClick={() => setActiveTypeFilter('all')}>Sve</button>
-            {Object.entries(typeMeta).map(([key, meta]) => (
-              <button key={key} type="button" className={activeTypeFilter === key ? `filter-chip active mood-${meta.tone}` : `filter-chip mood-${meta.tone}`} onClick={() => setActiveTypeFilter(key)}>
-                {meta.short}
-              </button>
-            ))}
-          </div>
-        </aside>
-
-        <div className="forum-feed improved-forum-feed">
-          {filteredPosts.map((post) => {
-            const crossing = CROSSINGS.find((item) => item.id === post.crossingId);
-            const meta = typeMeta[post.type] || typeMeta.ok;
-            const confirmed = confirmations[post.id] || 0;
-            return (
-              <article key={post.id} className={`forum-post post-${meta.tone}`}>
-                <div className="post-mainline">
-                  <div>
-                    <strong>{post.name}</strong>
-                    <span>{crossing?.shortName || 'Prijelaz'} · {post.createdAt}{post.serverSynced ? ' · baza' : ''}</span>
-                  </div>
-                  <em className={`post-type mood-${meta.tone}`}>{meta.icon} {meta.short}</em>
-                </div>
-                <p>{post.text}</p>
-                <div className="post-actions-row">
-                  <button type="button" onClick={() => setConfirmations((current) => ({ ...current, [post.id]: (current[post.id] || 0) + 1 }))}>
-                    Potvrdi dojavu
-                  </button>
-                  <span>{confirmed} potvrda</span>
-                </div>
-              </article>
-            );
-          })}
-          {filteredPosts.length === 0 && (
-            <div className="forum-empty-state">
-              <strong>Nema dojava za ovaj filter.</strong>
-              <span>Promijeni prijelaz ili dodaj novu kratku dojavu.</span>
-            </div>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function summarizeHistoryPeriod(label, rangeLabel, startHour, endHour, series) {
   const slots = series.filter((item) => Number(item.hour) >= startHour && Number(item.hour) <= endHour);
   const safeSlots = slots.length ? slots : (series.length ? series.slice(0, 1) : [{ hour: '--', passed: 0, totalDemand: 0, cars: 0, vans: 0, trucks: 0, buses: 0, wait: 0, rhythmSeconds: 0 }]);
@@ -4672,7 +4169,6 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection,
           <div className="history-source-chips" aria-label="Izvori povijesti">
             {historyCoverage?.cameraSlots > 0 && <span>kamera · {historyCoverage.cameraSlots}h</span>}
             {historyCoverage?.publicSlots > 0 && <span>javni izvor · {historyCoverage.publicSlots}h</span>}
-            {historyCoverage?.reportSlots > 0 && <span>dojave · {historyCoverage.reportSlots}h</span>}
             {historyUpdatedAt && <span>{formatLastUpdated(historyUpdatedAt)}</span>}
             {insights.lowData && hasHistoryData && <span className="history-low-data-badge">Podaci su rijetki — okvirna procjena</span>}
           </div>
@@ -4863,7 +4359,7 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection,
   );
 }
 
-function AdminView({ selectedCrossing, setSelectedCrossing, selectedDirection, setSelectedDirection, overrides, setOverrides, posts, currentUser }) {
+function AdminView({ selectedCrossing, setSelectedCrossing, selectedDirection, setSelectedDirection, overrides, setOverrides, currentUser }) {
   const [sourceRefreshState, setSourceRefreshState] = useState('idle'); // idle | loading | success | error
   const direction = getDirection(selectedCrossing, selectedDirection);
   const key = `${selectedCrossing.id}:${selectedDirection}`;
@@ -4872,11 +4368,10 @@ function AdminView({ selectedCrossing, setSelectedCrossing, selectedDirection, s
   const liveWait = getDisplayedWait(selectedCrossing, selectedDirection, overrides);
   const baseWait = hasKnownWait(liveWait) ? Number(liveWait) : null;
   const finalWait = hasManualOverride ? Number(manualWait) : baseWait;
-  const signals = getAggregateSignals(posts, selectedCrossing.id);
-  const confidence = getAdminConfidence({ crossing: selectedCrossing, signals, hasManualOverride });
-  const decision = getAdminDecision({ wait: finalWait, direction, signals, hasManualOverride });
+  const confidence = getAdminConfidence({ crossing: selectedCrossing, hasManualOverride });
+  const decision = getAdminDecision({ wait: finalWait, direction, hasManualOverride });
   const sourceMeta = getWaitSourceMeta(selectedCrossing, selectedDirection, overrides);
-  const sourceRows = getAdminSourceRows({ crossing: selectedCrossing, direction, signals, baseWait, finalWait, hasManualOverride });
+  const sourceRows = getAdminSourceRows({ crossing: selectedCrossing, direction, baseWait, finalWait, hasManualOverride });
   const post = buildAdminPost({ selectedCrossing, direction, wait: finalWait, confidence, decision, sourceLabel: sourceMeta.label });
   const shortPost = `${selectedCrossing.shortName}: ${formatMinutes(finalWait)} · ${direction.label} · ${(statusMeta[statusFromWait(finalWait)] || statusMeta.unknown).label}`;
   const laneAwareCameras = selectedCrossing.cameras?.filter((cam) => cam.laneCalibration?.zones?.length) || [];
@@ -5200,7 +4695,7 @@ function buildFavoriteAlerts(trackedIds = [], selectedDirection = 'toBih', overr
       const tone = status === 'critical' ? 'critical' : direction.trend === 'rising' ? 'busy' : status;
       const title = status === 'critical' ? `${crossing.shortName}: veliko čekanje` : `${crossing.shortName}: stanje se mijenja`;
       const message = status === 'critical'
-        ? `${direction.label} je na ${waitLabel}. Otvori dojave ili provjeri kameru prije polaska.`
+        ? `${direction.label} je na ${waitLabel}. Provjeri kameru ili kartu prije polaska.`
         : `${direction.label} ima trend rasta. Trenutna procjena je ${waitLabel}.`;
       return { id: `${crossing.id}:${selectedDirection}:${tone}:${Math.round(wait)}`, crossingId: crossing.id, title, message, tone, wait };
     })
@@ -5223,7 +4718,7 @@ function AlertTray({ alerts, onDismiss, onOpen }) {
             <p>{alert.message}</p>
           </div>
           <div className="alert-toast-actions">
-            <button type="button" onClick={() => onOpen(alert.crossingId)}>Dojavi</button>
+            <button type="button" onClick={() => onOpen(alert.crossingId)}>Prikaži</button>
             <button type="button" aria-label="Zatvori alert" onClick={() => onDismiss(alert.id)}>×</button>
           </div>
         </article>
@@ -5232,14 +4727,79 @@ function AlertTray({ alerts, onDismiss, onOpen }) {
   );
 }
 
+const NEAR_BORDER_KM = 6;
+// App-level near-border prompt: when the user is within a few km of a crossing AND has already
+// granted location, offer one tap to measure their A→B crossing. No continuous tracking, no
+// permission popup on load (we only auto-check when permission is already 'granted'). While a
+// measurement runs it becomes a discreet progress chip.
+function NearBorderMeasurePrompt({ measurement, selectCrossing, setActiveTab }) {
+  const [near, setNear] = useState(null);          // { id, name } when within NEAR_BORDER_KM
+  const [dismissed, setDismissed] = useState({});   // crossingId -> true (this session only)
+  const checkedRef = useRef(false);
+
+  useEffect(() => {
+    if (checkedRef.current || !('geolocation' in navigator)) return;
+    const runCheck = () => {
+      if (checkedRef.current) return;
+      checkedRef.current = true;
+      navigator.geolocation.getCurrentPosition(
+        (p) => {
+          const pos = { lat: p.coords.latitude, lng: p.coords.longitude };
+          let best = null;
+          for (const c of CROSSINGS) {
+            const km = haversineKm(pos, { lat: c.lat, lng: c.lng });
+            if (Number.isFinite(km) && (!best || km < best.km)) best = { id: c.id, name: c.shortName || c.name, km };
+          }
+          if (best && best.km <= NEAR_BORDER_KM) setNear({ id: best.id, name: best.name });
+        },
+        () => {},
+        { enableHighAccuracy: false, maximumAge: 120000, timeout: 15000 }
+      );
+    };
+    // Only auto-check when permission is ALREADY granted — never surprise the user with a popup.
+    if (navigator.permissions?.query) {
+      navigator.permissions.query({ name: 'geolocation' }).then((s) => { if (s.state === 'granted') runCheck(); }).catch(() => {});
+    }
+  }, []);
+
+  if (measurement.isMeasuring) {
+    const label = measurement.liveStatus === 'completed' ? 'Hvala — procjena je ažurirana'
+      : measurement.liveStatus === 'active' ? 'Mjerim prelazak…'
+      : 'Lokacija uključena — mjerim čim uđeš u kolonu';
+    return (
+      <div className="measure-chip" role="status">
+        <Crosshair size={14} aria-hidden="true" />
+        <span>{label}</span>
+        <button type="button" onClick={() => measurement.stop()} aria-label="Zaustavi mjerenje">×</button>
+      </div>
+    );
+  }
+  if (!near || dismissed[near.id]) return null;
+  return (
+    <div className="measure-prompt" role="dialog" aria-label="Mjerenje prelaska">
+      <div className="measure-prompt-body">
+        <Crosshair size={18} aria-hidden="true" />
+        <div>
+          <strong>Blizu si prijelaza {near.name}</strong>
+          <span>Uključi mjerenje prelaska — anonimno pomažeš ostalima da vide stvarno čekanje. Ne spremamo tvoju rutu.</span>
+        </div>
+      </div>
+      <div className="measure-prompt-actions">
+        <button type="button" className="measure-prompt-primary" onClick={() => { selectCrossing(near.id); setActiveTab('Mapa'); measurement.start({ crossingId: near.id, direction: 'auto' }); }}>Uključi mjerenje</button>
+        <button type="button" onClick={() => setDismissed((d) => ({ ...d, [near.id]: true }))}>Ne sada</button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useLocalStorage('bf_current_user_v2', null);
   const [activeTab, setActiveTab] = useState('Pregled');
+  const measurement = useCrossingMeasurement(); // app-level A→B measurement (survives tab switches)
   const [selectedDirection, setSelectedDirection] = useState('toBih');
   const [selectedCrossing, setSelectedCrossing] = useState(CROSSINGS[0]);
   const [tripCrossing, setTripCrossing] = useState('maljevac');
   const [trackedIds, setTrackedIds] = useLocalStorage('bf_tracked_v1', ['maljevac']);
-  const [posts, setPosts] = useLocalStorage('bf_chat_posts_v1', INITIAL_POSTS);
   const [overrides, setOverrides] = useLocalStorage('bf_overrides_v1', {});
   const [detailCrossing, setDetailCrossing] = useState(null);
   const [showTerms, setShowTerms] = useState(false);
@@ -5434,7 +4994,7 @@ export default function App() {
 
   function openAlertReport(crossingId) {
     selectCrossing(crossingId);
-    setActiveTab('Dojave');
+    setActiveTab('Pregled');
   }
 
   return (
@@ -5474,7 +5034,7 @@ export default function App() {
               <span className="hero-live-chip"><i /> Oba smjera aktivna</span>
             </div>
             <h1>Znaj kada krenuti i koji prijelaz odabrati.</h1>
-            <p>PrijelazRadar ti na jednom mjestu pokazuje čekanja, rute, kamere i dojave vozača za HR → BiH i BiH → HR.</p>
+            <p>PrijelazRadar ti na jednom mjestu pokazuje čekanja, rute i kamere za HR → BiH i BiH → HR.</p>
             <div className="hero-proof-row">
               <div>
                 <span>Odabrani prijelaz</span>
@@ -5500,7 +5060,6 @@ export default function App() {
             </div>
             <div className="hero-command-footer">
               <button type="button" onClick={() => { setMapModeRequest('camera'); setActiveTab('Mapa'); }}><Camera size={14} /> Kamere</button>
-              <button type="button" onClick={() => setActiveTab('Dojave')}><Bell size={14} /> Dojavi stanje</button>
             </div>
             <div className="hero-system-row">
               <SystemStatus compact />
@@ -5512,14 +5071,14 @@ export default function App() {
 
       {activeTab === 'Pregled' && <PublicView selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} trackedIds={trackedIds} toggleTracked={toggleTracked} openDetail={setDetailCrossing} overrides={overrides} addNotificationRule={addNotificationRule} />}
       {activeTab === 'Moj put' && <TripPlanner selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} tripCrossing={tripCrossing} setTripCrossing={setTripCrossing} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} setActiveTab={setActiveTab} overrides={overrides} currentUser={currentUser} />}
-      {activeTab === 'Mapa' && <MapView selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} requestedMode={mapModeRequest} overrides={overrides} stateVersion={serverStateVersion} />}
-      {activeTab === 'Dojave' && <ChatView posts={posts} setPosts={setPosts} currentUser={viewer} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} selectedDirection={selectedDirection} trackedIds={trackedIds} toggleTracked={toggleTracked} />}
+      {activeTab === 'Mapa' && <MapView selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} requestedMode={mapModeRequest} overrides={overrides} stateVersion={serverStateVersion} measurement={measurement} />}
       {activeTab === 'Povijest' && <HistoryView selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} overrides={overrides} />}
-      {activeTab === 'Admin' && viewer.role === 'admin' && currentUser && <AdminView selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} overrides={overrides} setOverrides={setOverrides} posts={posts} currentUser={currentUser} />}
+      {activeTab === 'Admin' && viewer.role === 'admin' && currentUser && <AdminView selectedCrossing={selectedCrossing} setSelectedCrossing={selectCrossing} selectedDirection={selectedDirection} setSelectedDirection={setSelectedDirection} overrides={overrides} setOverrides={setOverrides} currentUser={currentUser} />}
 
       <DetailModal crossing={detailCrossing} selectedDirection={selectedDirection} overrides={overrides} onClose={() => setDetailCrossing(null)} onTrack={toggleTracked} tracked={detailCrossing ? trackedIds.includes(detailCrossing.id) : false} setTripCrossing={setTripCrossing} setSelectedCrossing={selectCrossing} setActiveTab={setActiveTab} addNotificationRule={addNotificationRule} />
       {showTerms && <TermsModal onClose={() => setShowTerms(false)} />}
       <AlertTray alerts={visibleAlerts} onOpen={openAlertReport} onDismiss={(id) => setDismissedAlerts((current) => ({ ...current, [id]: true }))} />
+      <NearBorderMeasurePrompt measurement={measurement} selectCrossing={selectCrossing} setActiveTab={setActiveTab} />
 
       {showAuth && (
         <div className="auth-modal-backdrop" onClick={() => setShowAuth(false)}>

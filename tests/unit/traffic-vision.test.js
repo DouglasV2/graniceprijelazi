@@ -192,11 +192,6 @@ describe('fuseTrafficVision — scenario matrix', () => {
     expect(r.expectedWaitMin).toBeGreaterThanOrEqual(6);
   });
 
-  it('chat consensus (≥2 fresh) leads when no camera/google', () => {
-    const r = fuseTrafficVision({ chat: { waitMin: 25, count: 3, ageMin: 10 } });
-    expect(r.lead).toBe('chat');
-    expect(r.expectedWaitMin).toBe(25);
-  });
 
   it('nothing usable → baseline, low confidence, model version tagged', () => {
     const r = fuseTrafficVision({ baselineWaitMin: 11 });
@@ -327,6 +322,15 @@ describe('live "Moja lokacija" signal wiring (subtle, anonymous, no raw trail)',
   it('the public state exposes the feature flag so the UI can subdue it when off', () => {
     expect(server).toMatch(/verifiedLocation: VERIFIED_LOCATION_ENABLED/);
   });
+  it('measurement is an app-level hook + a near-border prompt, with server-side auto-direction', () => {
+    // The session/watch/ping live in a reusable hook so a measurement survives tab switches.
+    expect(app).toMatch(/useCrossingMeasurement\(\)/);
+    expect(app).toMatch(/NearBorderMeasurePrompt/);
+    // The prompt/button arm with direction:'auto' — the server resolves the real direction.
+    expect(app).toMatch(/direction: 'auto'/);
+    expect(server).toMatch(/inferLocationWaitDirection/);
+    expect(server).toMatch(/reqDir === 'auto'/);
+  });
 });
 
 describe('route geometry honesty — unconfirmed/straight-fallback route is not drawn as a real route', () => {
@@ -375,28 +379,3 @@ describe('location recommendation UX is wired + privacy-safe', () => {
   });
 });
 
-describe('driver report — explicit wait time drives waitMinutes', () => {
-  it('has an explicit wait-time selector with the requested copy', () => {
-    expect(app).toMatch(/Koliko si čekao\/la\?/);
-    expect(app).toMatch(/Odaberi približno vrijeme čekanja\. Komentar je opcionalan\./);
-    expect(app).toMatch(/WAIT_QUICK_OPTIONS/);
-    expect(app).toMatch(/setWaitChoice/);
-  });
-  it('resolves waitMinutes via explicit > message > category default (not just the category)', () => {
-    // explicit selector > TYPED message > category default. The canned template is NEVER parsed
-    // (it has a fixed "...45 min" that previously overrode the "60+" choice → reported 45).
-    expect(app).toMatch(/message: parseMessage \? userTyped : ''/);
-    expect(app).toMatch(/waitMinutes: resolvedWaitMin/);
-    // submit passes the explicit choice; one-tap quick reports must NOT parse their canned template.
-    expect(app).toMatch(/addPost\(type, message, crossingId, waitChoice\)/);
-    expect(app).toMatch(/parseMessage: false/);
-  });
-  it('the report payload still sends the right crossing + selectedDirection', () => {
-    expect(app).toMatch(/crossingId: post\.crossingId/);
-    expect(app).toMatch(/direction: selectedDirection/);
-    expect(app).toMatch(/waitMinutes: post\.waitMinutes/);
-  });
-  it('makes the guest limitation explicit (report enters the estimate only when logged in)', () => {
-    expect(app).toMatch(/da dojava uđe u procjenu čekanja, prijavi se|dojava uđe u procjenu/i);
-  });
-});

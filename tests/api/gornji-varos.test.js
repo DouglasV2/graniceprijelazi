@@ -2,7 +2,7 @@
 // camera VISUAL band reaches the Traffic Vision fusion, the false-low guard holds (medium/large
 // band → elevated wait; Google clear can't overwrite), reports payload, and that the generic reset
 // is scoped to Gornji Varoš only (Maljevac untouched).
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { getApp } from '../helpers/app-loader.js';
 import { effectiveBorderSignal, BORDER_CROSSINGS, CAMERA_FEEDS, initializeDatastore, inferCameraDirections } from '../../server/index.js';
@@ -18,6 +18,14 @@ beforeAll(async () => {
   adminToken = mod.signToken({ id: 'admin-access', email: 'admin@borderflow.app', role: 'admin', name: 'Admin' });
 });
 const auth = (req) => req.set('Authorization', `Bearer ${adminToken}`);
+
+// Clear any overrides this suite seeded so they don't linger in the shared JSON store
+// (admin overrides are authoritative and would otherwise trip the public-state honesty contract).
+afterAll(async () => {
+  for (const key of [`${CID}:toBih`, 'maljevac:toBih']) {
+    await auth(request(app).post('/api/admin/overrides')).send({ key, value: '' });
+  }
+});
 
 const cleanStore = () => ({ users: [], overrides: {}, statusOverrides: {}, reports: [], audit: [], routeSearches: [], historySnapshots: [], sourceSnapshots: [] });
 const cameraVisual = (direction, band, occupancyPct = 62) => ({
@@ -89,32 +97,23 @@ describe('Gornji Varoš — admin debug', () => {
   });
 });
 
-describe('Gornji Varoš — reports payload', () => {
-  it('a report stores the right crossingId + direction + explicit waitMinutes', async () => {
-    const res = await auth(request(app).post('/api/reports')).send({ crossingId: CID, direction: 'toHr', type: 'ok', waitMinutes: 40 });
-    expect(res.status).toBe(201);
-    expect(res.body.report.crossingId).toBe(CID);
-    expect(res.body.report.direction).toBe('toHr');
-    expect(res.body.report.wait).toBe(40);
-  });
-});
-
 describe('Gornji Varoš — generic reset is scoped (Maljevac untouched)', () => {
-  it('dry-run reports counts and deletes nothing', async () => {
-    await auth(request(app).post('/api/reports')).send({ crossingId: CID, direction: 'toBih', type: 'slow', waitMinutes: 50 });
+  it('dry-run counts operational data and deletes nothing', async () => {
+    await auth(request(app).post('/api/admin/overrides')).send({ key: `${CID}:toBih`, value: 50 });
     const dry = await auth(request(app).post(`/api/admin/crossings/${CID}/reset-operational-data`));
     expect(dry.status).toBe(200);
     expect(dry.body.dryRun).toBe(true);
-    expect(dry.body.runtime.before.reports).toBeGreaterThanOrEqual(1);
+    expect(dry.body.runtime.before.adminOverrides).toBeGreaterThanOrEqual(1);
   });
-  it('apply clears Gornji Varoš reports but NOT Maljevac', async () => {
-    await auth(request(app).post('/api/reports')).send({ crossingId: 'maljevac', direction: 'toBih', type: 'slow', waitMinutes: 60 });
+  it('apply clears Gornji Varoš operational data but NOT Maljevac', async () => {
+    await auth(request(app).post('/api/admin/overrides')).send({ key: `${CID}:toBih`, value: 50 });
+    await auth(request(app).post('/api/admin/overrides')).send({ key: 'maljevac:toBih', value: 60 });
     const applied = await auth(request(app).post(`/api/admin/crossings/${CID}/reset-operational-data`)).send({ apply: true });
     expect(applied.body.applied).toBe(true);
-    expect(applied.body.runtime.after.reports).toBe(0);
-    // Maljevac report survives.
-    const mal = await auth(request(app).get('/api/reports?crossingId=maljevac'));
-    expect(mal.body.reports.length).toBeGreaterThanOrEqual(1);
+    expect(applied.body.runtime.after.adminOverrides).toBe(0);
+    // Maljevac override survives — its own reset dry-run still counts it.
+    const mal = await auth(request(app).post('/api/admin/crossings/maljevac/reset-operational-data'));
+    expect(mal.body.runtime.before.adminOverrides).toBeGreaterThanOrEqual(1);
     expect(applied.body.preserved).toEqual(expect.arrayContaining(['borderflow_users', 'borderflow_camera_roi_configs']));
   });
   it('404 for an unknown crossing', async () => {

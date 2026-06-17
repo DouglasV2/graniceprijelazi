@@ -59,6 +59,21 @@ describe('live-location session lifecycle', () => {
     expect(JSON.stringify(status.body)).not.toMatch(/"lat"|"lng"|trail/);
   });
 
+  it('direction:"auto" resolves the crossing direction from the first fix', async () => {
+    if (!fence) return;
+    const sessionRes = await request(app).post('/api/location-wait/session').send({ crossingId: fence.crossingId, direction: 'auto' });
+    expect(sessionRes.status).toBe(201);
+    expect(sessionRes.body.armed).toBe(true);
+    const sessionId = sessionRes.body.sessionId;
+    // The first usable fix at the approach (queue-join) zone resolves the direction (nearest
+    // approachStart side) AND activates — the client never had to know which way it was crossing.
+    const activate = await request(app).post('/api/location-wait/ping').send({ sessionId, lat: fence.approach.lat, lng: fence.approach.lng, accuracyM: 25 });
+    expect(activate.body.status).toBe('active');
+    const complete = await request(app).post('/api/location-wait/ping').send({ sessionId, lat: fence.exit.lat, lng: fence.exit.lng, accuracyM: 25 });
+    expect(complete.body.status).toBe('completed');
+    expect(Number.isFinite(complete.body.measuredWaitMin)).toBe(true);
+  });
+
   it('rejects a low-accuracy fix (stays pending)', async () => {
     if (!fence) return;
     // Use the opposite direction for a fresh session hash bucket.

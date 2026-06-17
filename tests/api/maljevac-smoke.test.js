@@ -23,7 +23,7 @@ describe('Maljevac production smoke', () => {
     const mal = (res.body.crossings || []).find((c) => c.id === 'maljevac');
     expect(mal).toBeTruthy();
     expect(Array.isArray(mal.cameras)).toBe(true);
-    expect(typeof mal.locationWaitArmed).toBe('boolean'); // false here (flag off in CI) — must not crash
+    expect(typeof mal.locationWaitArmed).toBe('boolean'); // ON by default + Maljevac has anchors → true; assert the shape
     expect(findIllegalJsonValue(res.body, '$')).toBeNull();
   });
 

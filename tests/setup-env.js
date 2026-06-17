@@ -14,3 +14,10 @@ process.env.GOOGLE_MAPS_SERVER_KEY = '';
 process.env.GOOGLE_MAPS_API_KEY = '';
 // Block any real outbound HTTP from the server during tests.
 process.env.DATABASE_URL = '';
+// Pin the seeded admin/demo identities so the JSON store is seeded deterministically,
+// regardless of the developer's shell/.env. Tests sign tokens for admin@borderflow.app,
+// so the seed MUST use that address (a shell BORDERFLOW_ADMIN_EMAIL would otherwise break auth).
+process.env.BORDERFLOW_ADMIN_EMAIL = 'admin@borderflow.app';
+process.env.BORDERFLOW_ADMIN_PASSWORD = 'change-this-admin-password';
+process.env.BORDERFLOW_DEMO_USER_EMAIL = 'user@borderflow.app';
+process.env.BORDERFLOW_DEMO_USER_PASSWORD = 'change-this-user-password';
