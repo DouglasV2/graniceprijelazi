@@ -27,7 +27,7 @@ export const STATIC_ROI_CONFIGS = {
       [{ x: 0.00, y: 0.55 }, { x: 0.28, y: 0.55 }, { x: 0.33, y: 1.00 }, { x: 0.00, y: 1.00 }],
       [{ x: 0.74, y: 0.30 }, { x: 1.00, y: 0.28 }, { x: 1.00, y: 0.75 }, { x: 0.82, y: 0.68 }],
     ],
-    lanePolygons: [], cameraReliability: 0.62, nightReliability: 0.42, isActive: true, metadata: { seededFrom: '2026-06-04 screenshot', needsEditorReview: true },
+    lanePolygons: [], cameraReliability: 0.62, nightReliability: 0.42, isActive: true, metadata: { reviewedFrom: '2026-06-18 live frame — toHr queue confirmed in central lane' },
   },
   'mal-hak-hr-exit': {
     cameraId: 'mal-hak-hr-exit', crossingId: 'maljevac', direction: 'toBih', roiVersion: '2026-06-production-seed-1',
@@ -41,28 +41,38 @@ export const STATIC_ROI_CONFIGS = {
     lanePolygons: [], cameraReliability: 0.64, nightReliability: 0.43, isActive: true, metadata: { seededFrom: '2026-06-04 screenshot', needsEditorReview: true },
   },
   'gv-hak-queue-9': {
-    cameraId: 'gv-hak-queue-9', crossingId: 'gornji-varos', direction: 'toHr', roiVersion: '2026-06-production-seed-1',
+    cameraId: 'gv-hak-queue-9', crossingId: 'gornji-varos', direction: 'toHr', roiVersion: '2026-06-18-left-lane-estimate',
     queuePolygon: [
-      { x: 0.06, y: 0.18 }, { x: 0.88, y: 0.18 }, { x: 0.88, y: 0.86 }, { x: 0.06, y: 0.86 },
+      { x: 0.06, y: 0.22 }, { x: 0.46, y: 0.22 }, { x: 0.40, y: 0.86 }, { x: 0.04, y: 0.86 },
     ],
     ignorePolygons: [],
-    lanePolygons: [
-      [{ x: 0.07, y: 0.25 }, { x: 0.45, y: 0.25 }, { x: 0.45, y: 0.82 }, { x: 0.07, y: 0.82 }],
-      [{ x: 0.42, y: 0.24 }, { x: 0.72, y: 0.24 }, { x: 0.72, y: 0.79 }, { x: 0.42, y: 0.79 }],
-    ],
-    cameraReliability: 0.72, nightReliability: 0.48, isActive: true, metadata: { seededFrom: 'legacy calibration rect', needsEditorReview: true },
+    lanePolygons: [],
+    cameraReliability: 0.72, nightReliability: 0.48, isActive: true, metadata: { seededFrom: 'legacy whole-frame rect replaced with toHr left-lane estimate 2026-06-18', needsEditorReview: true },
   },
   'gv-hak-plaza-4': {
-    cameraId: 'gv-hak-plaza-4', crossingId: 'gornji-varos', direction: 'toHr', roiVersion: '2026-06-production-seed-1',
+    cameraId: 'gv-hak-plaza-4', crossingId: 'gornji-varos', direction: 'toHr', roiVersion: '2026-06-18-reviewed',
     queuePolygon: [
-      { x: 0.08, y: 0.18 }, { x: 0.90, y: 0.18 }, { x: 0.90, y: 0.88 }, { x: 0.08, y: 0.88 },
+      { x: 0.05, y: 0.25 }, { x: 0.42, y: 0.23 }, { x: 0.30, y: 0.90 }, { x: 0.00, y: 0.84 },
     ],
     ignorePolygons: [],
-    lanePolygons: [
-      [{ x: 0.09, y: 0.28 }, { x: 0.44, y: 0.28 }, { x: 0.44, y: 0.82 }, { x: 0.09, y: 0.82 }],
-      [{ x: 0.44, y: 0.22 }, { x: 0.72, y: 0.22 }, { x: 0.72, y: 0.80 }, { x: 0.44, y: 0.80 }],
+    lanePolygons: [],
+    cameraReliability: 0.72, nightReliability: 0.48, isActive: true, metadata: { reviewedFrom: '2026-06-18 live frame — toHr queue in LEFT lanes (legacy whole-frame rect replaced)' },
+  },
+  'gra-rs-in': {
+    cameraId: 'gra-rs-in', crossingId: 'gradiska', direction: 'toBih', roiVersion: '2026-06-18-reviewed',
+    queuePolygon: [
+      { x: 0.55, y: 0.10 }, { x: 0.85, y: 0.10 }, { x: 0.96, y: 0.98 }, { x: 0.60, y: 1.00 },
     ],
-    cameraReliability: 0.72, nightReliability: 0.48, isActive: true, metadata: { seededFrom: 'legacy calibration rect', needsEditorReview: true },
+    ignorePolygons: [], lanePolygons: [], cameraReliability: 0.66, nightReliability: 0.45, isActive: true,
+    metadata: { reviewedFrom: '2026-06-18 live frame — toBih queue in RIGHT lane' },
+  },
+  'gra-rs-out': {
+    cameraId: 'gra-rs-out', crossingId: 'gradiska', direction: 'toHr', roiVersion: '2026-06-18-estimate',
+    queuePolygon: [
+      { x: 0.45, y: 0.10 }, { x: 0.70, y: 0.10 }, { x: 0.80, y: 0.75 }, { x: 0.40, y: 0.78 },
+    ],
+    ignorePolygons: [], lanePolygons: [], cameraReliability: 0.66, nightReliability: 0.45, isActive: true,
+    metadata: { seededFrom: '2026-06-18 estimate — through lanes empty at review; verify in editor', needsEditorReview: true },
   },
 };
 

@@ -76,9 +76,10 @@ describe('GET /api/admin/camera/audit', () => {
   });
 
   it('a camera WITH a direction but NO queue ROI is still not wait-capable (spec §5)', async () => {
-    // maljevac mal-hak-hr-entry has validForDirections=[toHr] but no calibrated ROI.
-    const res = await auth(request(app).get('/api/admin/camera/audit').query({ crossingId: 'maljevac', direction: 'toHr' }));
-    const entry = res.body.cameras.find((c) => c.cameraId === 'mal-hak-hr-entry');
+    // maljevac mal-hak-hr-exit has validForDirections=[toBih] but its seed ROI is still
+    // needsEditorReview (not a reviewed/trusted queue ROI) → must not be wait-capable.
+    const res = await auth(request(app).get('/api/admin/camera/audit').query({ crossingId: 'maljevac', direction: 'toBih' }));
+    const entry = res.body.cameras.find((c) => c.cameraId === 'mal-hak-hr-exit');
     expect(entry.hasQueueRoi).toBe(false);
     expect(entry.waitCapable).toBe(false);
     expect(entry.warnings).toContain('missing_queue_roi');
