@@ -37,13 +37,26 @@ whole-frame occupancyja (asfalt/rampe/oba smjera → šum). Zato je 86% framova 
 | Gradiška | `gra-rs-in` | toBih | inline laneProfiles, nema editor-poligona | nacrtaj queue poligon; spremi |
 | Gradiška | `gra-rs-out` | toHr | inline laneProfiles, nema editor-poligona | nacrtaj queue poligon; spremi |
 
-### Prioritet 2 — direkcijske HAK kamere bez ROI-a (poligon ih čini lane-točnima)
-| Prijelaz | Kamere |
-|---|---|
-| Bijača | `bij-hak-ulaz-hr` (toHr), `bij-hak-izlaz-hr` (toBih) |
-| Brod | `bro-hak-sb-ulaz-hr` (toHr), `bro-hak-sb-izlaz-hr` (toBih), `bro-hak-bb-ulaz-hr` (toHr), `bro-hak-bb-izlaz-hr` (toBih) |
-| Crveni Grm | `cg-hak-bih` (toBih) |
-| Izačić | `iza-hak-bih` |
+### Prioritet 2 — status nakon pregleda 2026-06-18 (live danji frameovi)
+| Prijelaz | Kamera | Smjer | Stanje |
+|---|---|---|---|
+| Bijača | `bij-hak-ulaz-hr` | toHr | ✅ reviewed — kolona vidljiva u central. trakama → roiTrusted |
+| Bijača | `bij-hak-izlaz-hr` | toBih | ✅ reviewed — kolona u lijevoj dijagonalnoj traci → roiTrusted |
+| Brod (SB) | `bro-hak-sb-ulaz-hr` | toHr | ⚠️ flagged poligon (prazne trake; označeni parking isključen) — provjeri u editoru s kolonom |
+| Brod (SB) | `bro-hak-sb-izlaz-hr` | toBih | ostavljen rect-derived (frame prazan, nema parkinga za isključiti) |
+| Brod (BB) | `bro-hak-bb-ulaz-hr` | **toBih** (ispravljeno) | smjer bio OBRNUT u configu — frame je "Ulaz u BiH". `validForDirections` pinned; ROI tek nakon potvrde uživo |
+| Brod (BB) | `bro-hak-bb-izlaz-hr` | **toHr** (ispravljeno) | smjer bio OBRNUT — frame je "Izlaz iz BiH". `validForDirections` pinned |
+| Crveni Grm | `cg-hak-bih` | visual-only | ⚠️ flagged poligon (cesta prazna; cestovni parking isključen) |
+| Izačić | `iza-hak-bih` | visual-only | ⚠️ flagged poligon (kolona u lijevim trakama; prazne desne isključene) |
+
+**Brod BB smjer-bug (ispravljeno 2026-06-18):** HAK oznake za GP Bosanski Brod (k=184) bile su obrnute u
+odnosu na BIHAMK natpis utisnut u sliku — `402.jpg` = "Izlaz iz BiH" (→ toHr), `403.jpg` = "Ulaz u BiH"
+(→ toBih). Bez ispravka je kolona u smjeru BiH curila u **HR** prikaz. Pinned `validForDirections` u
+`CAMERA_FEEDS` (`server/index.js`). ID sufiksi (`izlaz-hr`/`ulaz-hr`) ostaju legacy/varljivi — ne mijenjaju
+se jer su ključevi za ROI/testove.
+
+> "flagged" = poligon postoji i sužava brojanje na traku (manje lažnih "gužva"), ali `needsEditorReview` →
+> NIJE `roiTrusted` (nema prava na visoku pouzdanost dok ga operater ne potvrdi nad kadrom s kolonom).
 
 ### Prioritet 3 — jednosmjerne/višeslikovne HAK stranice (provjeri smjer u editoru pri crtanju)
 `ora-hak-bih`, `sam-hak`, `svi-hak`, `kam-hak`, `pri-hak-arzano`, `pri-hak-bih`, `vd-hak`, `vg-hak`,

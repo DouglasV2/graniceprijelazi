@@ -74,6 +74,67 @@ export const STATIC_ROI_CONFIGS = {
     ignorePolygons: [], lanePolygons: [], cameraReliability: 0.66, nightReliability: 0.45, isActive: true,
     metadata: { seededFrom: '2026-06-18 estimate — through lanes empty at review; verify in editor', needsEditorReview: true },
   },
+  // ── Bijača / GP Nova Sela (HAK 201/202) — reviewed against live daytime frames WITH a queue ───
+  'bij-hak-ulaz-hr': {
+    cameraId: 'bij-hak-ulaz-hr', crossingId: 'bijaca', direction: 'toHr', roiVersion: '2026-06-18-reviewed',
+    queuePolygon: [
+      { x: 0.28, y: 0.30 }, { x: 0.74, y: 0.29 }, { x: 0.90, y: 0.80 }, { x: 0.40, y: 0.84 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.00, y: 0.24 }, { x: 0.18, y: 0.24 }, { x: 0.20, y: 0.52 }, { x: 0.00, y: 0.54 }],
+      [{ x: 0.86, y: 0.24 }, { x: 1.00, y: 0.24 }, { x: 1.00, y: 0.62 }, { x: 0.84, y: 0.56 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.66, nightReliability: 0.45, isActive: true,
+    metadata: { reviewedFrom: '2026-06-18 live frame — toHr queue in central lanes; left parking + right shoulder ignored' },
+  },
+  'bij-hak-izlaz-hr': {
+    cameraId: 'bij-hak-izlaz-hr', crossingId: 'bijaca', direction: 'toBih', roiVersion: '2026-06-18-reviewed',
+    queuePolygon: [
+      { x: 0.40, y: 0.30 }, { x: 0.60, y: 0.33 }, { x: 0.40, y: 0.85 }, { x: 0.08, y: 0.78 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.66, y: 0.10 }, { x: 1.00, y: 0.10 }, { x: 1.00, y: 0.70 }, { x: 0.66, y: 0.55 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.64, nightReliability: 0.44, isActive: true,
+    metadata: { reviewedFrom: '2026-06-18 live frame — toBih queue in left diagonal lane; right opposite-direction road ignored' },
+  },
+  // ── Slavonski Brod · ulaz u HR (HAK 195) — flagged: central approach lane, marked parking excluded ──
+  'bro-hak-sb-ulaz-hr': {
+    cameraId: 'bro-hak-sb-ulaz-hr', crossingId: 'brod', direction: 'toHr', roiVersion: '2026-06-18-estimate',
+    queuePolygon: [
+      { x: 0.34, y: 0.18 }, { x: 0.60, y: 0.16 }, { x: 0.72, y: 0.80 }, { x: 0.40, y: 0.86 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.00, y: 0.18 }, { x: 0.32, y: 0.18 }, { x: 0.30, y: 0.55 }, { x: 0.00, y: 0.58 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.62, nightReliability: 0.42, isActive: true,
+    metadata: { seededFrom: '2026-06-18 estimate — near lanes empty at review, marked parking excluded; verify in editor', needsEditorReview: true },
+  },
+  // ── Visual-only HAK frames (direction unprovable from label) — ROI only sharpens the visual count;
+  //    these never drive a directional wait (validForDirections=[]), it just keeps parked / opposite
+  //    vehicles out of the band so the camera does not over-report "gužva".
+  'iza-hak-bih': {
+    cameraId: 'iza-hak-bih', crossingId: 'izacic', direction: 'toBih', roiVersion: '2026-06-18-estimate',
+    queuePolygon: [
+      { x: 0.00, y: 0.28 }, { x: 0.60, y: 0.12 }, { x: 0.66, y: 0.20 }, { x: 0.05, y: 0.48 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.66, y: 0.15 }, { x: 1.00, y: 0.15 }, { x: 1.00, y: 0.70 }, { x: 0.66, y: 0.55 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.55, nightReliability: 0.38, isActive: true,
+    metadata: { seededFrom: '2026-06-18 live frame — queue band in left/centre lanes, empty right lanes ignored. Visual-only (direction unproven) → count signal only', needsEditorReview: true },
+  },
+  'cg-hak-bih': {
+    cameraId: 'cg-hak-bih', crossingId: 'crveni-grm', direction: 'toBih', roiVersion: '2026-06-18-estimate',
+    queuePolygon: [
+      { x: 0.20, y: 0.95 }, { x: 0.64, y: 0.92 }, { x: 0.60, y: 0.28 }, { x: 0.30, y: 0.24 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.00, y: 0.20 }, { x: 0.18, y: 0.20 }, { x: 0.18, y: 0.62 }, { x: 0.00, y: 0.66 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.55, nightReliability: 0.38, isActive: true,
+    metadata: { seededFrom: '2026-06-18 estimate — road empty at review, left roadside parking excluded. Visual-only (direction unproven); verify in editor', needsEditorReview: true },
+  },
 };
 
 // DB-backed configs (postgres mode) are loaded once at startup + after each save into this sync
