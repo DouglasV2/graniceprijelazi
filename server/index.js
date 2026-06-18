@@ -1417,6 +1417,22 @@ function cameraHasQueueRoi(camera = {}) {
   return Boolean(cal.roi || cal.queueAnchor || (Array.isArray(cal.laneZones) && cal.laneZones.length));
 }
 
+// Reporting/display notion of "has a usable queue ROI": legacy rect calibration OR a TRUSTED ROI-v2
+// polygon (committed/DB config that is active, not rect-derived, and not flagged needsEditorReview —
+// the same trust test as roiTrusted in computeRoiCameraFeatures). Used ONLY by the audit / cv-readiness
+// surfaces so an ROI-v2 camera no longer reads "missing-config". The hard-wait raw-injection gate
+// (waitDrivingRows) and roiCalibrated deliberately stay on the stricter cameraHasQueueRoi: an ROI-v2
+// polygon never silently injects a raw camera wait — it already drives the band, congestion floor and
+// calibration. Mirrors the roiTrusted check (traffic-vision-roi.js): metadata.needsEditorReview.
+function cameraHasTrustedQueueRoi(camera = {}) {
+  if (cameraHasQueueRoi(camera)) return true;
+  if (!YOLO_ROI_V2_ENABLED || !YOLO_ROI_CONFIG_ENABLED) return false;
+  const cfg = getRoiConfig(camera.id);
+  if (!cfg || cfg.isActive === false) return false;
+  if (!Array.isArray(cfg.queuePolygon) || cfg.queuePolygon.length < 3) return false;
+  return Boolean(cfg.roiVersion) && !cfg.derivedFromRect && !(cfg.metadata && cfg.metadata.needsEditorReview);
+}
+
 // A camera is RELEVANT to a direction for DISPLAY (band, vehicle mix) when it either has no
 // declared direction (ambiguous — could show either side) or is explicitly valid for it. A
 // camera declared ONLY for the opposite direction must NOT bleed its queue into this direction
@@ -4499,7 +4515,7 @@ app.get('/api/admin/cv-readiness', authRequired, adminRequired, async (req, res)
       }
       crossings.push({
         crossingId: id,
-        cameras: feeds.map((c) => ({ cameraId: c.id, imageUrl: (c.imageUrls && c.imageUrls[0]) || c.url || null, roiExists: cameraHasQueueRoi(c), validForDirections: c.validForDirections || [] })),
+        cameras: feeds.map((c) => ({ cameraId: c.id, imageUrl: (c.imageUrls && c.imageUrls[0]) || c.url || null, roiExists: cameraHasTrustedQueueRoi(c), validForDirections: c.validForDirections || [] })),
         directions,
       });
     }
@@ -5824,7 +5840,7 @@ async function buildCameraAudit({ crossingId = null, direction = null, includeSn
       for (const camera of feeds) {
         const snap = snapByCam.get(camera.id) || null;
         const cal = camera.calibration || {};
-        const hasQueueRoi = cameraHasQueueRoi(camera);
+        const hasQueueRoi = cameraHasTrustedQueueRoi(camera);
         const hasCountLine = Boolean(cal.countLine);
         const hasIgnoreZones = Boolean(cal.ignoreZones && cal.ignoreZones.length);
         const directionDeclared = Array.isArray(camera.validForDirections) && camera.validForDirections.length > 0;
