@@ -154,6 +154,14 @@ describe('queue bands', () => {
     expect(b.band).toBe('srednja');
     expect(b.band).not.toBe('mala');
   });
+  it('but a REAL CV count of ~0 (cvCounted) is believed — high whole-frame occupancy must NOT fake a queue', () => {
+    // Same frame, but a CV detector actually ran and counted 0 vehicles. Without a lane ROI the
+    // whole-frame occupancy reads high on open HAK frames; it must not invent a "srednja" queue
+    // across crossings that are in fact empty (the false-congestion fix).
+    const b = classifyQueueBand({ occupancyPct: 65, laneFullnessPct: 80, queueVehicles: 0, visibleVehicles: 0, confidence: 55, cvCounted: true });
+    expect(b.band).toBe('mala');
+    expect(b.band).not.toBe('srednja');
+  });
   it('but wet-asphalt pixel noise (low occupancy, high laneFullness, ~no cars) still stays mala/nema', () => {
     const b = classifyQueueBand({ occupancyPct: 8, laneFullnessPct: 99, queueVehicles: 0, visibleVehicles: 0, confidence: 60 });
     expect(['nema', 'mala']).toContain(b.band);

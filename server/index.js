@@ -1740,26 +1740,6 @@ function recomputeCalibrationModels() {
   calibrationModelsAt = Date.now();
   return calibrationModelsCache;
 }
-// Feed a ground-truth observation (measured OR driver report) into the calibration stream: pair the
-// observed wait with the most-recent TRUSTED camera count for that crossing+direction. Reports come
-// in tagged source 'driver-report' (lower trust); measured/verified keep their stronger source.
-function recordCalibrationGroundTruth({ crossingId, direction, actualWait, source }) {
-  if (!Number.isFinite(Number(actualWait))) return false;
-  const since = Date.now() - 120 * 60 * 1000; // pair with a count seen in the last ~2h
-  const recent = predictionAccuracyBuffer.find((r) => r.crossingId === crossingId && r.direction === direction
-    && new Date(r.predictedAt).getTime() >= since
-    && r.sourceMix && r.sourceMix.cameraRoiTrusted && Number.isFinite(Number(r.sourceMix.cameraVehiclesInQueueRoi)));
-  if (!recent) return false;
-  recordResolvedAccuracy({
-    crossingId,
-    direction,
-    predictedWait: Number(recent.predictedWait),
-    actualWait: Number(actualWait),
-    sourceMix: { cameraVehiclesInQueueRoi: Number(recent.sourceMix.cameraVehiclesInQueueRoi), cameraRoiTrusted: true },
-    source: source || 'driver-report',
-  });
-  return true;
-}
 function getCalibrationModel(crossingId, direction) {
   if (Date.now() - calibrationModelsAt > 5 * 60 * 1000) recomputeCalibrationModels();
   return calibrationModelsCache[calibrationKey(crossingId, direction)] || null;
@@ -3791,7 +3771,7 @@ async function effectiveBorderSignal(crossing, direction = 'toBih', vehicle = 'c
     precision: 'unknown',
     explanation: 'Trenutno nema dovoljno podataka za pouzdanu procjenu ovog smjera.',
     displayReady: false,
-    note: 'Još nema svježeg javnog izvora, kamere, dojave ili potvrde tima za ovaj prijelaz. Čekanje će se prikazati čim stigne pouzdan signal.',
+    note: 'Još nema svježeg javnog izvora, kamere, izmjerenog prelaska ili potvrde tima za ovaj prijelaz. Čekanje će se prikazati čim stigne pouzdan signal.',
     signals: latestSources,
     updatedAt: new Date().toISOString(),
   };
@@ -8346,6 +8326,9 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
         visibleVehicles: r.visibleVehicles ?? r.metadata?.visibleVehicles ?? r.visibleTotal,
         confidence: r.confidence ?? 55,
         stale: r.stale || r.metadata?.stale,
+        // Trust a real CV count this cycle: a low YOLO read is not "detector failed", so whole-frame
+        // occupancy must not fake a "srednja" queue on an empty border (the false-congestion fix).
+        cvCounted: cvSummary.cvUsed,
       });
       const idx = QUEUE_BANDS.indexOf(info.band);
       if (idx > worstIdx) { worstIdx = idx; worst = info; }
@@ -8425,6 +8408,7 @@ async function buildCameraAnalyticsPayload(crossingId, direction = 'toBih', opti
         const camera = feedById.get(item.cameraId);
         const snapshotAgeSec = item.fetchedAt ? Math.max(0, Math.round((Date.now() - new Date(item.fetchedAt).getTime()) / 1000)) : null;
         const analysis = buildCameraAnalysis({
+          cvCounted: cvSummary.cvUsed,
           visibleTotal: item.visibleTotal,
           queueVehicles: item.queueVehicles,
           occupancyPct: item.metadata?.occupancyPct ?? item.occupancyPct ?? 0,

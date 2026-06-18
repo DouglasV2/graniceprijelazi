@@ -473,7 +473,7 @@ export function cameraYoloEligibility(camera = {}, direction = null, runtime = {
 // degrades gracefully (caps at "srednja") when the frame is stale or low-confidence.
 export const QUEUE_BANDS = Object.freeze(['nema', 'mala', 'srednja', 'velika', 'ekstremna']);
 
-export function classifyQueueBand({ occupancyPct = 0, laneFullnessPct = 0, queueVehicles = 0, visibleVehicles = null, confidence = 60, stale = false } = {}) {
+export function classifyQueueBand({ occupancyPct = 0, laneFullnessPct = 0, queueVehicles = 0, visibleVehicles = null, confidence = 60, stale = false, cvCounted = false } = {}) {
   const fullness = Math.max(Number(occupancyPct) || 0, Number(laneFullnessPct) || 0);
   const q = Number(queueVehicles) || 0;
   let band;
@@ -500,9 +500,12 @@ export function classifyQueueBand({ occupancyPct = 0, laneFullnessPct = 0, queue
   // of an empty lane, so we must not cap down to a confident "mala". Treat it as a POSSIBLE queue
   // (srednja) so a visibly busy lane can never collapse to "do 5 min". Note this keys on real
   // occupancyPct, NOT laneFullnessPct, so wet-asphalt/shadow pixel noise (low occupancy, high
-  // fullness) still stays "mala" — preserving the earlier false-positive fix.
+  // fullness) still stays "mala" — preserving the earlier false-positive fix. CRITICAL: this is a
+  // FALLBACK for when no detector ran. If a CV detector actually counted this cycle (cvCounted), a
+  // low count is REAL — believe it. Otherwise whole-frame occupancy (no ROI) reads ≥40% on most open
+  // HAK frames and would fake a "srednja" queue across crossings that are in fact empty.
   const occ = Number(occupancyPct) || 0;
-  if (cap === 'mala' && occ >= 40 && !stale) cap = 'srednja';
+  if (cap === 'mala' && occ >= 40 && !stale && !cvCounted) cap = 'srednja';
   if (QUEUE_BANDS.indexOf(band) > QUEUE_BANDS.indexOf(cap)) band = cap;
 
   // An unreliable frame must not scream "ekstremna". Cap the claim.
@@ -667,7 +670,9 @@ export function buildCameraAnalysis(raw = {}) {
   const queueVehicles = round(raw.queueVehicles ?? 0);
   const stale = Boolean(raw.stale);
   const confidence = round(clamp(raw.confidence ?? 55, 0, 100));
-  const bandInfo = classifyQueueBand({ occupancyPct, laneFullnessPct, queueVehicles, visibleVehicles: raw.visibleVehicles ?? raw.visibleTotal, confidence, stale });
+  // A real CV detector count makes a low number trustworthy (not "detector failed → maybe a queue").
+  const cvCounted = Boolean(raw.cvCounted) || ['cv-detector', 'cv-detector-calibrated', 'camera-ingest'].includes(String(raw.source || ''));
+  const bandInfo = classifyQueueBand({ occupancyPct, laneFullnessPct, queueVehicles, visibleVehicles: raw.visibleVehicles ?? raw.visibleTotal, confidence, stale, cvCounted });
   // A camera that is stale or low-confidence must NOT emit an aggressive minute
   // estimate — it can still report a qualitative band. visualOnly never emits wait.
   const reliable = !stale && confidence >= 45 && !raw.visualOnly;
