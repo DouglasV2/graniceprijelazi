@@ -58,12 +58,22 @@ se jer su ključevi za ROI/testove.
 > "flagged" = poligon postoji i sužava brojanje na traku (manje lažnih "gužva"), ali `needsEditorReview` →
 > NIJE `roiTrusted` (nema prava na visoku pouzdanost dok ga operater ne potvrdi nad kadrom s kolonom).
 
-### Prioritet 3 — jednosmjerne/višeslikovne HAK stranice (provjeri smjer u editoru pri crtanju)
-`ora-hak-bih`, `sam-hak`, `svi-hak`, `kam-hak`, `pri-hak-arzano`, `pri-hak-bih`, `vd-hak`, `vg-hak`,
-`gra-hak-page`
+### Prioritet 3 — status nakon pregleda 2026-06-18 (SVE su VISUAL-ONLY → ROI samo čisti vizualni count, ne pokreće smjer/wait)
+| Kamera | Stanje |
+|---|---|
+| `ora-hak-bih` | ⚠️ flagged — TIR kolona u lijevoj traci; otvorene desne trake isključene |
+| `kam-hak` | ⚠️ flagged — TIR kolona lijevo; otvoreni centar/desno isključeni (multi-image, primary 317.jpg) |
+| `vd-hak` | ⚠️ flagged — toBih kolona u desnoj traci; prazne lijeve isključene (multi-image, primary 302.jpg) |
+| `svi-hak` | ⚠️ flagged — kratka toBih kolona lijevo; prazna desna strana isključena |
+| `sam-hak` | prazan prilaz + parkirani TIR-ovi (staging) — nije bakeano |
+| `pri-hak-arzano` | prazna cesta — nije bakeano |
+| `pri-hak-bih` | prazna seoska cesta — nije bakeano |
+| `vg-hak` | prazan plato (1 auto u prolazu) — nije bakeano |
+| `gra-hak-page` | ⚠️ slika (404.jpg) je zapravo **Bugojno** (~150 km u unutrašnjosti), NE granica Gradiška → nije za queue-ROI; provjeri mapiranje slike |
 
 ### Preskoči / zasebno provjeri
-- `ora-hak-zupanja` — kamera djeluje offline (provjeri prvo da uopće daje sliku).
+- `ora-hak-zupanja` — **NIJE offline** (live, ~5 vozila među čunjevima). Ostavljen bez ROI-a: čunjevi
+  prerasporedjuju trake → traka je dvosmislena iz jednog kadra (radije editor uživo).
 - BIHAMK iframe izvori (`bij-bihamk-page`, `iza-bihamk`, `kam-bihamk`, `pri-bihamk`, `cg-bihamk`,
   `bro-bihamk`, `ora-amsbih`) — to su **stranice/iframe**, ne direktni frameovi → nisu za queue-ROI
   (ostaju vizualni/tekstualni izvor).

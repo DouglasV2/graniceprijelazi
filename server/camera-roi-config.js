@@ -135,6 +135,53 @@ export const STATIC_ROI_CONFIGS = {
     lanePolygons: [], cameraReliability: 0.55, nightReliability: 0.38, isActive: true,
     metadata: { seededFrom: '2026-06-18 estimate — road empty at review, left roadside parking excluded. Visual-only (direction unproven); verify in editor', needsEditorReview: true },
   },
+  // ── P3 visual-only HAK frames (no provable direction → NEVER drive a directional wait). ROI here
+  //    ONLY restricts the visual count to the queue lane so open/empty lanes + staging parking don't
+  //    inflate the band. All needsEditorReview (single-frame estimate; kam/vd rotate frames).
+  'ora-hak-bih': {
+    cameraId: 'ora-hak-bih', crossingId: 'orasje', direction: 'toHr', roiVersion: '2026-06-18-estimate',
+    queuePolygon: [
+      { x: 0.05, y: 0.25 }, { x: 0.48, y: 0.25 }, { x: 0.30, y: 0.78 }, { x: 0.00, y: 0.68 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.52, y: 0.22 }, { x: 1.00, y: 0.22 }, { x: 1.00, y: 0.60 }, { x: 0.55, y: 0.50 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.55, nightReliability: 0.38, isActive: true,
+    metadata: { seededFrom: '2026-06-18 live frame — truck queue in left lane, open right lanes ignored. Visual-only', needsEditorReview: true },
+  },
+  'kam-hak': {
+    cameraId: 'kam-hak', crossingId: 'kamensko', direction: 'toHr', roiVersion: '2026-06-18-estimate',
+    queuePolygon: [
+      { x: 0.00, y: 0.16 }, { x: 0.54, y: 0.10 }, { x: 0.56, y: 0.22 }, { x: 0.00, y: 0.36 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.58, y: 0.10 }, { x: 1.00, y: 0.10 }, { x: 1.00, y: 0.45 }, { x: 0.60, y: 0.30 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.52, nightReliability: 0.36, isActive: true,
+    metadata: { seededFrom: '2026-06-18 live frame — truck queue along left lane, open centre/right ignored. Visual-only, multi-image (primary 317.jpg)', needsEditorReview: true },
+  },
+  'vd-hak': {
+    cameraId: 'vd-hak', crossingId: 'vinjani-donji', direction: 'toBih', roiVersion: '2026-06-18-estimate',
+    queuePolygon: [
+      { x: 0.56, y: 0.08 }, { x: 0.85, y: 0.06 }, { x: 1.00, y: 0.65 }, { x: 0.66, y: 0.80 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.00, y: 0.10 }, { x: 0.52, y: 0.10 }, { x: 0.52, y: 0.85 }, { x: 0.00, y: 0.85 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.55, nightReliability: 0.38, isActive: true,
+    metadata: { seededFrom: '2026-06-18 live frame — toBih car queue in right lane, empty left lanes ignored. Visual-only, multi-image (primary 302.jpg)', needsEditorReview: true },
+  },
+  'svi-hak': {
+    cameraId: 'svi-hak', crossingId: 'svilaj', direction: 'toBih', roiVersion: '2026-06-18-estimate',
+    queuePolygon: [
+      { x: 0.00, y: 0.42 }, { x: 0.45, y: 0.40 }, { x: 0.48, y: 0.96 }, { x: 0.00, y: 0.98 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.55, y: 0.10 }, { x: 1.00, y: 0.10 }, { x: 1.00, y: 0.95 }, { x: 0.58, y: 0.95 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.55, nightReliability: 0.38, isActive: true,
+    metadata: { seededFrom: '2026-06-18 live frame — short toBih queue in left lane, empty right side ignored. Visual-only', needsEditorReview: true },
+  },
 };
 
 // DB-backed configs (postgres mode) are loaded once at startup + after each save into this sync
