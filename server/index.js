@@ -5773,6 +5773,13 @@ app.get('/api/debug/route-traffic/:crossingId', authRequired, adminRequired, asy
       smallestSegmentPathLength: segs.length ? Math.min(...segs.map((s) => (s.path || []).length)) : 0,
       routeSource: normalized.source,
       usedFallbackRoute: false,
+      // Display-geometry diagnostics: which corridor the map actually draws + its shape (so we can tell
+      // a road-following Google slice from a baked road corridor from the straight emergency fallback).
+      displayGeometrySource: display.displayGeometrySource,
+      displayGeometryWarnings: display.displayGeometryWarnings || [],
+      displayZoneCrossesBorder: Boolean(display.displayZone?.crossesBorder),
+      displayPathPoints: (display.path || []).length,
+      displayPathPreview: (display.path || []).slice(0, 5).concat((display.path || []).slice(-3)),
       routeTrafficPreservedAfterSlicing: Boolean(display.trafficSummary?.trafficSegmentsPreservedAfterRouteGuard) || segs.length > 0,
       trafficAvailable: rawIntervals.length > 0,
       note: rawIntervals.length === 0
@@ -8851,44 +8858,42 @@ function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
   let displayGeometryWarnings = [];
   let usedFallbackCorridor = false;
 
-  // PREFER Google's REAL road-following polyline. Only fall back to a clean straight corridor when the
-  // Google geometry is genuinely BROKEN — doesn't cross the border, loops / U-turns, is too wiggly, or
-  // is a stub. The straight corridor is the emergency, never the default (a straight line that ignores
-  // the road is worse than a slightly short one).
-  const quality = validateDisplayPathQuality(displayPath, anchor, {
+  const gateOpts = {
     minSideMeters: dc?.minSideMeters || 300,
     minTotalMeters: dc?.minGoogleMeters || 900,
     maxWiggleRatio: dc?.maxWiggleRatio || 1.8,
     nearToleranceM: guard.passDistanceMeters ? Math.max(600, Number(guard.passDistanceMeters)) : 700,
     maxTurnDeg: dc?.maxTurnDeg || 150,
-  });
-  if (!displayPath.length || displayDistanceMeters <= 0 || !quality.ok) {
-    // 1) A committed road-following corridor (anchor.displayCorridorPath, e.g. baked from OSRM) is
-    //    preferred over the straight 3-point corridor — but only after passing the SAME quality gate,
-    //    so a stale/bad bake silently falls through to the calibrated straight corridor (no regression).
-    const baked = Array.isArray(anchor.displayCorridorPath)
-      ? anchor.displayCorridorPath.filter((p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lng))
-      : [];
-    const bakedOk = baked.length >= 2 && validateDisplayPathQuality(baked, anchor, {
-      minSideMeters: dc?.minSideMeters || 300,
-      minTotalMeters: dc?.minGoogleMeters || 900,
-      maxWiggleRatio: dc?.maxWiggleRatio || 1.8,
-      nearToleranceM: guard.passDistanceMeters ? Math.max(600, Number(guard.passDistanceMeters)) : 700,
-      maxTurnDeg: dc?.maxTurnDeg || 150,
-    }).ok;
-    const corridor = bakedOk
-      ? baked
-      : dc
-        ? buildCalibratedCorridor(anchor, { minPerSideMeters: dc.fallbackPerSideMeters || 1100, maxPerSideMeters: dc.fallbackMaxPerSideMeters || 1700 })
-        : cleanAnchorCorridorPath(anchor);
+  };
+  // Geometry priority for the displayed control zone:
+  //  1) A committed road corridor (anchor.displayCorridorPath, baked from OSRM) is AUTHORITATIVE where
+  //     Google is known to wander off the main road (Izačić / Vinjani). Prefer it over Google whenever
+  //     it passes the quality gate — this is what the per-crossing "FORCED manual corridor" comments
+  //     always intended. The old code only used it as a fallback, so Google (which passes the gate at
+  //     these crossings) still won and drew the off-road line.
+  //  2) else Google's REAL road-following polyline (the default for every normal crossing).
+  //  3) else (Google broken: no-cross / loop / wiggle / stub) the clean straight calibrated corridor.
+  const quality = validateDisplayPathQuality(displayPath, anchor, gateOpts);
+  const baked = Array.isArray(anchor.displayCorridorPath)
+    ? anchor.displayCorridorPath.filter((p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lng))
+    : [];
+  const bakedOk = baked.length >= 2 && validateDisplayPathQuality(baked, anchor, gateOpts).ok;
+  if (bakedOk) {
+    displayPath = baked;
+    displayDistanceMeters = pathDistanceMeters(displayPath);
+    usedFallbackCorridor = true; // manual corridor → uniform traffic colour, not Google's per-segment
+    displayGeometrySource = 'baked-road-corridor';
+    slice = { startIndex: 0, endIndex: Math.max(0, (route.path || []).length - 1) };
+  } else if (!displayPath.length || displayDistanceMeters <= 0 || !quality.ok) {
+    const corridor = dc
+      ? buildCalibratedCorridor(anchor, { minPerSideMeters: dc.fallbackPerSideMeters || 1100, maxPerSideMeters: dc.fallbackMaxPerSideMeters || 1700 })
+      : cleanAnchorCorridorPath(anchor);
     if (corridor.length >= 2) {
       displayPath = corridor;
       displayDistanceMeters = pathDistanceMeters(displayPath);
       usedFallbackCorridor = true;
-      displayGeometrySource = bakedOk ? 'baked-road-corridor' : 'clean-anchor-corridor';
-      displayGeometryWarnings = bakedOk
-        ? []
-        : [`Google ruta nije bila uredna (${(quality.reasons || ['nije dostupna']).join(', ')}); prikazana je čista kalibrirana zona koja prelazi granicu.`];
+      displayGeometrySource = 'clean-anchor-corridor';
+      displayGeometryWarnings = [`Google ruta nije bila uredna (${(quality.reasons || ['nije dostupna']).join(', ')}); prikazana je čista kalibrirana zona koja prelazi granicu.`];
       slice = { startIndex: 0, endIndex: Math.max(0, (route.path || []).length - 1) };
     }
   }

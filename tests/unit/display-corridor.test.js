@@ -95,9 +95,12 @@ describe('makeMapFriendly PREFERS the road-following Google route', () => {
       const anchor = BORDER_CROSSINGS[id].anchors[direction];
       const route = { path: goodThroughPath(anchor), direction, distanceMeters: 5000, durationMinutes: 6, staticMinutes: 5, delayMinutes: 1, primary: true, speedReadingIntervals: [] };
       const out = makeMapFriendlyControlZoneRoute(route, anchor);
-      expect(out.displayGeometrySource).toBe('google-sliced-control-zone');
+      // Crossings with a committed road corridor (izacic, vinjani-gornji) prefer it over Google; the
+      // rest keep Google's road-following polyline. Either way it must be real multi-point road geometry
+      // that crosses the border — never the 3-point straight corridor.
+      const hasBaked = Array.isArray(anchor.displayCorridorPath) && anchor.displayCorridorPath.length >= 2;
+      expect(out.displayGeometrySource).toBe(hasBaked ? 'baked-road-corridor' : 'google-sliced-control-zone');
       expect(out.displayZone.crossesBorder).toBe(true);
-      // It kept the real (multi-point) road geometry, not a 3-point straight line.
       expect(out.path.length).toBeGreaterThan(3);
     });
   }
