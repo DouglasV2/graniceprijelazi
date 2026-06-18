@@ -941,7 +941,9 @@
 .traffic-focus-card{width:min(330px,calc(100% - 28px));max-height:min(62vh,460px);overflow-y:auto}
 .compact-route-summary{display:grid;gap:7px;margin-bottom:4px}
 .route-summary-primary{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px}
-.route-summary-primary span{color:var(--muted);font-size:11.5px;font-weight:850}
+/* Higher specificity than `.route-summary div span{flex:none}` so the long "Čekanje na granici · HR → …"
+   label can shrink + wrap instead of overflowing/clipping the card. */
+.route-summary .route-summary-primary span{color:var(--muted);font-size:11.5px;font-weight:850;flex:1 1 100%;min-width:0;white-space:normal;overflow-wrap:anywhere}
 .route-summary-primary b{font-size:21px;letter-spacing:-.04em;color:#102033}
 .route-summary-meta{display:flex;flex-wrap:wrap;gap:6px}
 .route-summary-meta .freshness-pill{padding:4px 8px;font-size:10.5px}

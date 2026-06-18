@@ -118,7 +118,10 @@ describe('makeMapFriendly falls back to a clean corridor ONLY when Google is bro
       const anchor = BORDER_CROSSINGS[id].anchors[direction];
       const route = { path: oneSidedStub(anchor), direction, distanceMeters: 500, durationMinutes: 2, staticMinutes: 2, delayMinutes: 0, primary: true, speedReadingIntervals: [] };
       const out = makeMapFriendlyControlZoneRoute(route, anchor);
-      expect(out.displayGeometrySource).toBe('clean-anchor-corridor');
+      // Crossings with a committed road corridor (OSRM-baked: izacic, vinjani-gornji) prefer it over
+      // the straight 3-point corridor when Google is broken. Both are clean + cross (asserted below).
+      const hasBaked = Array.isArray(anchor.displayCorridorPath) && anchor.displayCorridorPath.length >= 2;
+      expect(out.displayGeometrySource).toBe(hasBaked ? 'baked-road-corridor' : 'clean-anchor-corridor');
       expect(out.displayZone.crossesBorder).toBe(true);
       expect(out.distanceMeters).toBeGreaterThan(1800);
     });

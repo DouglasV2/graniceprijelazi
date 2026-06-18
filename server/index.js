@@ -1069,8 +1069,16 @@ function calibratedRouteGuard(overrides = {}) {
   return { ...DEFAULT_CALIBRATED_ROUTE_GUARD, ...overrides };
 }
 
-function calibratedAnchors({ hrLabel, bihLabel, approachHr, borderPoint, exitBih, guard = {}, labels = {} }) {
+function calibratedAnchors({ hrLabel, bihLabel, approachHr, borderPoint, exitBih, guard = {}, labels = {}, displayCorridorPath = null }) {
   const routeGuard = calibratedRouteGuard(guard);
+  // Optional committed road-following display corridor (points in HR-approach → BiH-exit order, e.g.
+  // baked from OSRM where Google + the straight 3-point corridor sat off the road). Stored as-is for
+  // toBih and reversed for toHr so each direction's path is already in approach→exit order. It is
+  // re-validated at render time, so a bad bake can never regress the map.
+  const corridor = Array.isArray(displayCorridorPath)
+    ? displayCorridorPath.filter((p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lng))
+    : null;
+  const corridorOk = corridor && corridor.length >= 2;
   return {
     toBih: {
       label: labels.toBih || 'HR → BiH',
@@ -1080,6 +1088,7 @@ function calibratedAnchors({ hrLabel, bihLabel, approachHr, borderPoint, exitBih
       borderPoint,
       exitPoint: exitBih,
       routeGuard,
+      displayCorridorPath: corridorOk ? corridor : null,
     },
     toHr: {
       label: labels.toHr || 'BiH → HR',
@@ -1089,6 +1098,7 @@ function calibratedAnchors({ hrLabel, bihLabel, approachHr, borderPoint, exitBih
       borderPoint,
       exitPoint: approachHr,
       routeGuard,
+      displayCorridorPath: corridorOk ? [...corridor].reverse() : null,
     },
   };
 }
@@ -1284,9 +1294,16 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       approachHr: { lat: 44.88194, lng: 15.75524 },
       borderPoint: { lat: 44.87558, lng: 15.76418 },
       exitBih: { lat: 44.86889, lng: 15.77159 },
-      // FORCED manual corridor: Google's polyline here loops/wiggles off the main road, so we never
-      // use it for the display geometry — only a clean calibrated corridor along the M5/Izačić road.
+      // Off-road before: Google loops/wiggles here and the straight 3-point corridor cut the road bend.
+      // displayCorridorPath = the real Izačić road (OSRM, trimmed ±1.6 km of the border, simplified);
+      // it is preferred when it passes the display-quality gate, else falls back to the straight corridor.
       guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1500, displayAfterMeters: 1500, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
+      displayCorridorPath: [
+        { lat: 44.87771, lng: 15.75212 }, { lat: 44.87713, lng: 15.75386 }, { lat: 44.87725, lng: 15.75822 },
+        { lat: 44.87678, lng: 15.76109 }, { lat: 44.87228, lng: 15.76915 }, { lat: 44.87232, lng: 15.76986 },
+        { lat: 44.87270, lng: 15.77025 }, { lat: 44.87421, lng: 15.76944 }, { lat: 44.87341, lng: 15.77238 },
+        { lat: 44.87235, lng: 15.77216 }, { lat: 44.86974, lng: 15.77019 }, { lat: 44.86888, lng: 15.77047 },
+      ],
     }),
     cameras: [
       // FIX: k=179 ("BIH Izačić") embeds cam.asp?id=407. Old 179.jpg = invalid-webcam placeholder.
@@ -1341,6 +1358,14 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       borderPoint: { lat: 43.42235, lng: 17.27500 },
       exitBih: { lat: 43.41692, lng: 17.28727 },
       guard: { maxCrossingDistanceKm: 7, hardMaxCrossingDistanceKm: 18, passDistanceMeters: 1000, displayBeforeMeters: 1500, displayAfterMeters: 1500 },
+      // Real Vinjani Donji road (OSRM, trimmed ±1.6 km, simplified) — preferred over the straight
+      // corridor when it passes the display-quality gate.
+      displayCorridorPath: [
+        { lat: 43.42784, lng: 17.26248 }, { lat: 43.42545, lng: 17.26118 }, { lat: 43.42503, lng: 17.26202 },
+        { lat: 43.42437, lng: 17.26506 }, { lat: 43.42296, lng: 17.26834 }, { lat: 43.42275, lng: 17.27166 },
+        { lat: 43.42126, lng: 17.28034 }, { lat: 43.42049, lng: 17.28211 }, { lat: 43.41830, lng: 17.28559 },
+        { lat: 43.41760, lng: 17.28771 }, { lat: 43.41691, lng: 17.28729 },
+      ],
     }),
     // FIX: k=39 ("Vinjani Donji") embeds cam.asp?id=302/303. Old 39.jpg = invalid-webcam placeholder.
     cameras: [{ id: 'vd-hak', label: 'Vinjani Donji', url: 'https://m.hak.hr/kamera.asp?g=2&k=39', imageUrls: ['https://www.hak.hr/info/kamere/302.jpg', 'https://www.hak.hr/info/kamere/303.jpg'] }],
@@ -1363,9 +1388,17 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       approachHr: { lat: 43.46348, lng: 17.27407 },
       borderPoint: { lat: 43.45945, lng: 17.28610 },
       exitBih: { lat: 43.45549, lng: 17.29809 },
-      // FORCED manual corridor: Google often returns a one-sided / non-crossing polyline here, so the
-      // clean calibrated corridor (HR approach → border → BiH exit) is always used for the display.
+      // Off-road before: Google often returned a one-sided / non-crossing polyline and the straight
+      // corridor cut the bend. displayCorridorPath = the real Vinjani Gornji road (OSRM, trimmed
+      // ±1.6 km of the border, simplified); preferred when it passes the gate, else straight fallback.
       guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1600, displayAfterMeters: 1600, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
+      displayCorridorPath: [
+        { lat: 43.46316, lng: 17.27557 }, { lat: 43.46035, lng: 17.27775 }, { lat: 43.46059, lng: 17.27907 },
+        { lat: 43.46008, lng: 17.28278 }, { lat: 43.46009, lng: 17.28513 }, { lat: 43.46055, lng: 17.28661 },
+        { lat: 43.46142, lng: 17.28807 }, { lat: 43.46296, lng: 17.28962 }, { lat: 43.46326, lng: 17.29034 },
+        { lat: 43.46313, lng: 17.29354 }, { lat: 43.46412, lng: 17.29781 }, { lat: 43.46387, lng: 17.29860 },
+        { lat: 43.46428, lng: 17.30013 }, { lat: 43.46359, lng: 17.30022 }, { lat: 43.46223, lng: 17.29910 },
+      ],
     }),
     // FIX: k=282 ("Vinjani Gornji") embeds cam.asp?id=994/995. Old 282.jpg = invalid-webcam placeholder.
     cameras: [{ id: 'vg-hak', label: 'Vinjani Gornji', url: 'https://m.hak.hr/kamera.asp?g=2&k=282', imageUrls: ['https://www.hak.hr/info/kamere/994.jpg', 'https://www.hak.hr/info/kamere/995.jpg'] }],
@@ -8830,15 +8863,32 @@ function makeMapFriendlyControlZoneRoute(route, anchor = {}) {
     maxTurnDeg: dc?.maxTurnDeg || 150,
   });
   if (!displayPath.length || displayDistanceMeters <= 0 || !quality.ok) {
-    const corridor = dc
-      ? buildCalibratedCorridor(anchor, { minPerSideMeters: dc.fallbackPerSideMeters || 1100, maxPerSideMeters: dc.fallbackMaxPerSideMeters || 1700 })
-      : cleanAnchorCorridorPath(anchor);
+    // 1) A committed road-following corridor (anchor.displayCorridorPath, e.g. baked from OSRM) is
+    //    preferred over the straight 3-point corridor — but only after passing the SAME quality gate,
+    //    so a stale/bad bake silently falls through to the calibrated straight corridor (no regression).
+    const baked = Array.isArray(anchor.displayCorridorPath)
+      ? anchor.displayCorridorPath.filter((p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lng))
+      : [];
+    const bakedOk = baked.length >= 2 && validateDisplayPathQuality(baked, anchor, {
+      minSideMeters: dc?.minSideMeters || 300,
+      minTotalMeters: dc?.minGoogleMeters || 900,
+      maxWiggleRatio: dc?.maxWiggleRatio || 1.8,
+      nearToleranceM: guard.passDistanceMeters ? Math.max(600, Number(guard.passDistanceMeters)) : 700,
+      maxTurnDeg: dc?.maxTurnDeg || 150,
+    }).ok;
+    const corridor = bakedOk
+      ? baked
+      : dc
+        ? buildCalibratedCorridor(anchor, { minPerSideMeters: dc.fallbackPerSideMeters || 1100, maxPerSideMeters: dc.fallbackMaxPerSideMeters || 1700 })
+        : cleanAnchorCorridorPath(anchor);
     if (corridor.length >= 2) {
       displayPath = corridor;
       displayDistanceMeters = pathDistanceMeters(displayPath);
       usedFallbackCorridor = true;
-      displayGeometrySource = 'clean-anchor-corridor';
-      displayGeometryWarnings = [`Google ruta nije bila uredna (${(quality.reasons || ['nije dostupna']).join(', ')}); prikazana je čista kalibrirana zona koja prelazi granicu.`];
+      displayGeometrySource = bakedOk ? 'baked-road-corridor' : 'clean-anchor-corridor';
+      displayGeometryWarnings = bakedOk
+        ? []
+        : [`Google ruta nije bila uredna (${(quality.reasons || ['nije dostupna']).join(', ')}); prikazana je čista kalibrirana zona koja prelazi granicu.`];
       slice = { startIndex: 0, endIndex: Math.max(0, (route.path || []).length - 1) };
     }
   }
