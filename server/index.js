@@ -1300,9 +1300,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1500, displayAfterMeters: 1500, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       displayCorridorPath: [
         { lat: 44.87771, lng: 15.75212 }, { lat: 44.87713, lng: 15.75386 }, { lat: 44.87725, lng: 15.75822 },
-        { lat: 44.87678, lng: 15.76109 }, { lat: 44.87228, lng: 15.76915 }, { lat: 44.87232, lng: 15.76986 },
-        { lat: 44.87270, lng: 15.77025 }, { lat: 44.87421, lng: 15.76944 }, { lat: 44.87341, lng: 15.77238 },
-        { lat: 44.87235, lng: 15.77216 }, { lat: 44.86974, lng: 15.77019 }, { lat: 44.86888, lng: 15.77047 },
+        { lat: 44.87678, lng: 15.76109 }, { lat: 44.87228, lng: 15.76915 }, { lat: 44.86888, lng: 15.77047 },
       ],
     }),
     cameras: [
@@ -1361,10 +1359,9 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       // Real Vinjani Donji road (OSRM, trimmed ±1.6 km, simplified) — preferred over the straight
       // corridor when it passes the display-quality gate.
       displayCorridorPath: [
-        { lat: 43.42784, lng: 17.26248 }, { lat: 43.42545, lng: 17.26118 }, { lat: 43.42503, lng: 17.26202 },
-        { lat: 43.42437, lng: 17.26506 }, { lat: 43.42296, lng: 17.26834 }, { lat: 43.42275, lng: 17.27166 },
-        { lat: 43.42126, lng: 17.28034 }, { lat: 43.42049, lng: 17.28211 }, { lat: 43.41830, lng: 17.28559 },
-        { lat: 43.41760, lng: 17.28771 }, { lat: 43.41691, lng: 17.28729 },
+        { lat: 43.42784, lng: 17.26248 }, { lat: 43.42731, lng: 17.26238 }, { lat: 43.42437, lng: 17.26506 },
+        { lat: 43.42296, lng: 17.26834 }, { lat: 43.42275, lng: 17.27166 }, { lat: 43.42126, lng: 17.28034 },
+        { lat: 43.42049, lng: 17.28211 }, { lat: 43.41830, lng: 17.28559 }, { lat: 43.41691, lng: 17.28729 },
       ],
     }),
     // FIX: k=39 ("Vinjani Donji") embeds cam.asp?id=302/303. Old 39.jpg = invalid-webcam placeholder.
@@ -1393,11 +1390,10 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       // ±1.6 km of the border, simplified); preferred when it passes the gate, else straight fallback.
       guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1600, displayAfterMeters: 1600, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       displayCorridorPath: [
-        { lat: 43.46316, lng: 17.27557 }, { lat: 43.46035, lng: 17.27775 }, { lat: 43.46059, lng: 17.27907 },
-        { lat: 43.46008, lng: 17.28278 }, { lat: 43.46009, lng: 17.28513 }, { lat: 43.46055, lng: 17.28661 },
-        { lat: 43.46142, lng: 17.28807 }, { lat: 43.46296, lng: 17.28962 }, { lat: 43.46326, lng: 17.29034 },
-        { lat: 43.46313, lng: 17.29354 }, { lat: 43.46412, lng: 17.29781 }, { lat: 43.46387, lng: 17.29860 },
-        { lat: 43.46428, lng: 17.30013 }, { lat: 43.46359, lng: 17.30022 }, { lat: 43.46223, lng: 17.29910 },
+        { lat: 43.46316, lng: 17.27557 }, { lat: 43.46059, lng: 17.27907 }, { lat: 43.46008, lng: 17.28278 },
+        { lat: 43.46009, lng: 17.28513 }, { lat: 43.46055, lng: 17.28661 }, { lat: 43.46142, lng: 17.28807 },
+        { lat: 43.46296, lng: 17.28962 }, { lat: 43.46326, lng: 17.29034 }, { lat: 43.46313, lng: 17.29354 },
+        { lat: 43.46412, lng: 17.29781 }, { lat: 43.46387, lng: 17.29860 }, { lat: 43.46223, lng: 17.29910 },
       ],
     }),
     // FIX: k=282 ("Vinjani Gornji") embeds cam.asp?id=994/995. Old 282.jpg = invalid-webcam placeholder.
