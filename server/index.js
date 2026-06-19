@@ -1295,12 +1295,15 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       borderPoint: { lat: 44.87558, lng: 15.76418 },
       exitBih: { lat: 44.86889, lng: 15.77159 },
       // Off-road before: Google loops/wiggles here and the straight 3-point corridor cut the road bend.
-      // displayCorridorPath = the real Izačić road (OSRM, trimmed ±1.6 km of the border, simplified);
-      // it is preferred when it passes the display-quality gate, else falls back to the straight corridor.
+      // displayCorridorPath = the real Izačić road. Derived from OSRM with endpoints pushed ~3 km out
+      // along the main road (so OSRM routes the THROUGH road, not a detour to a nearby anchor), then
+      // trimmed to ±2 km of the border + despiked. Authoritative when it passes the display-quality gate.
       guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1500, displayAfterMeters: 1500, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       displayCorridorPath: [
-        { lat: 44.87771, lng: 15.75212 }, { lat: 44.87713, lng: 15.75386 }, { lat: 44.87725, lng: 15.75822 },
-        { lat: 44.87678, lng: 15.76109 }, { lat: 44.87228, lng: 15.76915 }, { lat: 44.86888, lng: 15.77047 },
+        { lat: 44.87862, lng: 15.73935 }, { lat: 44.87844, lng: 15.74154 }, { lat: 44.87880, lng: 15.74641 },
+        { lat: 44.87787, lng: 15.75158 }, { lat: 44.87713, lng: 15.75386 }, { lat: 44.87725, lng: 15.75822 },
+        { lat: 44.87683, lng: 15.76092 }, { lat: 44.87224, lng: 15.76940 }, { lat: 44.86953, lng: 15.77014 },
+        { lat: 44.86574, lng: 15.77245 },
       ],
     }),
     cameras: [
@@ -1356,12 +1359,12 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       borderPoint: { lat: 43.42235, lng: 17.27500 },
       exitBih: { lat: 43.41692, lng: 17.28727 },
       guard: { maxCrossingDistanceKm: 7, hardMaxCrossingDistanceKm: 18, passDistanceMeters: 1000, displayBeforeMeters: 1500, displayAfterMeters: 1500 },
-      // Real Vinjani Donji road (OSRM, trimmed ±1.6 km, simplified) — preferred over the straight
-      // corridor when it passes the display-quality gate.
+      // Real Vinjani Donji road (OSRM, endpoints ~3 km out along the main road → through-route, trimmed
+      // to ±2 km + despiked) — preferred over Google when it passes the display-quality gate.
       displayCorridorPath: [
-        { lat: 43.42784, lng: 17.26248 }, { lat: 43.42731, lng: 17.26238 }, { lat: 43.42437, lng: 17.26506 },
-        { lat: 43.42296, lng: 17.26834 }, { lat: 43.42275, lng: 17.27166 }, { lat: 43.42126, lng: 17.28034 },
-        { lat: 43.42049, lng: 17.28211 }, { lat: 43.41830, lng: 17.28559 }, { lat: 43.41691, lng: 17.28729 },
+        { lat: 43.42928, lng: 17.25270 }, { lat: 43.42503, lng: 17.26202 }, { lat: 43.42437, lng: 17.26506 },
+        { lat: 43.42306, lng: 17.26794 }, { lat: 43.42269, lng: 17.27208 }, { lat: 43.42126, lng: 17.28034 },
+        { lat: 43.41830, lng: 17.28559 }, { lat: 43.41672, lng: 17.29021 }, { lat: 43.41573, lng: 17.29772 },
       ],
     }),
     // FIX: k=39 ("Vinjani Donji") embeds cam.asp?id=302/303. Old 39.jpg = invalid-webcam placeholder.
@@ -1390,10 +1393,12 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       // ±1.6 km of the border, simplified); preferred when it passes the gate, else straight fallback.
       guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1600, displayAfterMeters: 1600, displayCorridor: { requestExtendMeters: 1400, sliceMeters: 1500, fallbackPerSideMeters: 1300, fallbackMaxPerSideMeters: 1700 } },
       displayCorridorPath: [
-        { lat: 43.46316, lng: 17.27557 }, { lat: 43.46059, lng: 17.27907 }, { lat: 43.46008, lng: 17.28278 },
-        { lat: 43.46009, lng: 17.28513 }, { lat: 43.46055, lng: 17.28661 }, { lat: 43.46142, lng: 17.28807 },
-        { lat: 43.46296, lng: 17.28962 }, { lat: 43.46326, lng: 17.29034 }, { lat: 43.46313, lng: 17.29354 },
-        { lat: 43.46412, lng: 17.29781 }, { lat: 43.46387, lng: 17.29860 }, { lat: 43.46223, lng: 17.29910 },
+        { lat: 43.46941, lng: 17.26828 }, { lat: 43.46751, lng: 17.27123 }, { lat: 43.46569, lng: 17.27534 },
+        { lat: 43.46397, lng: 17.27593 }, { lat: 43.46059, lng: 17.27907 }, { lat: 43.46008, lng: 17.28278 },
+        { lat: 43.46014, lng: 17.28541 }, { lat: 43.46092, lng: 17.28736 }, { lat: 43.46287, lng: 17.28950 },
+        { lat: 43.46329, lng: 17.29051 }, { lat: 43.46315, lng: 17.29372 }, { lat: 43.46412, lng: 17.29781 },
+        { lat: 43.46387, lng: 17.29860 }, { lat: 43.46471, lng: 17.30208 }, { lat: 43.46373, lng: 17.30539 },
+        { lat: 43.46424, lng: 17.30784 },
       ],
     }),
     // FIX: k=282 ("Vinjani Gornji") embeds cam.asp?id=994/995. Old 282.jpg = invalid-webcam placeholder.
