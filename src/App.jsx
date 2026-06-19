@@ -3718,7 +3718,7 @@ function LaneSplitCard({ profile }) {
     <article className="lane-profile-card">
       <div className="lane-profile-head">
         <div>
-          <span>EU / Non‑EU kolone</span>
+          <span>EU / Non‑EU kolone · procijenjeno</span>
           <strong>EU / Non‑EU</strong>
         </div>
         <b className={diff >= 25 ? 'alert' : ''}>{diff ? `Δ ${formatMinutes(diff)}` : 'spremno'}</b>
@@ -3739,7 +3739,7 @@ function LaneSplitCard({ profile }) {
           </div>
         ))}
       </div>
-      <small className="lane-profile-note">{nonEuSlower ? 'Non‑EU kolona trenutno traži više pažnje i može promijeniti preporuku rute.' : 'EU kolona trenutno traži dodatnu potvrdu kroz iduće očitanje.'}</small>
+      <small className="lane-profile-note">Procijenjena podjela po koloni — izračun na temelju ukupnog čekanja, nije mjereno zasebno po traci. {nonEuSlower ? 'Non‑EU kolona trenutno traži više pažnje i može promijeniti preporuku rute.' : 'EU kolona trenutno traži dodatnu potvrdu kroz iduće očitanje.'}</small>
     </article>
   );
 }

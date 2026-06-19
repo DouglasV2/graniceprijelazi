@@ -53,6 +53,16 @@ describe('CAMERA_FEEDS are annotated for direction safety', () => {
     expect(cam('gradiska', 'gra-rs-out').validForDirections).toEqual(['toHr']);
   });
 
+  it('all four Brod cameras are pinned by direction (regression guard against label inversion)', () => {
+    // Slavonski Brod (HR side, HAK k=140): visually verified 2026-06-19 — 195=toHr, 196=toBih.
+    expect(cam('brod', 'bro-hak-sb-ulaz-hr').validForDirections).toEqual(['toHr']);
+    expect(cam('brod', 'bro-hak-sb-izlaz-hr').validForDirections).toEqual(['toBih']);
+    // Bosanski Brod (BiH side, k=184): HAK page labels were INVERTED vs the burned-in caption, so these
+    // carry EXPLICIT validForDirections — 402.jpg "Izlaz iz BiH"→toHr, 403.jpg "Ulaz u BiH"→toBih.
+    expect(cam('brod', 'bro-hak-bb-izlaz-hr').validForDirections).toEqual(['toHr']);
+    expect(cam('brod', 'bro-hak-bb-ulaz-hr').validForDirections).toEqual(['toBih']);
+  });
+
   it('an ambiguous wide-area camera is visualOnly (no hard wait contribution)', () => {
     expect(cam('maljevac', 'mal-bihamk-kladusa').visualOnly).toBe(true);
   });

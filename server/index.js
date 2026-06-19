@@ -1227,11 +1227,13 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     cameras: [
       // FIX: k=140 ("Slavonski Brod") → cam.asp?id=195/196; k=184 ("BIH Bosanski Brod") → 402/403.
       // The old 140/141/184/185.jpg ids were the page-group ids, not the still-image ids.
-      // Ulaz/izlaz direction split is best-effort (needs visual verification on HAK).
-      { id: 'bro-hak-sb-ulaz-hr', label: 'Slavonski Brod · ulaz u HR', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=140', imageIndex: 0,
+      // Direction VISUALLY VERIFIED 2026-06-19 against the live frames (unlike the BiH-side k=184, which
+      // was inverted): 195.jpg = empty toHr entry plaza (BiH↑ / HR↓), 196.jpg = queue exiting HR→BiH
+      // (HR↑ / BiH↓). validForDirections pinned so the (correct) label inference can't silently break.
+      { id: 'bro-hak-sb-ulaz-hr', label: 'Slavonski Brod · ulaz u HR', validForDirections: ['toHr'], source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=140', imageIndex: 0,
         imageUrls: ['https://www.hak.hr/info/kamere/195.jpg'],
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=140' },
-      { id: 'bro-hak-sb-izlaz-hr', label: 'Slavonski Brod · izlaz iz HR', source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=140', imageIndex: 1,
+      { id: 'bro-hak-sb-izlaz-hr', label: 'Slavonski Brod · izlaz iz HR', validForDirections: ['toBih'], source: 'HAK', url: 'https://m.hak.hr/kamera.asp?g=2&k=140', imageIndex: 1,
         imageUrls: ['https://www.hak.hr/info/kamere/196.jpg'],
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=140' },
       // Bosanski Brod (BiH side, served via HAK k=184). VISUAL VERIFICATION 2026-06-18: the HAK
