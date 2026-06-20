@@ -53,9 +53,9 @@ describe('GET /api/admin/overview (debug surface)', () => {
     expect(Array.isArray(res.body.conflicts)).toBe(true);
     expect(Array.isArray(res.body.staleSources)).toBe(true);
     expect(Array.isArray(res.body.googleTraffic)).toBe(true); // Google traffic debug surface
-    // ROI readiness must flag the known un-reviewed cameras (Maljevac mal-hak-hr-exit seed ROI is
-    // still needsEditorReview → not a trusted queue ROI).
-    expect(res.body.roiReadiness.missingQueueRoi).toContain('maljevac/mal-hak-hr-exit');
+    // ROI readiness must flag cameras without a trusted queue ROI (gra-hak-page is a wide-area
+    // visual-only feed with no queue ROI → never a trusted queue ROI).
+    expect(res.body.roiReadiness.missingQueueRoi).toContain('gradiska/gra-hak-page');
     expect(findIllegalJsonValue(res.body, '$')).toBeNull();
   });
 

@@ -30,7 +30,7 @@ export const STATIC_ROI_CONFIGS = {
     lanePolygons: [], cameraReliability: 0.62, nightReliability: 0.42, isActive: true, metadata: { reviewedFrom: '2026-06-18 live frame — toHr queue confirmed in central lane' },
   },
   'mal-hak-hr-exit': {
-    cameraId: 'mal-hak-hr-exit', crossingId: 'maljevac', direction: 'toBih', roiVersion: '2026-06-production-seed-1',
+    cameraId: 'mal-hak-hr-exit', crossingId: 'maljevac', direction: 'toBih', roiVersion: '2026-06-20-reviewed',
     queuePolygon: [
       { x: 0.28, y: 0.18 }, { x: 0.58, y: 0.17 }, { x: 0.78, y: 0.95 }, { x: 0.40, y: 0.98 },
     ],
@@ -38,7 +38,7 @@ export const STATIC_ROI_CONFIGS = {
       [{ x: 0.70, y: 0.18 }, { x: 1.00, y: 0.15 }, { x: 1.00, y: 0.55 }, { x: 0.76, y: 0.50 }],
       [{ x: 0.00, y: 0.00 }, { x: 0.18, y: 0.00 }, { x: 0.26, y: 0.60 }, { x: 0.00, y: 0.75 }],
     ],
-    lanePolygons: [], cameraReliability: 0.64, nightReliability: 0.43, isActive: true, metadata: { seededFrom: '2026-06-04 screenshot', needsEditorReview: true },
+    lanePolygons: [], cameraReliability: 0.64, nightReliability: 0.43, isActive: true, metadata: { reviewedFrom: '2026-06-20 live frame — toBih exit queue confirmed in the central lane' },
   },
   'gv-hak-queue-9': {
     cameraId: 'gv-hak-queue-9', crossingId: 'gornji-varos', direction: 'toHr', roiVersion: '2026-06-18-left-lane-estimate',

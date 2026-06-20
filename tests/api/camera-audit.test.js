@@ -75,15 +75,17 @@ describe('GET /api/admin/camera/audit', () => {
     expect(res.body.cameras.every((c) => c.crossingId === 'gradiska' && c.direction === 'toBih')).toBe(true);
   });
 
-  it('a camera WITH a direction but NO queue ROI is still not wait-capable (spec §5)', async () => {
-    // maljevac mal-hak-hr-exit has validForDirections=[toBih] but its seed ROI is still
-    // needsEditorReview (not a reviewed/trusted queue ROI) → must not be wait-capable.
-    const res = await auth(request(app).get('/api/admin/camera/audit').query({ crossingId: 'maljevac', direction: 'toBih' }));
-    const entry = res.body.cameras.find((c) => c.cameraId === 'mal-hak-hr-exit');
-    expect(entry.hasQueueRoi).toBe(false);
-    expect(entry.waitCapable).toBe(false);
-    expect(entry.warnings).toContain('missing_queue_roi');
-    expect(entry.fusionReason).toMatch(/ROI/i);
+  it('every camera without a trusted queue ROI is not wait-capable (spec §5)', async () => {
+    // The untrusted-ROI guard as a PROPERTY over ALL cameras (robust as seed ROIs get reviewed/promoted
+    // to trusted): any camera flagged missing_queue_roi — no rect calibration AND no reviewed/trusted
+    // ROI-v2 — must never be wait-capable, otherwise an unreviewed polygon could fabricate a wait.
+    const res = await auth(request(app).get('/api/admin/camera/audit'));
+    const missing = res.body.cameras.filter((c) => c.warnings.includes('missing_queue_roi'));
+    expect(missing.length).toBeGreaterThan(0); // visual-only / unreviewed cameras always exist
+    for (const c of missing) {
+      expect(c.hasQueueRoi, `${c.cameraId} flagged missing ROI yet hasQueueRoi=true`).toBe(false);
+      expect(c.waitCapable, `${c.cameraId} flagged missing ROI yet wait-capable`).toBe(false);
+    }
   });
 
   it('every entry carries YOLO status and a fusion reason', async () => {
