@@ -45,11 +45,25 @@ function pathMeters(path, from, to) {
 // Per-crossing service rate (vehicles cleared per minute) for the queue→wait model. Tunable.
 export const SERVICE_RATE_CONFIG = {
   default: { vehiclesPerMinute: 1.5, lanes: 1 },
-  // Busier motorway crossings clear faster (more booths/lanes).
-  'gornji-varos': { vehiclesPerMinute: 2.2, lanes: 2 },
-  bijaca: { vehiclesPerMinute: 2.0, lanes: 2 },
-  svilaj: { vehiclesPerMinute: 2.0, lanes: 2 },
-  maljevac: { vehiclesPerMinute: 1.4, lanes: 1 },
+  // Per-crossing effective queue-clearance rate (vehicles/min cleared from the counted queue), seeded by
+  // booth count / road class so count→minutes (queue ÷ rate) is realistic WITHOUT any measured A→B:
+  // motorway crossings (more booths + dedicated truck lanes) clear faster; small regional ones slower.
+  // These are capacity ESTIMATES — the engine's range/confidence absorbs the residual, and the learned
+  // model refines each crossing once measured A→B passes exist. Truck mix + time-of-day apply on top.
+  'gornji-varos': { vehiclesPerMinute: 2.2, lanes: 2 }, // Gradiška Novi Most — A3 motorway, modern plaza
+  bijaca: { vehiclesPerMinute: 2.0, lanes: 2 },          // Nova Sela — A1 motorway terminus
+  svilaj: { vehiclesPerMinute: 2.0, lanes: 2 },          // A5 motorway bridge
+  gradiska: { vehiclesPerMinute: 1.8, lanes: 2 },        // Stara Gradiška — busy main crossing
+  brod: { vehiclesPerMinute: 1.7, lanes: 2 },            // Slavonski Brod — busy
+  orasje: { vehiclesPerMinute: 1.6, lanes: 1 },          // Županja — truck-heavy regional
+  samac: { vehiclesPerMinute: 1.5, lanes: 1 },           // Slavonski Šamac
+  'vinjani-donji': { vehiclesPerMinute: 1.5, lanes: 1 }, // Imotski — busy regional
+  maljevac: { vehiclesPerMinute: 1.4, lanes: 1 },        // Velika Kladuša — regional
+  izacic: { vehiclesPerMinute: 1.4, lanes: 1 },          // Bihać — regional
+  kamensko: { vehiclesPerMinute: 1.3, lanes: 1 },        // Tomislavgrad — mountain regional
+  'crveni-grm': { vehiclesPerMinute: 1.3, lanes: 1 },    // Prolog
+  'vinjani-gornji': { vehiclesPerMinute: 1.3, lanes: 1 },
+  prisika: { vehiclesPerMinute: 1.2, lanes: 1 },         // Aržano — small
 };
 
 // Time-of-day + weekend modifiers on the service rate (peak = slower clearance).
