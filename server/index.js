@@ -1574,6 +1574,13 @@ const CAMERA_SNAPSHOT_COUNTING_ENABLED = process.env.CAMERA_SNAPSHOT_COUNTING_EN
 const CAMERA_SNAPSHOT_TIMEOUT_MS = Math.max(1500, Number(process.env.CAMERA_SNAPSHOT_TIMEOUT_MS || 4500));
 const CAMERA_SNAPSHOT_MIN_CONFIDENCE = Math.max(35, Math.min(95, Number(process.env.CAMERA_SNAPSHOT_MIN_CONFIDENCE || 46)));
 const CAMERA_SNAPSHOT_REFRESH_INTERVAL_MS = Math.max(2, Number(process.env.CAMERA_SNAPSHOT_REFRESH_INTERVAL_MINUTES || 5)) * 60 * 1000;
+// Background camera keep-warm: re-fetch frames + re-run YOLO on this cycle even with ZERO traffic, so a
+// queue that forms while nobody is looking is still detected (the public-source refresh is otherwise
+// lazy/on-request → on a quiet deploy the data is only as fresh as the last visitor). Camera + CV only —
+// Google is NOT called here (the expensive Routes source stays lazy → no extra cost). Disable with
+// CAMERA_KEEPWARM_ENABLED=false; tune the cadence with CAMERA_KEEPWARM_SECONDS (default 180 s).
+const CAMERA_KEEPWARM_ENABLED = process.env.CAMERA_KEEPWARM_ENABLED !== 'false';
+const CAMERA_KEEPWARM_INTERVAL_MS = Math.max(60, Number(process.env.CAMERA_KEEPWARM_SECONDS || 180)) * 1000;
 
 // ── BOUNDED CV/CAMERA CONCURRENCY (production scaling safety) ──────────────────────────────────
 // As we add crossings/cameras, a full refresh must not fire every camera + YOLO call at once. Two
@@ -3143,6 +3150,29 @@ async function refreshProductionSources({ force = false } = {}) {
     sourceRefreshState.running = null;
   });
   return sourceRefreshState.running;
+}
+
+// Camera-only refresh for the background keep-warm timer (started at listen). Re-fetches the live frames
+// and re-runs YOLO so the queue / no-queue signal stays current WITHOUT waiting for a visitor — and
+// WITHOUT calling Google (the expensive source stays lazy/on-request). Own in-flight guard, and it joins
+// a full refresh if one is already fetching cameras, so it never double-bursts the camera hosts / CV.
+let cameraKeepWarmRunning = null;
+async function keepCamerasWarm() {
+  if (!SOURCE_FETCH_ENABLED || !CAMERA_SNAPSHOT_COUNTING_ENABLED) return null;
+  if (cameraKeepWarmRunning) return cameraKeepWarmRunning;
+  if (sourceRefreshState.running) return sourceRefreshState.running;
+  cameraKeepWarmRunning = (async () => {
+    try {
+      const snaps = await buildCameraSourceSnapshots({ forceSnapshot: false });
+      if (snaps && snaps.length) {
+        await insertSourceSnapshots(snaps);
+        await pruneStaleSourceSnapshots();
+      }
+    } catch (error) {
+      console.warn('[camera-keepwarm]', error.message);
+    }
+  })().finally(() => { cameraKeepWarmRunning = null; });
+  return cameraKeepWarmRunning;
 }
 
 function vehicleMultiplier(crossing, direction, vehicle) {
@@ -10206,6 +10236,12 @@ if (process.env.NODE_ENV !== 'test') {
           console.log(`[camera-audit] config wait-capable: ${summary.waitCapable} · visual-only: ${summary.visualOnly} · missing ROI: ${summary.missingQueueRoi} · direction unverified: ${all.filter((c) => c.warnings.includes('direction_not_verified')).length}`);
           if (needConfig.length) console.log('[camera-audit] needs manual config before YOLO+ROI:', [...new Set(needConfig.map((c) => `${c.crossingId}/${c.cameraId}`))].join(', '));
         }).catch((e) => console.warn('[camera-audit] startup report failed:', e.message));
+        // Background camera keep-warm so queue / no-queue stays current even with zero traffic (Google
+        // stays lazy → no extra Routes cost). Disable with CAMERA_KEEPWARM_ENABLED=false.
+        if (SOURCE_FETCH_ENABLED && CAMERA_KEEPWARM_ENABLED && CAMERA_SNAPSHOT_COUNTING_ENABLED) {
+          setInterval(() => { keepCamerasWarm().catch(() => {}); }, CAMERA_KEEPWARM_INTERVAL_MS).unref?.();
+          console.log(`[camera-keepwarm] background camera+YOLO refresh every ${Math.round(CAMERA_KEEPWARM_INTERVAL_MS / 1000)}s (Google stays lazy)`);
+        }
       });
     })
     .catch((error) => {
