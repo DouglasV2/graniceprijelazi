@@ -41,13 +41,13 @@ export const STATIC_ROI_CONFIGS = {
     lanePolygons: [], cameraReliability: 0.64, nightReliability: 0.43, isActive: true, metadata: { reviewedFrom: '2026-06-20 live frame — toBih exit queue confirmed in the central lane' },
   },
   'gv-hak-queue-9': {
-    cameraId: 'gv-hak-queue-9', crossingId: 'gornji-varos', direction: 'toHr', roiVersion: '2026-06-18-left-lane-estimate',
+    cameraId: 'gv-hak-queue-9', crossingId: 'gornji-varos', direction: 'toHr', roiVersion: '2026-06-20-reviewed',
     queuePolygon: [
       { x: 0.06, y: 0.22 }, { x: 0.46, y: 0.22 }, { x: 0.40, y: 0.86 }, { x: 0.04, y: 0.86 },
     ],
     ignorePolygons: [],
     lanePolygons: [],
-    cameraReliability: 0.72, nightReliability: 0.48, isActive: true, metadata: { seededFrom: 'legacy whole-frame rect replaced with toHr left-lane estimate 2026-06-18', needsEditorReview: true },
+    cameraReliability: 0.72, nightReliability: 0.48, isActive: true, metadata: { reviewedFrom: '2026-06-20 live frame — toHr queue confirmed in the left lanes (camera stays visual-only → sharpens band/lane-split count only)' },
   },
   'gv-hak-plaza-4': {
     cameraId: 'gv-hak-plaza-4', crossingId: 'gornji-varos', direction: 'toHr', roiVersion: '2026-06-18-reviewed',
