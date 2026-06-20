@@ -182,6 +182,28 @@ export const STATIC_ROI_CONFIGS = {
     lanePolygons: [], cameraReliability: 0.55, nightReliability: 0.38, isActive: true,
     metadata: { seededFrom: '2026-06-18 live frame — short toBih queue in left lane, empty right side ignored. Visual-only', needsEditorReview: true },
   },
+  // ── Brod · Slavonski Brod izlaz (HAK 196, image stable) — reviewed against a live toBih queue ──────
+  'bro-hak-sb-izlaz-hr': {
+    cameraId: 'bro-hak-sb-izlaz-hr', crossingId: 'brod', direction: 'toBih', roiVersion: '2026-06-20-reviewed',
+    queuePolygon: [
+      { x: 0.40, y: 0.18 }, { x: 0.56, y: 0.17 }, { x: 0.82, y: 0.82 }, { x: 0.45, y: 0.90 },
+    ],
+    ignorePolygons: [],
+    lanePolygons: [], cameraReliability: 0.66, nightReliability: 0.45, isActive: true,
+    metadata: { reviewedFrom: '2026-06-20 live frame — toBih exit queue confirmed in the diagonal central lane (Slavonski Brod 196.jpg; stable image, unlike the BB cameras)' },
+  },
+  // Šamac (visual-only) — flagged lane polygon so the right-lane queue isn't lost in whole-frame noise.
+  'sam-hak': {
+    cameraId: 'sam-hak', crossingId: 'samac', direction: 'toBih', roiVersion: '2026-06-20-estimate',
+    queuePolygon: [
+      { x: 0.55, y: 0.15 }, { x: 0.72, y: 0.14 }, { x: 0.98, y: 0.66 }, { x: 0.74, y: 0.76 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.00, y: 0.18 }, { x: 0.45, y: 0.18 }, { x: 0.45, y: 0.55 }, { x: 0.00, y: 0.55 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.55, nightReliability: 0.38, isActive: true,
+    metadata: { seededFrom: '2026-06-20 live frame — queue in the right lane; left truck-staging ignored. Visual-only (direction unproven) → count signal only', needsEditorReview: true },
+  },
 };
 
 // DB-backed configs (postgres mode) are loaded once at startup + after each save into this sync

@@ -1237,15 +1237,16 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
         imageUrls: ['https://www.hak.hr/info/kamere/196.jpg'],
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=140' },
       // Bosanski Brod (BiH side, served via HAK k=184). VISUAL VERIFICATION 2026-06-18: the HAK
-      // page labels are INVERTED vs the camera's own burned-in BIHAMK caption. 402.jpg actually reads
-      // "GP Bosanski Brod - Izlaz iz BiH" (leaving BiH → entering HR → toHr) and 403.jpg reads
-      // "Ulaz u BiH" (→ toBih). The id suffixes (izlaz-hr / ulaz-hr) are legacy and misleading; pin the
-      // direction explicitly so a real queue is attributed to the side it is actually on — without this
-      // the inferred direction was backwards and a BiH-bound queue bled into the HR display band.
-      { id: 'bro-hak-bb-izlaz-hr', label: 'Bosanski Brod · izlaz iz BiH (→ HR)', validForDirections: ['toHr'], source: 'HAK/BIHAMK', url: 'https://m.hak.hr/kamera.asp?g=2&k=184', imageIndex: 0,
+      // page labels are UNSTABLE: the same image URL serves the "Ulaz u BiH" (toBih) view at one time
+      // and the "Izlaz iz BiH" (toHr) view at another — 402.jpg and 403.jpg swapped their burned-in
+      // caption between 2026-06-18 and 2026-06-20. Direction therefore CANNOT be tied to the camera
+      // id/URL, so both are kept VISUAL-ONLY (no validForDirections + no ulaz/izlaz token in the label →
+      // inferCameraDirections returns null): they show as context but never drive a directional wait.
+      // (The Slavonski Brod cameras, k=140, are separate + stable and remain direction-pinned above.)
+      { id: 'bro-hak-bb-izlaz-hr', label: 'Bosanski Brod / BIHAMK (smjer rotira)', source: 'HAK/BIHAMK', url: 'https://m.hak.hr/kamera.asp?g=2&k=184', imageIndex: 0,
         imageUrls: ['https://www.hak.hr/info/kamere/402.jpg'],
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=184' },
-      { id: 'bro-hak-bb-ulaz-hr', label: 'Bosanski Brod · ulaz u BiH', validForDirections: ['toBih'], source: 'HAK/BIHAMK', url: 'https://m.hak.hr/kamera.asp?g=2&k=184', imageIndex: 1,
+      { id: 'bro-hak-bb-ulaz-hr', label: 'Bosanski Brod / BIHAMK (smjer rotira)', source: 'HAK/BIHAMK', url: 'https://m.hak.hr/kamera.asp?g=2&k=184', imageIndex: 1,
         imageUrls: ['https://www.hak.hr/info/kamere/403.jpg'],
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=184' },
       { id: 'bro-bihamk', label: 'Brod / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Brod - Izlaz iz BiH', 'GP Brod - Ulaz u BiH', 'GP Brod', 'Bosanski Brod'] },
