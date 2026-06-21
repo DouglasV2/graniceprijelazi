@@ -98,17 +98,19 @@ export const STATIC_ROI_CONFIGS = {
     lanePolygons: [], cameraReliability: 0.64, nightReliability: 0.44, isActive: true,
     metadata: { reviewedFrom: '2026-06-18 live frame — toBih queue in left diagonal lane; right opposite-direction road ignored' },
   },
-  // ── Slavonski Brod · ulaz u HR (HAK 195) — flagged: central approach lane, marked parking excluded ──
+  // ── Slavonski Brod · ulaz u HR (HAK 195, image stable k=140) — REVIEWED against a live toHr queue
+  //    (2026-06-21 10:23, morning rush). Polygon widened to cover BOTH approach lanes (centre + right
+  //    column toward the HR booths); left marked-parking lot stays excluded. roiTrusted → count drives wait.
   'bro-hak-sb-ulaz-hr': {
-    cameraId: 'bro-hak-sb-ulaz-hr', crossingId: 'brod', direction: 'toHr', roiVersion: '2026-06-18-estimate',
+    cameraId: 'bro-hak-sb-ulaz-hr', crossingId: 'brod', direction: 'toHr', roiVersion: '2026-06-21-reviewed',
     queuePolygon: [
-      { x: 0.34, y: 0.18 }, { x: 0.60, y: 0.16 }, { x: 0.72, y: 0.80 }, { x: 0.40, y: 0.86 },
+      { x: 0.36, y: 0.16 }, { x: 0.68, y: 0.14 }, { x: 0.92, y: 0.84 }, { x: 0.40, y: 0.90 },
     ],
     ignorePolygons: [
       [{ x: 0.00, y: 0.18 }, { x: 0.32, y: 0.18 }, { x: 0.30, y: 0.55 }, { x: 0.00, y: 0.58 }],
     ],
-    lanePolygons: [], cameraReliability: 0.62, nightReliability: 0.42, isActive: true,
-    metadata: { seededFrom: '2026-06-18 estimate — near lanes empty at review, marked parking excluded; verify in editor', needsEditorReview: true },
+    lanePolygons: [], cameraReliability: 0.70, nightReliability: 0.46, isActive: true,
+    metadata: { reviewedFrom: '2026-06-21 live frame (HAK 195, stable) — full toHr queue across centre + right approach lanes; left parking excluded; verified via overlay' },
   },
   // ── Visual-only HAK frames (direction unprovable from label) — ROI only sharpens the visual count;
   //    these never drive a directional wait (validForDirections=[]), it just keeps parked / opposite
