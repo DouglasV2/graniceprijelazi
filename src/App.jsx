@@ -61,17 +61,33 @@ function externalCamera({ id, label, source = 'HAK izvor', url, note, matchText,
   };
 }
 
+// Neighbour-country labels per crossing. The internal direction key `toHr` means "leaving BiH";
+// for a non-HR crossing it means "toward the neighbour" (Serbia / Crna Gora).
+const NEIGHBOR_LABELS = { HR: 'HR', RS: 'Srbija', CG: 'Crna Gora' };
+function neighborLabelOf(neighbor = 'HR') { return NEIGHBOR_LABELS[neighbor] || 'HR'; }
+// The "A → B" direction label for a crossing. Prefers the crossing's own per-direction label
+// (so existing data keeps working); falls back to the neighbour pair.
+function dirPairLabel(crossing, direction) {
+  const fromData = crossing?.directions?.[direction]?.label;
+  if (fromData) return fromData;
+  const n = neighborLabelOf(crossing?.neighbor);
+  return direction === 'toBih' ? `${n} → BiH` : `BiH → ${n}`;
+}
+
 function makeBorderCrossing(config) {
   const {
     id, shortName, route, area, lat, lng, status, confidence, updatedAt,
     fieldConfirmed = false, fieldNote, cause, sponsor, extraDriveFromMainRoute,
-    waits, segments, cameras, bestDays, historyBase,
+    waits, segments, cameras, bestDays, historyBase, neighbor = 'HR',
   } = config;
+  const neighborLabel = neighborLabelOf(neighbor);
 
   return {
     id,
     name: `GP ${shortName}`,
     shortName,
+    neighbor,
+    neighborLabel,
     route,
     area,
     lat,
@@ -87,7 +103,7 @@ function makeBorderCrossing(config) {
     extraDriveFromMainRoute,
     directions: {
       toBih: {
-        label: 'HR → BiH',
+        label: `${neighborLabel} → BiH`,
         cars: waits.toBih.cars,
         trucks: waits.toBih.trucks,
         buses: waits.toBih.buses,
@@ -101,7 +117,7 @@ function makeBorderCrossing(config) {
         segments: segments.toBih,
       },
       toHr: {
-        label: 'BiH → HR',
+        label: `BiH → ${neighborLabel}`,
         cars: waits.toHr.cars,
         trucks: waits.toHr.trucks,
         buses: waits.toHr.buses,
@@ -369,6 +385,71 @@ const ADDITIONAL_CROSSINGS = [
       externalCamera({ id: 'cg-bihamk', label: 'Crveni Grm / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Crveni Grm', 'Crveni Grm'], note: 'BIHAMK popis kamera uključuje GP Crveni Grm.' }),
     ],
     historyBase: { cars: 156, trucks: 50, buses: 8, wait: 30 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Nedjelja navečer'],
+  }),
+  // ── BiH ↔ Serbia / Montenegro (BIHAMK-sourced). `neighbor` drives the displayed direction labels. ──
+  makeBorderCrossing({
+    id: 'sepak', shortName: 'Šepak', route: 'Trbušnica ↔ Šepak', area: 'Semberija / Podrinje', lat: 44.5417, lng: 19.1815, neighbor: 'RS',
+    status: 'busy', confidence: 58, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Šepak ↔ Trbušnica — glavni pravac Beograd–Sarajevo. Pratimo BIHAMK izvor i kameru.',
+    cause: 'Tranzitni promet Beograd–Sarajevo + kamionski valovi', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 22, trucks: 55, buses: 28, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Procjena iz BIHAMK izvora i kamere.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 60 min', 'padne ispod 20 min'] },
+      toHr: { cars: 26, trucks: 60, buses: 32, trend: 'steady', bottleneckSide: 'Srbija strana', bottleneckText: 'Ulaz u Srbiju zna usporiti u špici.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 60 min', 'padne ispod 20 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz Srbija', minutes: 8, level: 'low' }, { label: 'Most (Drina)', minutes: 6, level: 'low' }, { label: 'BiH kontrola', minutes: 14, level: 'medium' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 10, level: 'medium' }, { label: 'Most (Drina)', minutes: 6, level: 'low' }, { label: 'Srbija kontrola', minutes: 16, level: 'medium' }],
+    },
+    cameras: [externalCamera({ id: 'sep-bihamk', label: 'Šepak / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Šepak', 'Šepak', 'Sepak', 'Šepak - Loznica'], note: 'BIHAMK popis kamera uključuje GP Šepak.' })],
+    historyBase: { cars: 180, trucks: 90, buses: 12, wait: 28 }, bestDays: ['Utorak', 'Srijeda prije 11h', 'Nedjelja navečer'],
+  }),
+  makeBorderCrossing({
+    id: 'raca', shortName: 'B. Rača', route: 'Sremska Rača ↔ Bosanska Rača', area: 'Semberija / Srijem', lat: 44.8936, lng: 19.3342, neighbor: 'RS',
+    status: 'busy', confidence: 58, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Bosanska Rača ↔ Sremska Rača — najveći prijelaz prema Srbiji, most preko Save.',
+    cause: 'Glavni tranzit prema Srbiji i koridor Vc', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 24, trucks: 60, buses: 30, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Procjena iz BIHAMK izvora.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 70 min', 'padne ispod 25 min'] },
+      toHr: { cars: 30, trucks: 70, buses: 38, trend: 'rising', bottleneckSide: 'Srbija strana', bottleneckText: 'Ulaz u Srbiju u špici zna stvarati duže repove.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 80 min', 'padne ispod 25 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz Srbija', minutes: 9, level: 'low' }, { label: 'Most (Sava)', minutes: 7, level: 'low' }, { label: 'BiH kontrola', minutes: 16, level: 'medium' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 12, level: 'medium' }, { label: 'Most (Sava)', minutes: 7, level: 'low' }, { label: 'Srbija kontrola', minutes: 20, level: 'medium' }],
+    },
+    cameras: [externalCamera({ id: 'raca-bihamk', label: 'Bosanska Rača / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Rača', 'Rača', 'Raca', 'Bosanska Rača'], note: 'BIHAMK popis kamera; kamera za Raču nije uvijek dostupna.' })],
+    historyBase: { cars: 220, trucks: 110, buses: 16, wait: 34 }, bestDays: ['Utorak', 'Četvrtak prije 11h', 'Nedjelja navečer'],
+  }),
+  makeBorderCrossing({
+    id: 'hum', shortName: 'Hum', route: 'Šćepan Polje ↔ Hum', area: 'Hercegovina / Pivska planina', lat: 43.3479, lng: 18.8455, neighbor: 'CG',
+    status: 'open', confidence: 55, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Hum ↔ Šćepan Polje — planinski prijelaz prema Crnoj Gori (rafting/turistički pravac).',
+    cause: 'Sezonski turistički promet prema Crnoj Gori', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 14, trucks: 30, buses: 18, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Procjena iz BIHAMK izvora.', waitAdvice: 'Mali prijelaz, ljeti zna biti gužve.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 40 min', 'padne ispod 15 min'] },
+      toHr: { cars: 16, trucks: 34, buses: 20, trend: 'steady', bottleneckSide: 'Crna Gora strana', bottleneckText: 'Ulaz u Crnu Goru ljeti zna usporiti.', waitAdvice: 'Mali prijelaz, ljeti zna biti gužve.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 40 min', 'padne ispod 15 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz CG', minutes: 6, level: 'low' }, { label: 'Most', minutes: 4, level: 'low' }, { label: 'BiH kontrola', minutes: 10, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 7, level: 'low' }, { label: 'Most', minutes: 4, level: 'low' }, { label: 'CG kontrola', minutes: 12, level: 'medium' }],
+    },
+    cameras: [externalCamera({ id: 'hum-bihamk', label: 'Hum / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Hum', 'Hum', 'Šćepan Polje'], note: 'BIHAMK popis kamera; kamera za Hum nije uvijek dostupna.' })],
+    historyBase: { cars: 90, trucks: 20, buses: 10, wait: 18 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Nedjelja prije podne'],
+  }),
+  makeBorderCrossing({
+    id: 'deleusa', shortName: 'Deleuša', route: 'Vraćenovići ↔ Deleuša', area: 'Istočna Hercegovina', lat: 42.835, lng: 18.515, neighbor: 'CG',
+    status: 'open', confidence: 52, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Deleuša ↔ Vraćenovići — prijelaz na pravcu Bileća–Nikšić prema Crnoj Gori.',
+    cause: 'Lokalni i tranzitni promet Bileća–Nikšić', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 12, trucks: 26, buses: 15, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Procjena iz BIHAMK izvora.', waitAdvice: 'Manji prijelaz; provjeri live izvor.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 35 min', 'padne ispod 12 min'] },
+      toHr: { cars: 14, trucks: 30, buses: 18, trend: 'steady', bottleneckSide: 'Crna Gora strana', bottleneckText: 'Ulaz u Crnu Goru zna usporiti.', waitAdvice: 'Manji prijelaz; provjeri live izvor.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 35 min', 'padne ispod 12 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz CG', minutes: 5, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'BiH kontrola', minutes: 9, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 6, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'CG kontrola', minutes: 11, level: 'medium' }],
+    },
+    cameras: [externalCamera({ id: 'del-bihamk', label: 'Deleuša / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Deleuša', 'Deleuša', 'Deleusa', 'Vraćenovići'], note: 'BIHAMK kamera za Deleušu (slika rotira / nije uvijek dostupna).' })],
+    historyBase: { cars: 70, trucks: 16, buses: 8, wait: 15 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Nedjelja prije podne'],
   }),
 ];
 
@@ -1789,16 +1870,17 @@ function FieldBadge({ crossing }) {
   );
 }
 
-function DirectionToggle({ value, onChange, compact = false }) {
+function DirectionToggle({ value, onChange, compact = false, neighbor = 'HR' }) {
+  const n = neighborLabelOf(neighbor);
   return (
     <div className={compact ? 'direction-toggle compact-direction-toggle' : 'direction-toggle direction-toggle-large'} aria-label="Odaberi smjer putovanja">
       <button className={value === 'toBih' ? 'active' : ''} onClick={() => onChange('toBih')} type="button">
-        <span>HR → BiH</span>
-        {!compact && <small>iz Hrvatske u BiH</small>}
+        <span>{n} → BiH</span>
+        {!compact && <small>prema BiH</small>}
       </button>
       <button className={value === 'toHr' ? 'active' : ''} onClick={() => onChange('toHr')} type="button">
-        <span>BiH → HR</span>
-        {!compact && <small>iz BiH u Hrvatsku</small>}
+        <span>BiH → {n}</span>
+        {!compact && <small>prema {n}</small>}
       </button>
     </div>
   );
@@ -2205,7 +2287,7 @@ function ShareRouteButton({ crossing, selectedDirection, tab = 'Mapa', label = '
   async function share() {
     const url = buildShareUrl(crossing.id, selectedDirection, tab);
     try {
-      if (navigator.share) await navigator.share({ title: `PrijelazRadar · ${crossing.shortName}`, text: `${crossing.shortName} ${selectedDirection === 'toHr' ? 'BiH → HR' : 'HR → BiH'}`, url });
+      if (navigator.share) await navigator.share({ title: `PrijelazRadar · ${crossing.shortName}`, text: `${crossing.shortName} ${dirPairLabel(crossing, selectedDirection)}`, url });
       else await copyToClipboard(url);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
@@ -2371,7 +2453,7 @@ function PublicView({ selectedDirection, setSelectedDirection, selectedCrossing,
           <h2>Stanje za vozače</h2>
           <p className="screen-subtitle">Odaberi smjer. Preporuke i obavijesti računaju se posebno za HR → BiH i BiH → HR.</p>
         </div>
-        <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} />
+        <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} neighbor={selectedCrossing?.neighbor} />
       </div>
       <div className="stats-grid">
         <StatCard label="Najbrže" value={knownRows.length ? best.shortName : '—'} hint={knownRows.length ? formatWaitDisplay(getDisplayedWait(best, selectedDirection, overrides), getWaitSourceMeta(best, selectedDirection, overrides)) : 'čekam live izvor'} tone="green" icon={<Navigation size={14} />} />
@@ -2383,7 +2465,7 @@ function PublicView({ selectedDirection, setSelectedDirection, selectedCrossing,
       <BestNowCard best={best} selectedDirection={selectedDirection} overrides={overrides} setSelectedCrossing={setSelectedCrossing} openDetail={openDetail} addNotificationRule={addNotificationRule} />
       <article className="direction-scope-card">
         <div><Bell size={16} /><strong>Obavijesti pokrivaju oba smjera</strong></div>
-        <p>Trenutno gledaš <b>{selectedDirection === 'toBih' ? 'HR → BiH' : 'BiH → HR'}</b>. Prebaci smjer iznad i aplikacija prikazuje posebna čekanja, kamere, povijest i pragove obavijesti za taj smjer.</p>
+        <p>Trenutno gledaš <b>{dirPairLabel(selectedCrossing, selectedDirection)}</b>. Prebaci smjer iznad i aplikacija prikazuje posebna čekanja, kamere, povijest i pragove obavijesti za taj smjer.</p>
       </article>
       <SourceExplanationCard />
       <div className="overview-filter-card">
@@ -2593,7 +2675,7 @@ function TripPlanner({ selectedDirection, setSelectedDirection, tripCrossing, se
           <h2>Najbolji prijelaz za tvoju rutu</h2>
           <p className="screen-subtitle">Uspoređujemo rutu preko svakog prijelaza, promet na cesti i očekivano čekanje na granici — radi i za duže rute poput Njemačka ↔ BiH.</p>
         </div>
-        <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} />
+        <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} neighbor={selectedCrossing?.neighbor} />
       </div>
       <div className="trip-grid production-trip-grid">
         <div className="trip-form route-search-card">
@@ -3606,7 +3688,7 @@ function MapView({ selectedDirection, setSelectedDirection, selectedCrossing, se
       </div>
 
       {typeof setSelectedDirection === 'function' && (
-        <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} compact />
+        <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} compact neighbor={selectedCrossing?.neighbor} />
       )}
 
       {mode === 'map' && (
@@ -3959,7 +4041,7 @@ function CameraPanel({ crossing, selectedDirection, onLiveSignalUpdated }) {
         <div>
           <span className="kicker">Kamere</span>
           <h3>{crossing.name}</h3>
-          <p className="camera-direction-note">Smjer: {selectedDirection === 'toBih' ? 'HR → BiH' : 'BiH → HR'} · prikaz kamera pomaže brzoj provjeri kolone i protoka po odabranom smjeru.</p>
+          <p className="camera-direction-note">Smjer: {dirPairLabel(crossing, selectedDirection)} · prikaz kamera pomaže brzoj provjeri kolone i protoka po odabranom smjeru.</p>
         </div>
         <div className="camera-toolbar-actions">
           <button type="button" className="ghost-button active" onClick={() => { forceNextFetchRef.current = true; setRefreshKey(Date.now()); }}>Osvježi prikaz</button>
@@ -4248,7 +4330,7 @@ function HistoryView({ selectedCrossing, setSelectedCrossing, selectedDirection,
         </div>
         <div className="history-actions history-simple-actions">
           {typeof setSelectedDirection === 'function' && (
-            <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} compact />
+            <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} compact neighbor={selectedCrossing?.neighbor} />
           )}
           <select className="small-select" value={selected.id} onChange={(event) => setSelectedCrossing(CROSSINGS.find((crossing) => crossing.id === event.target.value))}>
             {CROSSINGS.map((crossing) => <option key={crossing.id} value={crossing.id}>{crossing.name}</option>)}
@@ -4623,7 +4705,7 @@ function AdminView({ selectedCrossing, setSelectedCrossing, selectedDirection, s
               : ' Osvježi live izvore'}
           </button>
           <button type="button" className="ghost-button" onClick={downloadDailyReport}><Download size={16}/> Izvoz CSV</button>
-          <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} />
+          <DirectionToggle value={selectedDirection} onChange={setSelectedDirection} neighbor={selectedCrossing?.neighbor} />
         </div>
       </div>
       {exportStatus && <div className="admin-inline-status">{exportStatus}</div>}
@@ -5093,8 +5175,8 @@ export default function App() {
       if (!shouldTrigger || rule.lastTriggeredKey === triggerKey) return rule;
       const title = rule.type === 'route_open' ? `${crossing.shortName}: ruta je otvorena` : `${crossing.shortName}: čekanje je palo`;
       const message = rule.type === 'route_open'
-        ? `${rule.direction === 'toHr' ? 'BiH → HR' : 'HR → BiH'} ponovno izgleda prohodno.`
-        : `${rule.direction === 'toHr' ? 'BiH → HR' : 'HR → BiH'} je sada ${formatWaitDisplay(wait, sourceMeta)}.`;
+        ? `${dirPairLabel(crossing, rule.direction)} ponovno izgleda prohodno.`
+        : `${dirPairLabel(crossing, rule.direction)} je sada ${formatWaitDisplay(wait, sourceMeta)}.`;
       triggered.push({ id: `${rule.id}:${triggerKey}`, crossingId: crossing.id, tone: 'normal', title, message });
       if ('Notification' in window && Notification.permission === 'granted') {
         try { new Notification(title, { body: message }); } catch {}
