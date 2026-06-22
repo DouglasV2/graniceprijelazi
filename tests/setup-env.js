@@ -21,3 +21,5 @@ process.env.BORDERFLOW_ADMIN_EMAIL = 'admin@borderflow.app';
 process.env.BORDERFLOW_ADMIN_PASSWORD = 'change-this-admin-password';
 process.env.BORDERFLOW_DEMO_USER_EMAIL = 'user@borderflow.app';
 process.env.BORDERFLOW_DEMO_USER_PASSWORD = 'change-this-user-password';
+// Enable Google Sign-In in tests (the real JWKS verifier is stubbed via setGoogleIdVerifier).
+process.env.GOOGLE_OAUTH_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID || 'test-client.apps.googleusercontent.com';

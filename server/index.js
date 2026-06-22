@@ -256,6 +256,9 @@ function userFromRow(row) {
     email: row.email,
     role: row.role,
     passwordHash: row.password_hash,
+    googleId: row.google_id || null,
+    avatarUrl: row.avatar_url || null,
+    authProvider: row.auth_provider || (row.password_hash ? 'password' : null),
     createdAt: isoDate(row.created_at),
   };
 }
@@ -412,10 +415,12 @@ async function writeSqlStore(store) {
     await client.query('BEGIN');
     for (const user of store.users || []) {
       await client.query(
-        `INSERT INTO borderflow_users (id, name, email, role, password_hash, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, email=EXCLUDED.email, role=EXCLUDED.role, password_hash=EXCLUDED.password_hash`,
-        [user.id, user.name, user.email, user.role, user.passwordHash, user.createdAt || new Date().toISOString()]
+        `INSERT INTO borderflow_users (id, name, email, role, password_hash, google_id, avatar_url, auth_provider, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, email=EXCLUDED.email, role=EXCLUDED.role,
+           password_hash=EXCLUDED.password_hash, google_id=EXCLUDED.google_id, avatar_url=EXCLUDED.avatar_url, auth_provider=EXCLUDED.auth_provider`,
+        [user.id, user.name, user.email, user.role, user.passwordHash ?? null, user.googleId ?? null, user.avatarUrl ?? null,
+         user.authProvider || (user.passwordHash ? 'password' : 'google'), user.createdAt || new Date().toISOString()]
       );
     }
 
@@ -4010,6 +4015,58 @@ function evaluateAndStoreAlerts(crossing, direction, prevWait, nextWait) {
   while (alertEventBuffer.length > 2000) alertEventBuffer.pop();
 }
 
+// ── Google Sign-In (OAuth ID-token flow) ─────────────────────────────────────────────────────────
+// Verifies a Google Identity Services ID token LOCALLY against Google's public JWKS (built-in crypto,
+// no extra deps, certs cached ~1h). The client ID is public; NO client secret is needed for this flow.
+// Enable by setting GOOGLE_OAUTH_CLIENT_ID. GOOGLE_OAUTH_ALLOW_SIGNUP=false allows login but blocks
+// creating brand-new accounts. Accounts are matched/linked by the Google-verified email.
+const GOOGLE_OAUTH_CLIENT_ID = String(process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim();
+const GOOGLE_OAUTH_ENABLED = Boolean(GOOGLE_OAUTH_CLIENT_ID);
+const GOOGLE_CERTS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
+let googleCertsCache = { keys: [], fetchedAt: 0 };
+
+async function fetchGoogleCerts() {
+  const now = Date.now();
+  if (googleCertsCache.keys.length && now - googleCertsCache.fetchedAt < 60 * 60 * 1000) return googleCertsCache.keys;
+  const res = await fetch(GOOGLE_CERTS_URL);
+  if (!res.ok) throw new Error('google-certs-unavailable');
+  const json = await res.json();
+  googleCertsCache = { keys: Array.isArray(json.keys) ? json.keys : [], fetchedAt: now };
+  return googleCertsCache.keys;
+}
+
+function decodeJwtSegment(seg) {
+  return JSON.parse(Buffer.from(String(seg), 'base64url').toString('utf8'));
+}
+
+// Real verifier — returns a normalized profile or throws. Overridable in tests via setGoogleIdVerifier.
+async function verifyGoogleIdTokenReal(idToken) {
+  const parts = String(idToken || '').split('.');
+  if (parts.length !== 3) throw new Error('malformed-id-token');
+  const header = decodeJwtSegment(parts[0]);
+  if (header.alg !== 'RS256') throw new Error('unexpected-alg');
+  const jwk = (await fetchGoogleCerts()).find((k) => k.kid === header.kid);
+  if (!jwk) throw new Error('unknown-signing-key');
+  const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+  const verifier = crypto.createVerify('RSA-SHA256');
+  verifier.update(`${parts[0]}.${parts[1]}`);
+  if (!verifier.verify(publicKey, Buffer.from(parts[2], 'base64url'))) throw new Error('bad-signature');
+  const claims = decodeJwtSegment(parts[1]);
+  if (claims.iss !== 'accounts.google.com' && claims.iss !== 'https://accounts.google.com') throw new Error('bad-issuer');
+  if (claims.aud !== GOOGLE_OAUTH_CLIENT_ID) throw new Error('audience-mismatch');
+  if (!claims.exp || Math.floor(Date.now() / 1000) >= Number(claims.exp)) throw new Error('token-expired');
+  if (claims.email_verified !== true && claims.email_verified !== 'true') throw new Error('email-not-verified');
+  return {
+    googleId: String(claims.sub),
+    email: String(claims.email || '').trim().toLowerCase(),
+    name: String(claims.name || claims.given_name || claims.email || 'Korisnik').slice(0, 80),
+    picture: claims.picture || null,
+  };
+}
+
+let googleIdVerifier = verifyGoogleIdTokenReal;
+function setGoogleIdVerifier(fn) { googleIdVerifier = typeof fn === 'function' ? fn : verifyGoogleIdTokenReal; }
+
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
@@ -4051,6 +4108,49 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
 app.get('/api/auth/me', authRequired, (req, res) => {
   res.json({ ok: true, user: req.user });
+});
+
+// Public runtime config so the SPA can enable the Google button without a rebuild (client ID is public).
+app.get('/api/config', (_req, res) => {
+  res.json({ ok: true, googleAuth: { enabled: GOOGLE_OAUTH_ENABLED, clientId: GOOGLE_OAUTH_ENABLED ? GOOGLE_OAUTH_CLIENT_ID : null } });
+});
+
+// Google Sign-In: verify the ID token, then link-by-email to an existing account or create a new one.
+app.post('/api/auth/google', authLimiter, async (req, res) => {
+  if (!GOOGLE_OAUTH_ENABLED) return res.status(503).json({ ok: false, error: 'Google prijava nije konfigurirana.' });
+  const credential = req.body?.credential || req.body?.idToken || '';
+  if (!credential) return res.status(400).json({ ok: false, error: 'Nedostaje Google token.' });
+  let profile;
+  try {
+    profile = await googleIdVerifier(credential);
+  } catch {
+    return res.status(401).json({ ok: false, error: 'Google prijava nije uspjela.' });
+  }
+  if (!profile?.email) return res.status(401).json({ ok: false, error: 'Google račun nema potvrđen email.' });
+
+  const store = await readAppStore();
+  let user = store.users.find((u) => String(u.email).toLowerCase() === profile.email);
+  const allowSignup = String(process.env.GOOGLE_OAUTH_ALLOW_SIGNUP ?? 'true').toLowerCase() !== 'false';
+
+  if (!user) {
+    if (!allowSignup) return res.status(403).json({ ok: false, error: 'Otvaranje računa je trenutno isključeno.' });
+    user = {
+      id: crypto.randomUUID(), name: profile.name, email: profile.email, role: 'user', passwordHash: null,
+      googleId: profile.googleId, avatarUrl: profile.picture, authProvider: 'google', createdAt: new Date().toISOString(),
+    };
+    store.users.push(user);
+    await writeAppStore(store);
+    await audit('auth_google_register', user, { email: user.email });
+  } else {
+    // Link Google to the existing account on first Google sign-in; any existing password login keeps working.
+    let changed = false;
+    if (!user.googleId) { user.googleId = profile.googleId; changed = true; }
+    if (!user.avatarUrl && profile.picture) { user.avatarUrl = profile.picture; changed = true; }
+    if (!user.authProvider) { user.authProvider = user.passwordHash ? 'password' : 'google'; changed = true; }
+    if (changed) await writeAppStore(store);
+    await audit('auth_google_login', user, { email: user.email });
+  }
+  return res.json({ ok: true, user: publicUser(user), token: signToken(user) });
 });
 
 app.get('/api/public/state', async (req, res) => {
@@ -10188,6 +10288,8 @@ export {
   historyLocalDateHour,
   // Exposed for integration tests (mint an admin token against the seeded admin user).
   signToken,
+  // Exposed for tests so the Google ID-token verifier can be stubbed without hitting Google.
+  setGoogleIdVerifier,
 };
 
 function assertProductionSafety() {

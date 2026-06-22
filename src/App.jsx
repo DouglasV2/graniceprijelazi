@@ -1844,6 +1844,43 @@ function AuthScreen({ setCurrentUser, compact = false, onCancel }) {
   const [name, setName] = useState('');
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const googleBtnRef = useRef(null);
+  const [googleClientId, setGoogleClientId] = useState(null);
+
+  // Discover whether Google Sign-In is enabled (client ID is public; fetched at runtime → no rebuild).
+  useEffect(() => {
+    let cancelled = false;
+    fetchJson('/api/config')
+      .then((cfg) => { if (!cancelled && cfg?.googleAuth?.enabled && cfg.googleAuth.clientId) setGoogleClientId(cfg.googleAuth.clientId); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Load Google Identity Services + render the official button once we have a client ID.
+  useEffect(() => {
+    if (!googleClientId) return undefined;
+    let cancelled = false;
+    const onCredential = (response) => {
+      if (response?.credential) submitAuth('/api/auth/google', { credential: response.credential });
+    };
+    const renderButton = () => {
+      const gid = window.google?.accounts?.id;
+      if (cancelled || !gid || !googleBtnRef.current) return;
+      gid.initialize({ client_id: googleClientId, callback: onCredential });
+      googleBtnRef.current.innerHTML = '';
+      gid.renderButton(googleBtnRef.current, { theme: 'outline', size: 'large', width: 280, text: 'continue_with', logo_alignment: 'center' });
+    };
+    if (window.google?.accounts?.id) { renderButton(); return () => { cancelled = true; }; }
+    let script = document.getElementById('gis-script');
+    if (!script) {
+      script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true; script.defer = true; script.id = 'gis-script';
+      document.head.appendChild(script);
+    }
+    script.addEventListener('load', renderButton);
+    return () => { cancelled = true; script.removeEventListener('load', renderButton); };
+  }, [googleClientId]);
 
   async function submitAuth(path, body) {
     setIsSubmitting(true);
@@ -1893,6 +1930,13 @@ function AuthScreen({ setCurrentUser, compact = false, onCancel }) {
         </div>
         <h1>{mode === 'login' ? 'Prijava' : mode === 'register' ? 'Registracija' : 'Zaboravljena lozinka'}</h1>
         <p>Prijavi se računom za PrijelazRadar. Pristup za tim omogućuje korekciju čekanja i poruka za vozače.</p>
+
+        {googleClientId && (
+          <div className="google-auth">
+            <div ref={googleBtnRef} className="google-auth-button" />
+            <div className="auth-divider"><span>ili</span></div>
+          </div>
+        )}
 
         <form onSubmit={submit} className="auth-form">
           {mode === 'register' && (

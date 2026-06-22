@@ -7,6 +7,14 @@ CREATE TABLE IF NOT EXISTS borderflow_users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Google Sign-In support: Google-only accounts have no password, plus stored identity/profile.
+-- Idempotent migrations so existing deployments pick these up on the next boot.
+ALTER TABLE borderflow_users
+  ADD COLUMN IF NOT EXISTS google_id TEXT,
+  ADD COLUMN IF NOT EXISTS avatar_url TEXT,
+  ADD COLUMN IF NOT EXISTS auth_provider TEXT;
+ALTER TABLE borderflow_users ALTER COLUMN password_hash DROP NOT NULL;
+
 CREATE TABLE IF NOT EXISTS borderflow_admin_overrides (
   key TEXT PRIMARY KEY,
   crossing_id TEXT NOT NULL,

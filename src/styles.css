@@ -1005,3 +1005,9 @@
   nav.tabs.premium-tabs{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px;overflow:visible}
   nav.tabs.premium-tabs button{min-width:0!important}
 }
+
+/* Google Sign-In button + "ili" divider in the auth card */
+.google-auth{display:flex;flex-direction:column;align-items:center;gap:14px;margin:6px 0 4px}
+.google-auth-button{display:flex;justify-content:center;min-height:40px}
+.auth-divider{display:flex;align-items:center;width:100%;gap:10px;color:var(--muted,#8a93a6);font-size:13px}
+.auth-divider::before,.auth-divider::after{content:"";flex:1;height:1px;background:currentColor;opacity:.25}
