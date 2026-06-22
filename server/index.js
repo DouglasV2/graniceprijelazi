@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import jpeg from 'jpeg-js';
+import Stripe from 'stripe';
 import { fileURLToPath } from 'url';
 import {
   CONFIDENCE_LEVELS,
@@ -127,7 +128,7 @@ app.use(cors(configuredCorsOrigins.length ? {
     return callback(new Error('CORS origin is not allowed'));
   },
 } : undefined));
-app.use(express.json({ limit: '160kb' }));
+app.use(express.json({ limit: '160kb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
 
 
 const runtimeDir = path.resolve(__dirname, '..', 'data');
@@ -259,6 +260,10 @@ function userFromRow(row) {
     googleId: row.google_id || null,
     avatarUrl: row.avatar_url || null,
     authProvider: row.auth_provider || (row.password_hash ? 'password' : null),
+    stripeCustomerId: row.stripe_customer_id || null,
+    tripPassUntil: row.trip_pass_until ? isoDate(row.trip_pass_until) : null,
+    subscriptionStatus: row.subscription_status || null,
+    subscriptionUntil: row.subscription_until ? isoDate(row.subscription_until) : null,
     createdAt: isoDate(row.created_at),
   };
 }
@@ -415,12 +420,17 @@ async function writeSqlStore(store) {
     await client.query('BEGIN');
     for (const user of store.users || []) {
       await client.query(
-        `INSERT INTO borderflow_users (id, name, email, role, password_hash, google_id, avatar_url, auth_provider, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        `INSERT INTO borderflow_users (id, name, email, role, password_hash, google_id, avatar_url, auth_provider,
+           stripe_customer_id, trip_pass_until, subscription_status, subscription_until, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, email=EXCLUDED.email, role=EXCLUDED.role,
-           password_hash=EXCLUDED.password_hash, google_id=EXCLUDED.google_id, avatar_url=EXCLUDED.avatar_url, auth_provider=EXCLUDED.auth_provider`,
+           password_hash=EXCLUDED.password_hash, google_id=EXCLUDED.google_id, avatar_url=EXCLUDED.avatar_url, auth_provider=EXCLUDED.auth_provider,
+           stripe_customer_id=EXCLUDED.stripe_customer_id, trip_pass_until=EXCLUDED.trip_pass_until,
+           subscription_status=EXCLUDED.subscription_status, subscription_until=EXCLUDED.subscription_until`,
         [user.id, user.name, user.email, user.role, user.passwordHash ?? null, user.googleId ?? null, user.avatarUrl ?? null,
-         user.authProvider || (user.passwordHash ? 'password' : 'google'), user.createdAt || new Date().toISOString()]
+         user.authProvider || (user.passwordHash ? 'password' : 'google'), user.stripeCustomerId ?? null,
+         user.tripPassUntil ?? null, user.subscriptionStatus ?? null, user.subscriptionUntil ?? null,
+         user.createdAt || new Date().toISOString()]
       );
     }
 
@@ -587,6 +597,7 @@ async function initializeDatastore() {
 function publicUser(user) {
   if (!user) return null;
   const { passwordHash, ...safe } = user;
+  safe.entitlements = entitlementSummary(user);
   return safe;
 }
 
@@ -4153,6 +4164,150 @@ app.post('/api/auth/google', authLimiter, async (req, res) => {
   return res.json({ ok: true, user: publicUser(user), token: signToken(user) });
 });
 
+// ── Trip Pass billing (Stripe) ───────────────────────────────────────────────────────────────────
+// Two products: a one-off 24h Trip Pass (mode 'payment') + a monthly subscription (mode 'subscription').
+// The core wait estimates stay FREE; the pass unlocks power features (starting with unlimited alerts).
+// Enabled by STRIPE_SECRET_KEY. Prices are created in the Stripe Dashboard and referenced by env price id.
+const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
+const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
+const STRIPE_PRICE_TRIPPASS_24H = String(process.env.STRIPE_PRICE_TRIPPASS_24H || '').trim();
+const STRIPE_PRICE_MONTHLY = String(process.env.STRIPE_PRICE_MONTHLY || '').trim();
+const TRIP_PASS_HOURS = Math.max(1, Number(process.env.TRIP_PASS_HOURS || 24));
+const FREE_ALERT_LIMIT = Math.max(0, Number(process.env.FREE_ALERT_LIMIT ?? 1));
+const BILLING_ENABLED = Boolean(STRIPE_SECRET_KEY);
+let stripeClient = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
+function setStripeClientForTests(client) { stripeClient = client; } // test seam — inject a fake Stripe
+
+const BILLING_PRODUCTS = {
+  trippass24h: { mode: 'payment', priceId: () => STRIPE_PRICE_TRIPPASS_24H, label: `Trip Pass (${TRIP_PASS_HOURS} h)` },
+  monthly: { mode: 'subscription', priceId: () => STRIPE_PRICE_MONTHLY, label: 'Mjesečna pretplata' },
+};
+
+// Pure entitlement check — a user has an active pass via a non-expired 24h Trip Pass OR a live subscription.
+function userHasActivePass(user, now = Date.now()) {
+  if (!user) return false;
+  const passUntil = user.tripPassUntil ? new Date(user.tripPassUntil).getTime() : 0;
+  if (Number.isFinite(passUntil) && passUntil > now) return true;
+  const subUntil = user.subscriptionUntil ? new Date(user.subscriptionUntil).getTime() : 0;
+  if ((user.subscriptionStatus === 'active' || user.subscriptionStatus === 'trialing') && Number.isFinite(subUntil) && subUntil > now) return true;
+  return false;
+}
+
+function entitlementSummary(user, now = Date.now()) {
+  return {
+    hasActivePass: userHasActivePass(user, now),
+    tripPassUntil: user?.tripPassUntil || null,
+    subscriptionStatus: user?.subscriptionStatus || null,
+    subscriptionUntil: user?.subscriptionUntil || null,
+  };
+}
+
+function billingPublicBaseUrl(req) {
+  const fromEnv = String(process.env.APP_PUBLIC_URL || process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+  if (fromEnv) return fromEnv;
+  return req ? `${req.protocol}://${req.get('host')}` : '';
+}
+
+// Public so the SPA knows which products to offer (and to hide billing UI entirely when off).
+app.get('/api/billing/config', (_req, res) => {
+  res.json({
+    ok: true,
+    enabled: BILLING_ENABLED,
+    tripPassHours: TRIP_PASS_HOURS,
+    products: {
+      trippass24h: { available: BILLING_ENABLED && Boolean(STRIPE_PRICE_TRIPPASS_24H) },
+      monthly: { available: BILLING_ENABLED && Boolean(STRIPE_PRICE_MONTHLY) },
+    },
+  });
+});
+
+// Create a Stripe Checkout session for the chosen product and return its hosted URL.
+app.post('/api/billing/checkout', authRequired, async (req, res) => {
+  if (!BILLING_ENABLED || !stripeClient) return res.status(503).json({ ok: false, error: 'Naplata trenutno nije dostupna.' });
+  const product = BILLING_PRODUCTS[String(req.body?.product || '')];
+  if (!product) return res.status(400).json({ ok: false, error: 'Nepoznat proizvod.' });
+  const priceId = product.priceId();
+  if (!priceId) return res.status(503).json({ ok: false, error: 'Proizvod nije konfiguriran.' });
+  const base = billingPublicBaseUrl(req);
+  try {
+    const session = await stripeClient.checkout.sessions.create({
+      mode: product.mode,
+      line_items: [{ price: priceId, quantity: 1 }],
+      client_reference_id: req.user.id,
+      customer_email: req.user.email,
+      success_url: `${base}/?billing=success`,
+      cancel_url: `${base}/?billing=cancel`,
+      metadata: { userId: req.user.id, product: req.body.product },
+      ...(product.mode === 'subscription' ? { subscription_data: { metadata: { userId: req.user.id } } } : {}),
+    });
+    res.json({ ok: true, url: session.url });
+  } catch (error) {
+    console.warn('[billing-checkout]', error.message);
+    res.status(502).json({ ok: false, error: 'Pokretanje naplate nije uspjelo.' });
+  }
+});
+
+async function applyToBillingUser({ userId, customerId }, mutate) {
+  const store = await readAppStore();
+  const user = store.users.find((u) => (userId && u.id === userId) || (customerId && u.stripeCustomerId === customerId));
+  if (!user) return false;
+  mutate(user);
+  await writeAppStore(store);
+  return true;
+}
+
+async function handleStripeEvent(event) {
+  const type = event?.type;
+  const obj = event?.data?.object || {};
+  if (type === 'checkout.session.completed') {
+    const userId = obj.client_reference_id || obj.metadata?.userId;
+    if (!userId) return;
+    if (obj.mode === 'payment') {
+      await applyToBillingUser({ userId }, (u) => {
+        const now = Date.now();
+        const from = u.tripPassUntil ? Math.max(now, new Date(u.tripPassUntil).getTime()) : now; // stack passes
+        u.tripPassUntil = new Date(from + TRIP_PASS_HOURS * 3600 * 1000).toISOString();
+        if (obj.customer) u.stripeCustomerId = obj.customer;
+      });
+    } else if (obj.mode === 'subscription') {
+      await applyToBillingUser({ userId }, (u) => {
+        u.subscriptionStatus = 'active';
+        if (obj.customer) u.stripeCustomerId = obj.customer;
+        if (!u.subscriptionUntil) u.subscriptionUntil = new Date(Date.now() + 35 * 24 * 3600 * 1000).toISOString();
+      });
+    }
+  } else if (type === 'customer.subscription.created' || type === 'customer.subscription.updated') {
+    const periodEnd = obj.current_period_end ? new Date(obj.current_period_end * 1000).toISOString() : null;
+    await applyToBillingUser({ userId: obj.metadata?.userId, customerId: obj.customer }, (u) => {
+      u.subscriptionStatus = obj.status || u.subscriptionStatus;
+      if (periodEnd) u.subscriptionUntil = periodEnd;
+    });
+  } else if (type === 'customer.subscription.deleted') {
+    await applyToBillingUser({ userId: obj.metadata?.userId, customerId: obj.customer }, (u) => { u.subscriptionStatus = 'canceled'; });
+  }
+}
+
+// Stripe webhook. Uses the captured raw body for signature verification (see express.json verify hook).
+app.post('/api/billing/webhook', async (req, res) => {
+  if (!BILLING_ENABLED || !stripeClient) return res.status(503).end();
+  let event;
+  try {
+    if (STRIPE_WEBHOOK_SECRET) {
+      event = stripeClient.webhooks.constructEvent(req.rawBody, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET);
+    } else {
+      event = req.body; // dev/local only (no secret configured) — NOT signature-verified
+    }
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: `Webhook signature invalid: ${error.message}` });
+  }
+  try {
+    await handleStripeEvent(event);
+  } catch (error) {
+    console.warn('[billing-webhook]', error.message);
+  }
+  res.json({ received: true });
+});
+
 app.get('/api/public/state', async (req, res) => {
   // refresh=sync → AWAIT the refresh before building effectiveWaits, so the response carries the
   // NEW estimate (used by the admin "Osvježi" button and right after a route/camera signal lands).
@@ -5658,6 +5813,13 @@ app.post('/api/alerts/subscribe', publicWriteLimiter, optionalAuth, async (req, 
   const crossingId = String(req.body?.crossingId || '').trim();
   const direction = req.body?.direction === 'toHr' ? 'toHr' : 'toBih';
   if (!BORDER_CROSSINGS[crossingId]) return res.status(400).json({ ok: false, error: 'Nepoznat prijelaz.' });
+  // Free accounts get FREE_ALERT_LIMIT active alerts; Trip Pass unlocks unlimited. (Anonymous = untouched.)
+  if (req.user && !userHasActivePass(req.user)) {
+    const activeForUser = alertSubscriptionBuffer.filter((s) => s.active && s.userId === req.user.id).length;
+    if (activeForUser >= FREE_ALERT_LIMIT) {
+      return res.status(402).json({ ok: false, upgrade: true, error: `Besplatni plan ima ${FREE_ALERT_LIMIT} alarm. Trip Pass otključava neograničene alarme.` });
+    }
+  }
   const dropBelow = req.body?.dropBelow === null || req.body?.dropBelow === undefined ? null : Math.max(0, Math.min(360, Number(req.body.dropBelow) || 0));
   const riseAbove = req.body?.riseAbove === null || req.body?.riseAbove === undefined ? null : Math.max(0, Math.min(360, Number(req.body.riseAbove) || 0));
   const pushToken = String(req.body?.pushToken || '').slice(0, 400) || null;
@@ -10290,6 +10452,9 @@ export {
   signToken,
   // Exposed for tests so the Google ID-token verifier can be stubbed without hitting Google.
   setGoogleIdVerifier,
+  // Exposed for tests so Stripe can be stubbed without hitting the real API.
+  setStripeClientForTests,
+  userHasActivePass,
 };
 
 function assertProductionSafety() {

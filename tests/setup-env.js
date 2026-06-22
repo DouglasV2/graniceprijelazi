@@ -23,3 +23,8 @@ process.env.BORDERFLOW_DEMO_USER_EMAIL = 'user@borderflow.app';
 process.env.BORDERFLOW_DEMO_USER_PASSWORD = 'change-this-user-password';
 // Enable Google Sign-In in tests (the real JWKS verifier is stubbed via setGoogleIdVerifier).
 process.env.GOOGLE_OAUTH_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID || 'test-client.apps.googleusercontent.com';
+// Enable Trip Pass billing in tests (the real Stripe client is stubbed via setStripeClientForTests).
+process.env.STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || 'sk_test_dummy';
+process.env.STRIPE_PRICE_TRIPPASS_24H = process.env.STRIPE_PRICE_TRIPPASS_24H || 'price_test_trippass';
+process.env.STRIPE_PRICE_MONTHLY = process.env.STRIPE_PRICE_MONTHLY || 'price_test_monthly';
+process.env.STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_test_dummy';

@@ -15,6 +15,13 @@ ALTER TABLE borderflow_users
   ADD COLUMN IF NOT EXISTS auth_provider TEXT;
 ALTER TABLE borderflow_users ALTER COLUMN password_hash DROP NOT NULL;
 
+-- Trip Pass / subscription entitlements (Stripe). All nullable; absence = free plan.
+ALTER TABLE borderflow_users
+  ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT,
+  ADD COLUMN IF NOT EXISTS trip_pass_until TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS subscription_status TEXT,
+  ADD COLUMN IF NOT EXISTS subscription_until TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS borderflow_admin_overrides (
   key TEXT PRIMARY KEY,
   crossing_id TEXT NOT NULL,

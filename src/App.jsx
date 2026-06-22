@@ -2432,6 +2432,69 @@ function PublicView({ selectedDirection, setSelectedDirection, selectedCrossing,
   );
 }
 
+function TripPassModal({ currentUser, onClose }) {
+  const [config, setConfig] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const ent = currentUser?.entitlements;
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchJson('/api/billing/config').then((c) => { if (!cancelled) setConfig(c); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  async function buy(product) {
+    if (!currentUser?.token) return;
+    setBusy(product); setError('');
+    try {
+      const res = await fetchJson('/api/billing/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${currentUser.token}` },
+        body: JSON.stringify({ product }),
+      });
+      if (res?.url) { window.location.href = res.url; return; }
+      throw new Error('no-url');
+    } catch {
+      setError('Pokretanje naplate nije uspjelo. Pokušaj ponovno.');
+      setBusy('');
+    }
+  }
+
+  const fmt = (iso) => { try { return new Date(iso).toLocaleString('hr-HR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
+
+  return (
+    <div className="trippass-overlay" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="trippass-card" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="auth-close-button" onClick={onClose} aria-label="Zatvori">×</button>
+        <h2>Trip Pass</h2>
+        {ent?.hasActivePass ? (
+          <p className="trippass-active">✓ Pass je aktivan{ent.tripPassUntil ? ` — do ${fmt(ent.tripPassUntil)}` : ent.subscriptionUntil ? ` (pretplata do ${fmt(ent.subscriptionUntil)})` : ''}.</p>
+        ) : (
+          <p>Osnovne procjene čekanja su besplatne. Trip Pass otključava <strong>neograničene alarme</strong> i napredne funkcije.</p>
+        )}
+        {!currentUser?.token && <p className="form-message">Prvo se prijavi da kupiš Trip Pass.</p>}
+        {config && !config.enabled && <p className="form-message">Naplata trenutno nije dostupna.</p>}
+        {config?.enabled && currentUser?.token && (
+          <div className="trippass-options">
+            {config.products?.trippass24h?.available && (
+              <button type="button" className="primary-button" disabled={!!busy} onClick={() => buy('trippass24h')}>
+                {busy === 'trippass24h' ? 'Otvaram…' : `Trip Pass ${config.tripPassHours || 24} h`}
+              </button>
+            )}
+            {config.products?.monthly?.available && (
+              <button type="button" className="logout-button" disabled={!!busy} onClick={() => buy('monthly')}>
+                {busy === 'monthly' ? 'Otvaram…' : 'Mjesečna pretplata'}
+              </button>
+            )}
+          </div>
+        )}
+        {error && <div className="form-message">{error}</div>}
+      </div>
+    </div>
+  );
+}
+
 function TripPlanner({ selectedDirection, setSelectedDirection, tripCrossing, setTripCrossing, selectedCrossing, setSelectedCrossing, setActiveTab, overrides, currentUser }) {
   const [origin, setOrigin] = useState('Zagreb');
   const [destination, setDestination] = useState('Cazin');
@@ -4848,6 +4911,8 @@ export default function App() {
   const [detailCrossing, setDetailCrossing] = useState(null);
   const [showTerms, setShowTerms] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
+  const [showTripPass, setShowTripPass] = useState(false);
+  const [billingNotice, setBillingNotice] = useState('');
   const [mapModeRequest, setMapModeRequest] = useState('map');
   const [dismissedAlerts, setDismissedAlerts] = useState({});
   const [notificationRules, setNotificationRules] = useLocalStorage('bf_notification_rules_v1', []);
@@ -4967,6 +5032,15 @@ export default function App() {
     if (directionParam === 'toHr' || directionParam === 'toBih') setSelectedDirection(directionParam);
     if (crossingId && CROSSINGS.some((item) => item.id === crossingId)) selectCrossing(crossingId);
     if (tabParam && [...TABS_USER, ...TABS_ADMIN].includes(tabParam)) setActiveTab(tabParam);
+    // Stripe Checkout redirect: ?billing=success → thank the user (entitlements refresh via /api/auth/me
+    // on mount) and ?billing=cancel → silently clean up. Strip the param either way.
+    const billing = params.get('billing');
+    if (billing === 'success') setBillingNotice('Hvala! Trip Pass je aktiviran.');
+    if (billing) {
+      params.delete('billing');
+      const qs = params.toString();
+      window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -5055,6 +5129,11 @@ export default function App() {
           <div className="top-actions premium-top-actions clean-top-actions">
             <LanguageToggle value={uiLanguage} onChange={setUiLanguage} />
             <button type="button" className="icon-help-button" onClick={() => setShowTerms(true)} aria-label="Kako računamo stanje" title="Kako računamo stanje">?</button>
+            {currentUser && (
+              <button type="button" className={`trippass-button${currentUser.entitlements?.hasActivePass ? ' is-active' : ''}`} onClick={() => setShowTripPass(true)} title="Trip Pass">
+                {currentUser.entitlements?.hasActivePass ? '★ Pass' : 'Trip Pass'}
+              </button>
+            )}
             {currentUser
               ? <button type="button" className="logout-button" onClick={() => setCurrentUser(null)}><LogOut size={15}/> Odjava</button>
               : <button type="button" className="logout-button" onClick={() => setShowAuth(true)}>Prijava</button>
@@ -5129,6 +5208,14 @@ export default function App() {
           <div className="auth-modal-card" onClick={(event) => event.stopPropagation()}>
             <AuthScreen compact onCancel={() => setShowAuth(false)} setCurrentUser={(user) => { setCurrentUser(user); setShowAuth(false); }} />
           </div>
+        </div>
+      )}
+
+      {showTripPass && <TripPassModal currentUser={currentUser} onClose={() => setShowTripPass(false)} />}
+
+      {billingNotice && (
+        <div className="billing-toast" role="status" onClick={() => setBillingNotice('')}>
+          {billingNotice}<span className="billing-toast-close">×</span>
         </div>
       )}
     </main>
