@@ -64,6 +64,11 @@ export const SERVICE_RATE_CONFIG = {
   'crveni-grm': { vehiclesPerMinute: 1.3, lanes: 1 },    // Prolog
   'vinjani-gornji': { vehiclesPerMinute: 1.3, lanes: 1 },
   prisika: { vehiclesPerMinute: 1.2, lanes: 1 },         // Aržano — small
+  // BiH ↔ Serbia / Montenegro
+  raca: { vehiclesPerMinute: 2.0, lanes: 2 },            // Bosanska Rača — main Sava bridge, busy
+  sepak: { vehiclesPerMinute: 1.5, lanes: 1 },           // Šepak/Trbušnica — Belgrade–Sarajevo route
+  hum: { vehiclesPerMinute: 1.0, lanes: 1 },             // Hum/Šćepan Polje — small mountain
+  deleusa: { vehiclesPerMinute: 1.0, lanes: 1 },         // Deleuša/Vraćenovići — small/new
 };
 
 // Time-of-day + weekend modifiers on the service rate (peak = slower clearance).

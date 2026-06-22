@@ -1043,20 +1043,26 @@ const CAMERA_FEEDS = {
 // machine-readable image at those URLs.
 
 
-function routeAnchors(lat, lng, hrLabel, bihLabel, crossingName) {
+// Maps a neighbour country code to its display label. `toHr` is the internal key for the
+// "leaving BiH" direction; for a non-HR crossing it means "toward the neighbour" (RS/CG).
+const NEIGHBOR_LABELS = { HR: 'HR', RS: 'Srbija', CG: 'Crna Gora' };
+function neighborLabelOf(neighbor = 'HR') { return NEIGHBOR_LABELS[neighbor] || 'HR'; }
+
+function routeAnchors(lat, lng, otherLabel, bihLabel, crossingName, neighbor = 'HR') {
+  const N = neighborLabelOf(neighbor);
   return {
     toBih: {
-      label: 'HR → BiH',
-      fromLabel: `${hrLabel} · HR prilaz`,
+      label: `${N} → BiH`,
+      fromLabel: `${otherLabel} · ${N} prilaz`,
       toLabel: `${bihLabel} · BiH izlaz`,
       approachStart: { lat: lat + 0.009, lng: lng - 0.018 },
       borderPoint: { lat, lng },
       exitPoint: { lat: lat - 0.009, lng: lng + 0.018 },
     },
     toHr: {
-      label: 'BiH → HR',
+      label: `BiH → ${N}`,
       fromLabel: `${bihLabel} · BiH prilaz`,
-      toLabel: `${hrLabel} · HR izlaz`,
+      toLabel: `${otherLabel} · ${N} izlaz`,
       approachStart: { lat: lat - 0.009, lng: lng + 0.018 },
       borderPoint: { lat, lng },
       exitPoint: { lat: lat + 0.009, lng: lng - 0.018 },
@@ -1149,13 +1155,15 @@ function withHakImageFallbacks(camera = {}) {
   };
 }
 
-function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, cameras, anchors }) {
+function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, cameras, anchors, neighbor = 'HR' }) {
   BORDER_CROSSINGS[id] = {
     id,
     name,
     shortName,
+    neighbor,
+    neighborLabel: neighborLabelOf(neighbor),
     waits,
-    anchors: anchors || routeAnchors(lat, lng, hrLabel, bihLabel, name),
+    anchors: anchors || routeAnchors(lat, lng, hrLabel, bihLabel, name, neighbor),
   };
   CAMERA_FEEDS[id] = cameras.map((rawCamera) => {
     const camera = withHakImageFallbacks({ source: 'HAK', ...rawCamera });
@@ -1444,7 +1452,42 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       { id: 'cg-bihamk', label: 'Crveni Grm / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Crveni Grm', 'Crveni Grm'] },
     ],
   },
+  // ── BiH ↔ Serbia / Montenegro. Internal direction key `toHr` here means "toward the neighbour
+  //    country" (RS/CG) — the per-crossing `neighbor` drives the displayed labels. BIHAMK-sourced
+  //    (waits + camera where available); anchors are derived (Google-routed), refine later. ──────────
+  {
+    id: 'sepak', name: 'GP Šepak', shortName: 'Šepak', lat: 44.5417, lng: 19.1815, neighbor: 'RS',
+    hrLabel: 'Trbušnica', bihLabel: 'Šepak',
+    waits: { toBih: { car: 22, truck: 55, bus: 28 }, toHr: { car: 26, truck: 60, bus: 32 } },
+    cameras: [{ id: 'sep-bihamk', label: 'Šepak / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Šepak', 'Šepak', 'Sepak', 'Šepak - Loznica', 'Sepak - Loznica'] }],
+  },
+  {
+    id: 'raca', name: 'GP Bosanska Rača', shortName: 'B. Rača', lat: 44.8936, lng: 19.3342, neighbor: 'RS',
+    hrLabel: 'Sremska Rača', bihLabel: 'Bosanska Rača',
+    waits: { toBih: { car: 24, truck: 60, bus: 30 }, toHr: { car: 30, truck: 70, bus: 38 } },
+    cameras: [{ id: 'raca-bihamk', label: 'Bosanska Rača / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Rača', 'Rača', 'Raca', 'Bosanska Rača', 'Bosanska Raca'] }],
+  },
+  {
+    id: 'hum', name: 'GP Hum', shortName: 'Hum', lat: 43.3479, lng: 18.8455, neighbor: 'CG',
+    hrLabel: 'Šćepan Polje', bihLabel: 'Hum',
+    waits: { toBih: { car: 14, truck: 30, bus: 18 }, toHr: { car: 16, truck: 34, bus: 20 } },
+    cameras: [{ id: 'hum-bihamk', label: 'Hum / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Hum', 'Hum', 'Šćepan Polje', 'Scepan Polje'] }],
+  },
+  {
+    id: 'deleusa', name: 'GP Deleuša', shortName: 'Deleuša', lat: 42.835, lng: 18.515, neighbor: 'CG',
+    hrLabel: 'Vraćenovići', bihLabel: 'Deleuša',
+    waits: { toBih: { car: 12, truck: 26, bus: 15 }, toHr: { car: 14, truck: 30, bus: 18 } },
+    cameras: [{ id: 'del-bihamk', label: 'Deleuša / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Deleuša', 'Deleuša', 'Deleusa', 'Vraćenovići', 'Vracenovici'] }],
+  },
 ].forEach(addCrossing);
+
+// HR↔BiH trip planning / best-crossing comparisons currently assume the Croatia border. The new
+// BiH↔Serbia/Montenegro crossings are visible in the list/map/state but excluded from these HR-centric
+// "alternative" comparisons (a Serbia crossing is not an alternative for a Zagreb→Sarajevo trip) until
+// a per-neighbour planner exists. Everything else (state, alerts, history, geofences) includes them.
+function hrBorderCrossings() {
+  return Object.values(BORDER_CROSSINGS).filter((crossing) => (crossing.neighbor || 'HR') === 'HR');
+}
 
 // ── Camera direction safety (intelligence spec §2) ────────────────────────────
 // A camera frame physically shows ONE side of the border. Feeding the same frame
@@ -2093,6 +2136,23 @@ const PUBLIC_SOURCE_TARGETS = {
   },
   'vinjani-gornji': {
     bihamkNames: ['Orahovlje', 'GP Orahovlje', 'Vinjani Gornji'],
+    preferred: ['BIHAMK', 'Google Routes', 'Kamera'],
+  },
+  // BiH ↔ Serbia / Montenegro (BIHAMK lists these alongside the HR crossings).
+  sepak: {
+    bihamkNames: ['Šepak', 'Sepak', 'GP Šepak', 'Šepak - Loznica'],
+    preferred: ['BIHAMK', 'Google Routes', 'Kamera'],
+  },
+  raca: {
+    bihamkNames: ['Rača', 'Raca', 'Bosanska Rača', 'Bosanska Raca', 'GP Rača'],
+    preferred: ['BIHAMK', 'Google Routes', 'Kamera'],
+  },
+  hum: {
+    bihamkNames: ['Hum', 'GP Hum', 'Šćepan Polje', 'Scepan Polje'],
+    preferred: ['BIHAMK', 'Google Routes', 'Kamera'],
+  },
+  deleusa: {
+    bihamkNames: ['Deleuša', 'Deleusa', 'GP Deleuša', 'Vraćenovići'],
     preferred: ['BIHAMK', 'Google Routes', 'Kamera'],
   },
 };
@@ -5793,7 +5853,7 @@ app.get('/api/best-crossing', async (req, res) => {
   try { extraDrives = req.query.extraDrives ? JSON.parse(String(req.query.extraDrives)) : {}; } catch { extraDrives = {}; }
   const store = await readAppStore();
   const list = [];
-  for (const crossing of Object.values(BORDER_CROSSINGS)) {
+  for (const crossing of hrBorderCrossings()) {
     const signal = await effectiveBorderSignal(crossing, direction, 'car', store);
     list.push({
       id: crossing.id,
@@ -9747,7 +9807,7 @@ function borderDelay(crossing, direction = 'toBih', vehicle = 'car') {
 async function buildFallbackJourneyOptions(direction, vehicle, origin = '', destination = '') {
   const store = await readAppStore();
   const baseTripMinutes = estimateFallbackTripBaseMinutes(origin, destination);
-  const options = await Promise.all(Object.values(BORDER_CROSSINGS)
+  const options = await Promise.all(hrBorderCrossings()
     .map(async (crossing, index) => {
       const anchor = crossing.anchors[direction] || crossing.anchors.toBih;
       const borderSignal = await effectiveBorderSignal(crossing, direction, vehicle, store);
@@ -10347,7 +10407,7 @@ app.get('/api/trip-options', async (req, res) => {
     return;
   }
 
-  const crossings = Object.values(BORDER_CROSSINGS);
+  const crossings = hrBorderCrossings();
   const results = await Promise.allSettled(
     crossings.map((crossing) => computeJourneyOption(crossing, direction, origin, destination, vehicle))
   );
