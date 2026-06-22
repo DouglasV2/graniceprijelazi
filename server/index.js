@@ -1465,19 +1465,19 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     id: 'raca', name: 'GP Bosanska Rača', shortName: 'B. Rača', lat: 44.8936, lng: 19.3342, neighbor: 'RS',
     hrLabel: 'Sremska Rača', bihLabel: 'Bosanska Rača',
     waits: { toBih: { car: 24, truck: 60, bus: 30 }, toHr: { car: 30, truck: 70, bus: 38 } },
-    cameras: [{ id: 'raca-bihamk', label: 'Bosanska Rača / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Rača', 'Rača', 'Raca', 'Bosanska Rača', 'Bosanska Raca'] }],
+    cameras: [], // no live BIHAMK camera feed for Bosanska Rača yet — wait text only
   },
   {
     id: 'hum', name: 'GP Hum', shortName: 'Hum', lat: 43.3479, lng: 18.8455, neighbor: 'CG',
     hrLabel: 'Šćepan Polje', bihLabel: 'Hum',
     waits: { toBih: { car: 14, truck: 30, bus: 18 }, toHr: { car: 16, truck: 34, bus: 20 } },
-    cameras: [{ id: 'hum-bihamk', label: 'Hum / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Hum', 'Hum', 'Šćepan Polje', 'Scepan Polje'] }],
+    cameras: [], // no live BIHAMK camera feed for Hum yet — wait text only
   },
   {
     id: 'deleusa', name: 'GP Deleuša', shortName: 'Deleuša', lat: 42.835, lng: 18.515, neighbor: 'CG',
     hrLabel: 'Vraćenovići', bihLabel: 'Deleuša',
     waits: { toBih: { car: 12, truck: 26, bus: 15 }, toHr: { car: 14, truck: 30, bus: 18 } },
-    cameras: [{ id: 'del-bihamk', label: 'Deleuša / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Deleuša', 'Deleuša', 'Deleusa', 'Vraćenovići', 'Vracenovici'] }],
+    cameras: [], // BIHAMK has no Deleuša feed — the matchText mis-resolved to a Sarajevo (Skenderija) camera, so no camera here; wait text only
   },
 ].forEach(addCrossing);
 
@@ -1485,9 +1485,10 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
 // BiH↔Serbia/Montenegro crossings are visible in the list/map/state but excluded from these HR-centric
 // "alternative" comparisons (a Serbia crossing is not an alternative for a Zagreb→Sarajevo trip) until
 // a per-neighbour planner exists. Everything else (state, alerts, history, geofences) includes them.
-function hrBorderCrossings() {
-  return Object.values(BORDER_CROSSINGS).filter((crossing) => (crossing.neighbor || 'HR') === 'HR');
+function crossingsForNeighbor(neighbor = 'HR') {
+  return Object.values(BORDER_CROSSINGS).filter((crossing) => (crossing.neighbor || 'HR') === neighbor);
 }
+function hrBorderCrossings() { return crossingsForNeighbor('HR'); }
 
 // ── Camera direction safety (intelligence spec §2) ────────────────────────────
 // A camera frame physically shows ONE side of the border. Feeding the same frame
@@ -5880,11 +5881,16 @@ app.get('/api/location-wait/status/:sessionId', (req, res) => {
 app.get('/api/best-crossing', async (req, res) => {
   const direction = req.query.direction === 'toHr' ? 'toHr' : 'toBih';
   const referenceId = String(req.query.referenceId || '').trim() || undefined;
+  // Compare crossings only within the SAME border (neighbour). Resolved from an explicit ?neighbor,
+  // else the reference crossing's neighbour, else HR — so a Serbia crossing ranks vs other Serbia
+  // crossings (Šepak vs Rača), not against the Croatia ones.
+  const refNeighbor = referenceId && BORDER_CROSSINGS[referenceId] ? (BORDER_CROSSINGS[referenceId].neighbor || 'HR') : null;
+  const neighbor = ['HR', 'RS', 'CG'].includes(String(req.query.neighbor)) ? String(req.query.neighbor) : (refNeighbor || 'HR');
   let extraDrives = {};
   try { extraDrives = req.query.extraDrives ? JSON.parse(String(req.query.extraDrives)) : {}; } catch { extraDrives = {}; }
   const store = await readAppStore();
   const list = [];
-  for (const crossing of hrBorderCrossings()) {
+  for (const crossing of crossingsForNeighbor(neighbor)) {
     const signal = await effectiveBorderSignal(crossing, direction, 'car', store);
     list.push({
       id: crossing.id,
@@ -5896,7 +5902,7 @@ app.get('/api/best-crossing', async (req, res) => {
     });
   }
   const ranked = rankBestCrossings(list, { referenceId });
-  res.json({ ok: true, direction, ...ranked });
+  res.json({ ok: true, direction, neighbor, ...ranked });
 });
 
 // ── ALERTS (spec §9) ──────────────────────────────────────────────────────────

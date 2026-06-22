@@ -416,7 +416,7 @@ const ADDITIONAL_CROSSINGS = [
       toBih: [{ label: 'Prilaz Srbija', minutes: 9, level: 'low' }, { label: 'Most (Sava)', minutes: 7, level: 'low' }, { label: 'BiH kontrola', minutes: 16, level: 'medium' }],
       toHr: [{ label: 'Prilaz BiH', minutes: 12, level: 'medium' }, { label: 'Most (Sava)', minutes: 7, level: 'low' }, { label: 'Srbija kontrola', minutes: 20, level: 'medium' }],
     },
-    cameras: [externalCamera({ id: 'raca-bihamk', label: 'Bosanska Rača / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Rača', 'Rača', 'Raca', 'Bosanska Rača'], note: 'BIHAMK popis kamera; kamera za Raču nije uvijek dostupna.' })],
+    cameras: [], // no live BIHAMK camera feed for Bosanska Rača yet
     historyBase: { cars: 220, trucks: 110, buses: 16, wait: 34 }, bestDays: ['Utorak', 'Četvrtak prije 11h', 'Nedjelja navečer'],
   }),
   makeBorderCrossing({
@@ -432,7 +432,7 @@ const ADDITIONAL_CROSSINGS = [
       toBih: [{ label: 'Prilaz CG', minutes: 6, level: 'low' }, { label: 'Most', minutes: 4, level: 'low' }, { label: 'BiH kontrola', minutes: 10, level: 'low' }],
       toHr: [{ label: 'Prilaz BiH', minutes: 7, level: 'low' }, { label: 'Most', minutes: 4, level: 'low' }, { label: 'CG kontrola', minutes: 12, level: 'medium' }],
     },
-    cameras: [externalCamera({ id: 'hum-bihamk', label: 'Hum / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Hum', 'Hum', 'Šćepan Polje'], note: 'BIHAMK popis kamera; kamera za Hum nije uvijek dostupna.' })],
+    cameras: [], // no live BIHAMK camera feed for Hum yet
     historyBase: { cars: 90, trucks: 20, buses: 10, wait: 18 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Nedjelja prije podne'],
   }),
   makeBorderCrossing({
@@ -448,7 +448,7 @@ const ADDITIONAL_CROSSINGS = [
       toBih: [{ label: 'Prilaz CG', minutes: 5, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'BiH kontrola', minutes: 9, level: 'low' }],
       toHr: [{ label: 'Prilaz BiH', minutes: 6, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'CG kontrola', minutes: 11, level: 'medium' }],
     },
-    cameras: [externalCamera({ id: 'del-bihamk', label: 'Deleuša / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Deleuša', 'Deleuša', 'Deleusa', 'Vraćenovići'], note: 'BIHAMK kamera za Deleušu (slika rotira / nije uvijek dostupna).' })],
+    cameras: [], // BIHAMK has no Deleuša feed (matchText mis-resolved to a Sarajevo camera) — none here
     historyBase: { cars: 70, trucks: 16, buses: 8, wait: 15 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Nedjelja prije podne'],
   }),
 ];
