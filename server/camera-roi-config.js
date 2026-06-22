@@ -206,6 +206,34 @@ export const STATIC_ROI_CONFIGS = {
     lanePolygons: [], cameraReliability: 0.55, nightReliability: 0.38, isActive: true,
     metadata: { seededFrom: '2026-06-20 live frame — queue in the right lane; left truck-staging ignored. Visual-only (direction unproven) → count signal only', needsEditorReview: true },
   },
+  // ── Aržano / GP Prisika (HAK 315, stable HAK feed) — REVIEWED 2026-06-22 against a live ~10-car
+  //    toHr queue. The queue fills the left+centre approach lanes (cars face ▼HR = entering
+  //    Croatia/Schengen); the right ▲BiH lane is excluded. Camera pinned validForDirections:['toHr'].
+  'pri-hak-arzano': {
+    cameraId: 'pri-hak-arzano', crossingId: 'prisika', direction: 'toHr', roiVersion: '2026-06-22-reviewed',
+    queuePolygon: [
+      { x: 0.02, y: 0.95 }, { x: 0.68, y: 0.88 }, { x: 0.58, y: 0.22 }, { x: 0.32, y: 0.22 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.70, y: 0.30 }, { x: 1.00, y: 0.30 }, { x: 1.00, y: 0.80 }, { x: 0.72, y: 0.70 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.66, nightReliability: 0.44, isActive: true,
+    metadata: { reviewedFrom: '2026-06-22 live frame — toHr queue in left+centre approach lanes (Schengen-entry direction); right toBih lane excluded; verified via overlay' },
+  },
+  // ── Županja / GP Orašje (HAK 79, stable HAK feed) — REVIEWED 2026-06-22 against a live toHr queue
+  //    channeled by bollards down the centre (cars face ▼HR = entering Croatia); the empty left
+  //    toBih lane + right-side parked cars are excluded. Camera pinned validForDirections:['toHr'].
+  'ora-hak-zupanja': {
+    cameraId: 'ora-hak-zupanja', crossingId: 'orasje', direction: 'toHr', roiVersion: '2026-06-22-reviewed',
+    queuePolygon: [
+      { x: 0.42, y: 0.98 }, { x: 0.80, y: 0.95 }, { x: 0.64, y: 0.22 }, { x: 0.46, y: 0.22 },
+    ],
+    ignorePolygons: [
+      [{ x: 0.80, y: 0.35 }, { x: 1.00, y: 0.35 }, { x: 1.00, y: 0.95 }, { x: 0.82, y: 0.82 }],
+    ],
+    lanePolygons: [], cameraReliability: 0.66, nightReliability: 0.45, isActive: true,
+    metadata: { reviewedFrom: '2026-06-22 live frame — toHr queue in the central bollard-channeled lane (Schengen-entry); empty left toBih lane + right parked cars excluded; verified via overlay' },
+  },
 };
 
 // DB-backed configs (postgres mode) are loaded once at startup + after each save into this sync

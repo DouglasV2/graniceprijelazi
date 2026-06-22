@@ -1186,10 +1186,10 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       },
     },
     cameras: [
-      // NEEDS VERIFICATION: HAK page k=44 ("Županja") currently embeds no cam.asp image
-      // (camera appears offline). 79.jpg returns a valid live JPEG but its framing is unconfirmed
-      // as the Županja crossing — verify visually before relying on it for queue detection.
-      { id: 'ora-hak-zupanja', label: 'Županja · HR strana', source: 'HAK', url: 'https://www.hak.hr/info/kamere/79.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=44' },
+      // VERIFIED 2026-06-21/22: 79.jpg burns in "GP Županja" with a real toHr queue both days +
+      // ▼HR/▲BiH lane arrows. The queued (channeled) cars face the camera toward ▼HR = entering
+      // Croatia/Schengen (the heavy-check direction) → pinned toHr. Stable HAK feed (not BIHAMK).
+      { id: 'ora-hak-zupanja', label: 'Županja · HR strana', validForDirections: ['toHr'], source: 'HAK', url: 'https://www.hak.hr/info/kamere/79.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=44' },
       { id: 'ora-hak-bih', label: 'Orašje · BiH strana', source: 'HAK/BIHAMK', url: 'https://www.hak.hr/info/kamere/401.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=183' },
       { id: 'ora-amsbih', label: 'Orašje · AMSBiH', source: 'AMSBiH', url: 'https://www.amsbih.ba/amsbih.ba/kamere/kamere/Lokacija20/0Orasje.jpg', externalUrl: 'https://bihamk.ba/spi/kamere' },
     ],
@@ -1344,7 +1344,10 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     cameras: [
       // FIX: k=193 ("Aržano") → cam.asp?id=315/316; k=180 ("BIH Prisika") → cam.asp?id=409.
       // Old 193.jpg / 180.jpg returned the invalid-webcam placeholder.
-      { id: 'pri-hak-arzano', label: 'Aržano', url: 'https://m.hak.hr/kamera.asp?g=2&k=193', imageUrls: ['https://www.hak.hr/info/kamere/315.jpg', 'https://www.hak.hr/info/kamere/316.jpg'] },
+      // VERIFIED 2026-06-22: 315.jpg burns in "GP Aržano" with a ~10-car toHr queue + ▼HR/▲BiH
+      // arrows; the queued left/centre lanes face the camera toward ▼HR = entering Croatia/Schengen
+      // (heavy-check direction) → pinned toHr. Stable HAK feed.
+      { id: 'pri-hak-arzano', label: 'Aržano', validForDirections: ['toHr'], url: 'https://m.hak.hr/kamera.asp?g=2&k=193', imageUrls: ['https://www.hak.hr/info/kamere/315.jpg', 'https://www.hak.hr/info/kamere/316.jpg'] },
       { id: 'pri-hak-bih', label: 'BIH Prisika', url: 'https://m.hak.hr/kamera.asp?g=2&k=180', imageUrls: ['https://www.hak.hr/info/kamere/409.jpg'] },
       { id: 'pri-bihamk', label: 'Prisika / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Prisika (Aržano)', 'GP Prisika', 'Prisika', 'Aržano', 'Arzano'] },
     ],
