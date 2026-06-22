@@ -4368,6 +4368,65 @@ app.post('/api/billing/webhook', async (req, res) => {
   res.json({ received: true });
 });
 
+// Public state is identical for every (guest) caller, so a tiny single-flight TTL cache lets a burst
+// of pollers ("1000 users open the map") share ONE store-read + wait-map computation instead of each
+// recomputing. Default-mode polls hit the cache; refresh=sync/force always rebuild (and refresh it).
+let publicStateCache = { payload: null, builtAt: 0 };
+let publicStateInflight = null;
+const PUBLIC_STATE_CACHE_MS = Math.max(0, Number(process.env.PUBLIC_STATE_CACHE_MS ?? 2000));
+
+async function buildPublicStatePayload(refreshedInThisRequest = false) {
+  const store = await readAppStore();
+  const { effectiveWaits, waitSources } = await buildEffectiveWaitMaps(store);
+  const lastFinishedAt = sourceRefreshState.lastRunAt ? new Date(sourceRefreshState.lastRunAt).toISOString() : null;
+  return {
+    ok: true,
+    updatedAt: new Date().toISOString(),
+    warnings: envWarnings(),
+    overrides: store.overrides,
+    statusOverrides: store.statusOverrides || {},
+    effectiveWaits,
+    waitSources,
+    sourceRefresh: {
+      enabled: SOURCE_FETCH_ENABLED,
+      running: Boolean(sourceRefreshState.running),
+      refreshedInThisRequest,
+      ageSeconds: sourceRefreshState.lastRunAt ? Math.max(0, Math.round((Date.now() - sourceRefreshState.lastRunAt) / 1000)) : null,
+      lastFinishedAt,
+      intervalSeconds: Math.round(SOURCE_REFRESH_INTERVAL_MS / 1000),
+      lastRunAt: lastFinishedAt,
+      lastError: sourceRefreshState.lastError || '',
+    },
+    reportsCount: store.reports.length,
+    lastReports: store.reports.slice(0, 12),
+    features: {
+      verifiedLocation: VERIFIED_LOCATION_ENABLED,
+    },
+    crossings: Object.values(BORDER_CROSSINGS).map((crossing) => ({
+      id: crossing.id,
+      name: crossing.name,
+      shortName: crossing.shortName,
+      locationWaitArmed: verifiedLocationEnabledFor(crossing.id) && (hasLocationWaitAnchors(crossing, 'toBih') || hasLocationWaitAnchors(crossing, 'toHr')),
+      cameras: (CAMERA_FEEDS[crossing.id] || []).map((camera) => ({ id: camera.id, source: camera.source || 'HAK', label: camera.label })),
+    })),
+  };
+}
+
+async function getCachedPublicState() {
+  if (PUBLIC_STATE_CACHE_MS === 0) return buildPublicStatePayload(false);
+  const now = Date.now();
+  if (publicStateCache.payload && now - publicStateCache.builtAt < PUBLIC_STATE_CACHE_MS) return publicStateCache.payload;
+  if (publicStateInflight) return publicStateInflight; // single-flight: concurrent callers share one build
+  publicStateInflight = (async () => {
+    try {
+      const payload = await buildPublicStatePayload(false);
+      publicStateCache = { payload, builtAt: Date.now() };
+      return payload;
+    } finally { publicStateInflight = null; }
+  })();
+  return publicStateInflight;
+}
+
 app.get('/api/public/state', async (req, res) => {
   // refresh=sync → AWAIT the refresh before building effectiveWaits, so the response carries the
   // NEW estimate (used by the admin "Osvježi" button and right after a route/camera signal lands).
@@ -4391,42 +4450,14 @@ app.get('/api/public/state', async (req, res) => {
     });
   }
   res.set('Cache-Control', 'no-store');
-  const store = await readAppStore();
-  const { effectiveWaits, waitSources } = await buildEffectiveWaitMaps(store);
-  const lastFinishedAt = sourceRefreshState.lastRunAt ? new Date(sourceRefreshState.lastRunAt).toISOString() : null;
-  res.json({
-    ok: true,
-    updatedAt: new Date().toISOString(),
-    warnings: envWarnings(),
-    overrides: store.overrides,
-    statusOverrides: store.statusOverrides || {},
-    effectiveWaits,
-    waitSources,
-    sourceRefresh: {
-      enabled: SOURCE_FETCH_ENABLED,
-      running: Boolean(sourceRefreshState.running),
-      refreshedInThisRequest,
-      ageSeconds: sourceRefreshState.lastRunAt ? Math.max(0, Math.round((Date.now() - sourceRefreshState.lastRunAt) / 1000)) : null,
-      lastFinishedAt,
-      intervalSeconds: Math.round(SOURCE_REFRESH_INTERVAL_MS / 1000),
-      lastRunAt: lastFinishedAt,
-      lastError: sourceRefreshState.lastError || '',
-    },
-    reportsCount: store.reports.length,
-    lastReports: store.reports.slice(0, 12),
-    features: {
-      // Subtle live-location signal. The "Moja lokacija" button shows regardless, but the anonymous
-      // A→B pass signal only arms when this is on (so the UI can subdue the live wording otherwise).
-      verifiedLocation: VERIFIED_LOCATION_ENABLED,
-    },
-    crossings: Object.values(BORDER_CROSSINGS).map((crossing) => ({
-      id: crossing.id,
-      name: crossing.name,
-      shortName: crossing.shortName,
-      locationWaitArmed: verifiedLocationEnabledFor(crossing.id) && (hasLocationWaitAnchors(crossing, 'toBih') || hasLocationWaitAnchors(crossing, 'toHr')),
-      cameras: (CAMERA_FEEDS[crossing.id] || []).map((camera) => ({ id: camera.id, source: camera.source || 'HAK', label: camera.label })),
-    })),
-  });
+  if (wantSync) {
+    // A sync/force caller wants a guaranteed-fresh build; also refresh the shared cache so the burst
+    // of normal pollers right after gets the new state for free.
+    const payload = await buildPublicStatePayload(refreshedInThisRequest);
+    publicStateCache = { payload, builtAt: Date.now() };
+    return res.json(payload);
+  }
+  return res.json(await getCachedPublicState());
 });
 
 app.get('/api/sources/latest', async (req, res) => {
@@ -10118,6 +10149,34 @@ function safeError(error) {
 
 
 
+// Server-side short byte cache + in-flight dedup for proxied camera frames. A burst of users viewing
+// the SAME camera (or an offline one) shares ONE upstream fetch instead of hammering HAK/BIHAMK.
+// Keyed by camera id (the frame is direction-independent). TTL well under the ~60–120s source cadence.
+const cameraByteCache = new Map();
+const cameraFetchInflight = new Map();
+const CAMERA_BYTE_CACHE_MS = Math.max(0, Number(process.env.CAMERA_BYTE_CACHE_MS ?? 12000));
+
+async function getCameraImageCached(camera) {
+  const key = camera.id;
+  if (CAMERA_BYTE_CACHE_MS > 0) {
+    const cached = cameraByteCache.get(key);
+    if (cached && Date.now() - cached.builtAt < CAMERA_BYTE_CACHE_MS) return cached;
+    const inflight = cameraFetchInflight.get(key);
+    if (inflight) return inflight; // concurrent viewers of this camera await the same upstream fetch
+  }
+  const promise = (async () => {
+    const image = await fetchCameraImage(camera, { timeoutMs: CAMERA_SNAPSHOT_TIMEOUT_MS });
+    const entry = { buffer: image.buffer, contentType: image.contentType, builtAt: Date.now() };
+    if (CAMERA_BYTE_CACHE_MS > 0) {
+      cameraByteCache.set(key, entry);
+      if (cameraByteCache.size > 200) { const oldest = cameraByteCache.keys().next().value; if (oldest !== undefined) cameraByteCache.delete(oldest); }
+    }
+    return entry;
+  })();
+  if (CAMERA_BYTE_CACHE_MS > 0) cameraFetchInflight.set(key, promise);
+  try { return await promise; } finally { cameraFetchInflight.delete(key); }
+}
+
 app.get('/api/camera-image/:crossingId/:cameraId', async (req, res) => {
   const crossingId = String(req.params.crossingId || '').trim();
   const cameraId = String(req.params.cameraId || '').trim();
@@ -10133,7 +10192,7 @@ app.get('/api/camera-image/:crossingId/:cameraId', async (req, res) => {
   }
 
   try {
-    const image = await fetchCameraImage(camera, { timeoutMs: CAMERA_SNAPSHOT_TIMEOUT_MS });
+    const image = await getCameraImageCached(camera);
     if (!String(image.contentType || '').startsWith('image/')) {
       res.status(502).json({ ok: false, note: 'Izvor kamere nije vratio sliku.' });
       return;
