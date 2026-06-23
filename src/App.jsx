@@ -516,7 +516,11 @@ const ADDITIONAL_CROSSINGS = [
       toBih: [{ label: 'Prilaz CG', minutes: 6, level: 'low' }, { label: 'Most', minutes: 4, level: 'low' }, { label: 'BiH kontrola', minutes: 10, level: 'low' }],
       toHr: [{ label: 'Prilaz BiH', minutes: 7, level: 'low' }, { label: 'Most', minutes: 4, level: 'low' }, { label: 'CG kontrola', minutes: 12, level: 'medium' }],
     },
-    cameras: [], // no live BIHAMK camera feed for Hum yet
+    cameras: [
+      // Crna Gora ima živu MUP kameru, ali kao HLS video stream (ne sliku koju možemo proxati/analizirati)
+      // → vanjski "otvori uživo" link. Šćepan Polje preglednik (ulaz + izlaz).
+      { id: 'hum-mne-scepan', label: 'Live kamere — Šćepan Polje (Crna Gora / MUP)', source: 'MNE MUP', status: 'live video (vanjski izvor)', external: true, externalUrl: 'http://kamere.mup.gov.me/kamere.php?kamere=Scepan_polje' },
+    ],
     historyBase: { cars: 90, trucks: 20, buses: 10, wait: 18 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Nedjelja prije podne'],
   }),
   makeBorderCrossing({
@@ -532,7 +536,10 @@ const ADDITIONAL_CROSSINGS = [
       toBih: [{ label: 'Prilaz CG', minutes: 5, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'BiH kontrola', minutes: 9, level: 'low' }],
       toHr: [{ label: 'Prilaz BiH', minutes: 6, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'CG kontrola', minutes: 11, level: 'medium' }],
     },
-    cameras: [], // BIHAMK has no Deleuša feed (matchText mis-resolved to a Sarajevo camera) — none here
+    cameras: [
+      // Crna Gora MUP živa kamera = HLS video stream (ne slika) → vanjski "otvori uživo" link.
+      { id: 'deleusa-mne-vracenovici', label: 'Live kamere — Vraćenovići (Crna Gora / MUP)', source: 'MNE MUP', status: 'live video (vanjski izvor)', external: true, externalUrl: 'http://kamere.mup.gov.me/kamere.php?kamere=Vracenovici' },
+    ],
     historyBase: { cars: 70, trucks: 16, buses: 8, wait: 15 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Nedjelja prije podne'],
   }),
 ];
@@ -3908,6 +3915,10 @@ function CameraFeed({ cam, refreshKey, signal, crossingId }) {
   // X-Frame-Options/CSP i browser ih blokira. Umjesto toga svaku poznatu
   // kameru učitavamo kroz backend proxy; backend zna izvući direktni JPG
   // čak i kad je u konfiguraciji upisan samo HAK `kamera.asp` page URL.
+  // External live-VIDEO cameras (e.g. the Montenegro MUP HLS streams at Hum/Deleuša) can't be served as
+  // a still image through the proxy/snapshot pipeline, so skip the image entirely and show a clear
+  // "open live video" link instead of a misleading "image temporarily unavailable" notice.
+  if (cam?.external) return <ExternalCameraNotice cam={cam} live />;
   const proxiedImageUrl = crossingId && cam?.id
     ? `/api/camera-image/${encodeURIComponent(crossingId)}/${encodeURIComponent(cam.id)}?t=${refreshKey}`
     : '';
@@ -3947,14 +3958,16 @@ function CameraFeed({ cam, refreshKey, signal, crossingId }) {
   return <ExternalCameraNotice cam={cam} />;
 }
 
-function ExternalCameraNotice({ cam, compact = false }) {
+function ExternalCameraNotice({ cam, compact = false, live = false }) {
   return (
     <div className={compact ? 'external-camera-note compact' : 'camera-live-frame external-camera-note'}>
       <div className="external-camera-icon"><AlertTriangle size={18} /></div>
       <div>
-        <strong>Slika trenutno nije dostupna iz izvora</strong>
-        <p>Aplikacija dohvaća sliku kroz proxy iz HAK/BIHAMK/AMS izvora. Ako izvor ne odgovara, pokušaj ponovno za nekoliko minuta ili otvori izvor izravno.</p>
-        {!compact && <a href={cam.externalUrl || cam.url} target="_blank" rel="noreferrer">Otvori izvor</a>}
+        <strong>{live ? 'Live video kamera (vanjski izvor)' : 'Slika trenutno nije dostupna iz izvora'}</strong>
+        <p>{live
+          ? 'Ovaj prijelaz ima živu video kameru koju ne prikazujemo unutar aplikacije (video stream, ne slika). Otvori je uživo na izvoru.'
+          : 'Aplikacija dohvaća sliku kroz proxy iz HAK/BIHAMK/AMS izvora. Ako izvor ne odgovara, pokušaj ponovno za nekoliko minuta ili otvori izvor izravno.'}</p>
+        {!compact && <a href={cam.externalUrl || cam.url} target="_blank" rel="noreferrer">{live ? 'Otvori uživo' : 'Otvori izvor'}</a>}
       </div>
     </div>
   );
