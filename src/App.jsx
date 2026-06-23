@@ -4932,11 +4932,12 @@ function NearBorderMeasurePrompt({ measurement, selectCrossing, setActiveTab }) 
   }, []);
 
   if (measurement.isMeasuring) {
-    const label = measurement.liveStatus === 'completed' ? 'Hvala — procjena je ažurirana'
+    const label = measurement.paused ? 'Pauzirano dok je ekran ugašen — uključi ekran'
+      : measurement.liveStatus === 'completed' ? 'Hvala — procjena je ažurirana'
       : measurement.liveStatus === 'active' ? 'Mjerim prelazak…'
       : 'Lokacija uključena — mjerim čim uđeš u kolonu';
     return (
-      <div className="measure-chip" role="status">
+      <div className={measurement.paused ? 'measure-chip measure-chip-paused' : 'measure-chip'} role="status">
         <Crosshair size={14} aria-hidden="true" />
         <span>{label}</span>
         <button type="button" onClick={() => measurement.stop()} aria-label="Zaustavi mjerenje">×</button>

@@ -15,6 +15,7 @@ import {
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const server = readFileSync(join(root, 'server', 'index.js'), 'utf8');
 const app = readFileSync(join(root, 'src', 'App.jsx'), 'utf8');
+const measureHook = readFileSync(join(root, 'src', 'hooks', 'use-crossing-measurement.js'), 'utf8');
 
 // A short path that straddles a border point (lat increasing), border in the middle.
 const border = { lat: 45.10, lng: 16.00 };
@@ -330,6 +331,15 @@ describe('live "Moja lokacija" signal wiring (subtle, anonymous, no raw trail)',
     expect(app).toMatch(/direction: 'auto'/);
     expect(server).toMatch(/inferLocationWaitDirection/);
     expect(server).toMatch(/reqDir === 'auto'/);
+  });
+  it('foreground measurement holds a screen Wake Lock and is honest when the page is hidden', () => {
+    // Wake Lock keeps the screen awake so OS sleep can't suspend watchPosition mid-pass…
+    expect(measureHook).toMatch(/navigator\.wakeLock\.request\('screen'\)/);
+    // …re-acquired on return, since the lock is auto-released when the page is hidden.
+    expect(measureHook).toMatch(/visibilitychange/);
+    // A PWA can't measure while hidden (screen locked / backgrounded) — flag it, don't fake the pass.
+    expect(measureHook).toMatch(/setPaused\(true\)/);
+    expect(app).toMatch(/measurement\.paused \?/);
   });
 });
 

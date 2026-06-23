@@ -986,6 +986,8 @@
 .measure-chip svg{color:#7fd1a6;flex:0 0 auto}
 .measure-chip span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .measure-chip button{flex:0 0 auto;width:26px;height:26px;border-radius:50%;border:none;background:rgba(255,255,255,.16);color:#fff;font-size:16px;line-height:1;cursor:pointer}
+.measure-chip-paused{background:#5a4413}
+.measure-chip-paused svg{color:#f5c451}
 @media(max-width:520px){.measure-prompt-actions{flex-direction:column-reverse}.measure-prompt-actions button{width:100%}}
 
 /* Mobile polish: clear the notch (viewport-fit=cover) and give the map a viewport-relative height

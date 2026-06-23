@@ -3,7 +3,7 @@
 // first fix); we never store a raw location trail. Lives at the App root so a measurement keeps running
 // when the user switches tabs mid-crossing. Shared by the map's "Moja lokacija" button and the
 // near-border prompt — a single watchPosition, never two.
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { shouldSendPing } from '../utils/location-wait-client.js';
 
 export function useCrossingMeasurement() {
@@ -12,8 +12,10 @@ export function useCrossingMeasurement() {
   const [liveStatus, setLiveStatus] = useState('idle'); // idle | pending | active | completed
   const [userPos, setUserPos] = useState(null);
   const [activeCrossingId, setActiveCrossingId] = useState(null);
+  const [paused, setPaused] = useState(false); // page hidden / screen locked → a PWA can't measure; say so honestly
 
   const watchIdRef = useRef(null);
+  const wakeLockRef = useRef(null); // screen Wake Lock sentinel, held only while measuring + visible
   const sessionRef = useRef(null); // { sessionId, armed }
   const lastPingRef = useRef({ at: 0, point: null });
   const liveStatusRef = useRef('idle');
@@ -99,5 +101,41 @@ export function useCrossingMeasurement() {
     else start({ crossingId, direction });
   }, [start, stop]);
 
-  return { on, statusText, liveStatus, userPos, activeCrossingId, isMeasuring: on, start, stop, toggle };
+  // Keep the screen awake while measuring so OS screen-sleep can't suspend watchPosition — the single
+  // most common way a foreground measurement silently misses point B. The Wake Lock is auto-released
+  // whenever the page is hidden, so we re-acquire it on return. And when the page IS hidden (screen
+  // locked / app backgrounded) a PWA genuinely can't keep measuring — flag it honestly via `paused`
+  // instead of pretending the pass is still being timed. (True background tracking needs native.)
+  useEffect(() => {
+    if (!on || typeof document === 'undefined') return undefined;
+    let cancelled = false;
+    const acquire = async () => {
+      if (cancelled || document.visibilityState !== 'visible' || !('wakeLock' in navigator)) return;
+      try {
+        const sentinel = await navigator.wakeLock.request('screen');
+        if (cancelled) { sentinel.release().catch(() => {}); return; } // toggled off mid-request
+        wakeLockRef.current = sentinel;
+      } catch { /* denied/unsupported — measurement still works, just without anti-sleep */ }
+    };
+    const release = () => {
+      const wl = wakeLockRef.current;
+      wakeLockRef.current = null;
+      if (wl) wl.release().catch(() => {});
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') { setPaused(false); acquire(); }
+      else { setPaused(true); release(); } // OS already drops the lock when hidden; null our ref too
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    setPaused(document.visibilityState !== 'visible');
+    acquire();
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisibility);
+      release();
+      setPaused(false);
+    };
+  }, [on]);
+
+  return { on, statusText, liveStatus, userPos, activeCrossingId, isMeasuring: on, paused, start, stop, toggle };
 }
