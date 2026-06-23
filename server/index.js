@@ -707,9 +707,19 @@ function normalizeOperationalStatus(value) {
   return 'unknown';
 }
 
+// Code-managed operational closures, applied ONLY when there is no admin status override (a real admin
+// override always wins). Use for a temporary closure we manage from code — to REOPEN a crossing, delete
+// its entries here. Keyed `${crossingId}:${direction}`. NOTE: an admin "open" via the UI deletes its
+// stored override, so a forced entry re-applies on the next read — reopen these from code.
+// Gradiška: the route across the Sava bridge is currently not passable — revert when it reopens.
+const FORCED_STATUS_OVERRIDES = {
+  'gradiska:toBih': { status: 'closed', note: 'Ruta preko Gradiške trenutno nije prohodna — koristi Gornji Varoš (novi most).', replacementCrossingId: 'gornji-varos', forced: true },
+  'gradiska:toHr': { status: 'closed', note: 'Ruta preko Gradiške trenutno nije prohodna — koristi Gornji Varoš (novi most).', replacementCrossingId: 'gornji-varos', forced: true },
+};
+
 function getStoredStatusOverride(store, crossingId, direction) {
   const key = statusOverrideKey(crossingId, direction);
-  return store?.statusOverrides?.[key] || null;
+  return store?.statusOverrides?.[key] || FORCED_STATUS_OVERRIDES[key] || null;
 }
 
 function statusOverrideRoutePayload(crossing, direction, override) {
@@ -717,7 +727,8 @@ function statusOverrideRoutePayload(crossing, direction, override) {
   if (override.status === 'closed' || override.status === 'redirected') {
     const label = override.status === 'redirected' ? 'preusmjerena' : 'zatvorena';
     return routeClosedPayload(crossing, direction, override.note || `Ruta je ručno označena kao ${label}.`, {
-      source: 'Admin status override',
+      // Honest attribution: a code-managed forced closure is NOT an admin action — label it distinctly.
+      source: override.forced ? 'Operativni status prijelaza' : 'Admin status override',
       routeStatus: override.status === 'redirected' ? 'redirected' : 'closed_or_blocked',
       adminStatus: override,
     });
@@ -781,11 +792,10 @@ const BORDER_CROSSINGS = {
     id: 'gradiska',
     name: 'GP Gradiška',
     shortName: 'Gradiška',
-    // Route display intentionally OFF (request 2026-06-23): the route across the Sava bridge is currently
-    // NOT passable, so we show wait + cameras + traffic but NOT a drawn line, and steer users to Gornji
-    // Varoš. computeCrossingRoutes() honours routeStatusHint.hideRoute. Re-enable by removing this flag
-    // (or, better, manage a temporary closure via the admin status override).
-    routeStatusHint: { hideRoute: true, replacementCrossingId: 'gornji-varos', hideReason: 'Ruta preko Gradiške trenutno nije prohodna — preporuka je Gornji Varoš (novi most). Prikazujemo čekanje i kamere.' },
+    // Gradiška is marked CLOSED (route currently not passable) via FORCED_STATUS_OVERRIDES — that drives
+    // the closed card, the route-closed panel, and best-crossing exclusion in one go. replacementCrossingId
+    // points the closed panel at Gornji Varoš. To REOPEN: remove Gradiška's FORCED_STATUS_OVERRIDES entries.
+    routeStatusHint: { replacementCrossingId: 'gornji-varos' },
     // NOTE: routeStatusHint.replacementCrossingId is intentionally removed.
     // Stara Gradiška is operational again; previously when Google returned
     // ZERO_RESULTS the API marked the crossing as closed and redirected users
@@ -4474,7 +4484,7 @@ async function buildPublicStatePayload(refreshedInThisRequest = false) {
     updatedAt: new Date().toISOString(),
     warnings: envWarnings(),
     overrides: store.overrides,
-    statusOverrides: store.statusOverrides || {},
+    statusOverrides: { ...FORCED_STATUS_OVERRIDES, ...(store.statusOverrides || {}) }, // forced code closures; admin overrides win
     effectiveWaits,
     waitSources,
     sourceRefresh: {
@@ -9980,15 +9990,6 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
     throw error;
   }
   const anchor = crossing.anchors[direction] || crossing.anchors.toBih;
-  if (crossing.routeStatusHint?.hideRoute) {
-    // Route display intentionally disabled for this crossing (e.g. Gradiška: the route is currently not
-    // passable). Keep wait + cameras + traffic and suggest the alternative crossing, but never draw a
-    // line — same honest "routeHidden" state used when geometry can't be verified.
-    return routeUnverifiedPayload(crossing, direction, {
-      note: crossing.routeStatusHint.hideReason || 'Rutu za ovaj prijelaz trenutno ne crtamo. Prikazujemo čekanje, kamere i prometni sloj — provjeri stanje prije polaska.',
-      suggestedCrossing: suggestedAlternativeFor(crossing, direction),
-    });
-  }
   if (!anchor.routeGuard) {
     return routePendingPayload(crossing, direction, 'Za ovaj prijelaz zasad prikazujemo čekanje, kamere i prometni sloj. Cestovnu liniju ćemo uključiti čim prođe provjeru, da mapa ne bi pokazivala čudnu ili krivu putanju.');
   }

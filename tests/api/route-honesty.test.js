@@ -23,13 +23,15 @@ beforeAll(async () => {
 const auth = (req) => req.set('Authorization', `Bearer ${adminToken}`);
 
 afterAll(async () => {
-  // Clean up the override so other suites see gradiska as open.
-  await auth(request(app).post('/api/admin/status-overrides')).send({ crossingId: 'gradiska', direction: 'toBih', status: 'open' });
+  // Clean up the override so other suites see maljevac as open. (Gradiška is intentionally force-closed
+  // in code — FORCED_STATUS_OVERRIDES — so it is NOT used as the "open crossing" fixture here.)
+  await auth(request(app).post('/api/admin/status-overrides')).send({ crossingId: 'maljevac', direction: 'toBih', status: 'open' });
 });
 
 describe('routes API never fakes a confirmed or closed route', () => {
+  // maljevac is the "open crossing" fixture (gradiska is intentionally force-closed — tested separately).
   it('without a Google key the route is hidden (routes: []) and NOT marked closed', async () => {
-    const res = await request(app).get('/api/routes/gradiska').query({ direction: 'toBih' });
+    const res = await request(app).get('/api/routes/maljevac').query({ direction: 'toBih' });
     expect(res.status).toBe(200);
     expect(res.body.routes).toEqual([]);
     expect(res.body.closed).not.toBe(true);
@@ -38,17 +40,27 @@ describe('routes API never fakes a confirmed or closed route', () => {
     expect(res.body.routeHidden === true || res.body.live === false).toBe(true);
   });
 
-  it('"nije prohodna" (closed) appears ONLY via a real admin status override', async () => {
-    const set = await auth(request(app).post('/api/admin/status-overrides')).send({ crossingId: 'gradiska', direction: 'toBih', status: 'closed', note: 'Test zatvaranja' });
+  it('"nije prohodna" (closed) appears via a real admin status override (and clears when removed)', async () => {
+    const set = await auth(request(app).post('/api/admin/status-overrides')).send({ crossingId: 'maljevac', direction: 'toBih', status: 'closed', note: 'Test zatvaranja' });
     expect(set.status).toBe(200);
-    const res = await request(app).get('/api/routes/gradiska').query({ direction: 'toBih' });
+    const res = await request(app).get('/api/routes/maljevac').query({ direction: 'toBih' });
     expect(res.body.closed).toBe(true);
     expect(res.body.routeStatus).toBe('closed_or_blocked');
     expect(res.body.source).toBe('Admin status override');
     // Clearing the override restores the non-closed behaviour.
-    await auth(request(app).post('/api/admin/status-overrides')).send({ crossingId: 'gradiska', direction: 'toBih', status: 'open' });
-    const after = await request(app).get('/api/routes/gradiska').query({ direction: 'toBih' });
+    await auth(request(app).post('/api/admin/status-overrides')).send({ crossingId: 'maljevac', direction: 'toBih', status: 'open' });
+    const after = await request(app).get('/api/routes/maljevac').query({ direction: 'toBih' });
     expect(after.body.closed).not.toBe(true);
+  });
+
+  it('Gradiška is closed via a code-managed forced status (route not passable), pointing at Gornji Varoš', async () => {
+    // A deliberate, code-managed closure (FORCED_STATUS_OVERRIDES) — distinct source from an admin action,
+    // and it still routes through the same honest "closed" payload with the replacement crossing.
+    const res = await request(app).get('/api/routes/gradiska').query({ direction: 'toBih' });
+    expect(res.body.closed).toBe(true);
+    expect(res.body.routeStatus).toBe('closed_or_blocked');
+    expect(res.body.source).toBe('Operativni status prijelaza');
+    expect(res.body.suggestedCrossing?.crossingId).toBe('gornji-varos');
   });
 });
 
