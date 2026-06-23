@@ -400,7 +400,10 @@ const ADDITIONAL_CROSSINGS = [
       toBih: [{ label: 'Prilaz HR', minutes: 8, level: 'low' }, { label: 'Most (Sava)', minutes: 6, level: 'low' }, { label: 'BiH kontrola', minutes: 14, level: 'medium' }],
       toHr: [{ label: 'Prilaz BiH', minutes: 10, level: 'medium' }, { label: 'Most (Sava)', minutes: 6, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 18, level: 'medium' }],
     },
-    cameras: [externalCamera({ id: 'gun-bihamk', label: 'Brčko / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Brčko', 'Brčko', 'Brcko'], note: 'BIHAMK popis kamera — provjeri postoji li feed za Brčko/Gunju.' })],
+    cameras: [
+      externalCamera({ id: 'gun-hak-ulaz-hr', label: 'Ulaz u HR iz BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/431.jpg' }),
+      externalCamera({ id: 'gun-hak-izlaz-hr', label: 'Izlaz iz HR u BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/432.jpg' }),
+    ],
     historyBase: { cars: 190, trucks: 95, buses: 12, wait: 30 }, bestDays: ['Utorak', 'Srijeda prije 11h', 'Nedjelja navečer'],
   }),
   makeBorderCrossing({
@@ -416,7 +419,10 @@ const ADDITIONAL_CROSSINGS = [
       toBih: [{ label: 'Prilaz HR', minutes: 7, level: 'low' }, { label: 'Most (Una)', minutes: 5, level: 'low' }, { label: 'BiH kontrola', minutes: 12, level: 'medium' }],
       toHr: [{ label: 'Prilaz BiH', minutes: 9, level: 'low' }, { label: 'Most (Una)', minutes: 5, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 16, level: 'medium' }],
     },
-    cameras: [externalCamera({ id: 'dvo-bihamk', label: 'Novi Grad / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Novi Grad', 'Novi Grad', 'Bosanski Novi'], note: 'BIHAMK popis kamera — provjeri feed za Novi Grad.' })],
+    cameras: [
+      externalCamera({ id: 'dvo-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_10_GP_NG02/slika.jpg' }),
+      externalCamera({ id: 'dvo-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_10_GP_NG01/slika.jpg' }),
+    ],
     historyBase: { cars: 150, trucks: 70, buses: 10, wait: 24 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
   }),
   makeBorderCrossing({
@@ -432,7 +438,10 @@ const ADDITIONAL_CROSSINGS = [
       toBih: [{ label: 'Prilaz HR', minutes: 5, level: 'low' }, { label: 'Most (Una)', minutes: 4, level: 'low' }, { label: 'BiH kontrola', minutes: 9, level: 'low' }],
       toHr: [{ label: 'Prilaz BiH', minutes: 6, level: 'low' }, { label: 'Most (Una)', minutes: 4, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 12, level: 'medium' }],
     },
-    cameras: [externalCamera({ id: 'kos-bihamk', label: 'Bosanska Kostajnica / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Bosanska Kostajnica', 'Bosanska Kostajnica'], note: 'BIHAMK popis kamera — provjeri feed za Bosansku Kostajnicu.' })],
+    cameras: [
+      externalCamera({ id: 'kos-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_11_GP_KO02/slika.jpg' }),
+      externalCamera({ id: 'kos-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_11_GP_KO01/slika.jpg' }),
+    ],
     historyBase: { cars: 90, trucks: 30, buses: 6, wait: 16 }, bestDays: ['Ponedjeljak', 'Četvrtak', 'Subota ujutro'],
   }),
   makeBorderCrossing({
@@ -448,7 +457,10 @@ const ADDITIONAL_CROSSINGS = [
       toBih: [{ label: 'Prilaz HR', minutes: 7, level: 'low' }, { label: 'Međuzona', minutes: 5, level: 'low' }, { label: 'BiH kontrola', minutes: 13, level: 'medium' }],
       toHr: [{ label: 'Prilaz BiH', minutes: 10, level: 'medium' }, { label: 'Međuzona', minutes: 6, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 18, level: 'medium' }],
     },
-    cameras: [externalCamera({ id: 'met-bihamk', label: 'Doljani / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Doljani', 'Doljani'], note: 'BIHAMK popis kamera — provjeri feed za Doljane.' })],
+    cameras: [
+      externalCamera({ id: 'met-hak-ulaz-hr', label: 'Ulaz u HR iz BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/319.jpg' }),
+      externalCamera({ id: 'met-hak-izlaz-hr', label: 'Izlaz iz HR u BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/321.jpg' }),
+    ],
     historyBase: { cars: 170, trucks: 60, buses: 14, wait: 28 }, bestDays: ['Utorak', 'Četvrtak prije 10h', 'Nedjelja navečer'],
   }),
   // ── BiH ↔ Serbia / Montenegro (BIHAMK-sourced). `neighbor` drives the displayed direction labels. ──
@@ -465,7 +477,11 @@ const ADDITIONAL_CROSSINGS = [
       toBih: [{ label: 'Prilaz Srbija', minutes: 8, level: 'low' }, { label: 'Most (Drina)', minutes: 6, level: 'low' }, { label: 'BiH kontrola', minutes: 14, level: 'medium' }],
       toHr: [{ label: 'Prilaz BiH', minutes: 10, level: 'medium' }, { label: 'Most (Drina)', minutes: 6, level: 'low' }, { label: 'Srbija kontrola', minutes: 16, level: 'medium' }],
     },
-    cameras: [externalCamera({ id: 'sep-bihamk', label: 'Šepak / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Šepak', 'Šepak', 'Sepak', 'Šepak - Loznica'], note: 'BIHAMK popis kamera uključuje GP Šepak.' })],
+    cameras: [
+      externalCamera({ id: 'sep-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_06_GP_SP02/slika.jpg' }),
+      externalCamera({ id: 'sep-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_06_GP_SP01/slika.jpg' }),
+      externalCamera({ id: 'sep-bihamk', label: 'Šepak / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Šepak', 'Šepak', 'Sepak', 'Šepak - Loznica'], note: 'BIHAMK popis kamera uključuje GP Šepak.' }),
+    ],
     historyBase: { cars: 180, trucks: 90, buses: 12, wait: 28 }, bestDays: ['Utorak', 'Srijeda prije 11h', 'Nedjelja navečer'],
   }),
   makeBorderCrossing({
@@ -481,7 +497,10 @@ const ADDITIONAL_CROSSINGS = [
       toBih: [{ label: 'Prilaz Srbija', minutes: 9, level: 'low' }, { label: 'Most (Sava)', minutes: 7, level: 'low' }, { label: 'BiH kontrola', minutes: 16, level: 'medium' }],
       toHr: [{ label: 'Prilaz BiH', minutes: 12, level: 'medium' }, { label: 'Most (Sava)', minutes: 7, level: 'low' }, { label: 'Srbija kontrola', minutes: 20, level: 'medium' }],
     },
-    cameras: [], // no live BIHAMK camera feed for Bosanska Rača yet
+    cameras: [
+      externalCamera({ id: 'rac-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_02_GP_RA02/slika.jpg' }),
+      externalCamera({ id: 'rac-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_02_GP_RA01/slika.jpg' }),
+    ],
     historyBase: { cars: 220, trucks: 110, buses: 16, wait: 34 }, bestDays: ['Utorak', 'Četvrtak prije 11h', 'Nedjelja navečer'],
   }),
   makeBorderCrossing({

@@ -1487,7 +1487,11 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       approachHr: { lat: 44.8890, lng: 18.8185 }, borderPoint: { lat: 44.88236, lng: 18.81211 }, exitBih: { lat: 44.8730, lng: 18.8090 },
       guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
     }),
-    cameras: [{ id: 'gun-bihamk', label: 'Brčko / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Brčko', 'Brčko', 'Brcko'] }],
+    cameras: [
+      // HAK k=206 (Gunja) embeds cam.asp?id=431 (ulaz u HR) + 432 (izlaz iz HR) — direction-pinned by label.
+      { id: 'gun-hak-ulaz-hr', label: 'Ulaz u HR iz BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/431.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=206' },
+      { id: 'gun-hak-izlaz-hr', label: 'Izlaz iz HR u BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/432.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=206' },
+    ],
   },
   {
     id: 'dvor', name: 'GP Dvor', shortName: 'Dvor', hrLabel: 'Dvor', bihLabel: 'Novi Grad',
@@ -1497,7 +1501,11 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       approachHr: { lat: 45.0700, lng: 16.3712 }, borderPoint: { lat: 45.0606, lng: 16.3739 }, exitBih: { lat: 45.04806, lng: 16.37694 },
       guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
     }),
-    cameras: [{ id: 'dvo-bihamk', label: 'Novi Grad / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Novi Grad', 'Novi Grad', 'Bosanski Novi'] }],
+    cameras: [
+      // AMS RS live feeds for Novi Grad (Bosanski Novi). "Ulaz u RS" → toBih, "Izlaz iz RS" → toHr.
+      { id: 'dvo-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_10_GP_NG02/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-novi-grad/' },
+      { id: 'dvo-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_10_GP_NG01/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-novi-grad/' },
+    ],
   },
   {
     id: 'hrv-kostajnica', name: 'GP Hrvatska Kostajnica', shortName: 'Hrv. Kostajnica', hrLabel: 'Hrvatska Kostajnica', bihLabel: 'Bosanska Kostajnica',
@@ -1507,7 +1515,11 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       approachHr: { lat: 45.2270, lng: 16.5460 }, borderPoint: { lat: 45.22029, lng: 16.54710 }, exitBih: { lat: 45.2155, lng: 16.5520 },
       guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
     }),
-    cameras: [{ id: 'kos-bihamk', label: 'Bosanska Kostajnica / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Bosanska Kostajnica', 'Bosanska Kostajnica'] }],
+    cameras: [
+      // AMS RS live feeds for Kostajnica. "Ulaz u RS" → toBih, "Izlaz iz RS" → toHr.
+      { id: 'kos-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_11_GP_KO02/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-kostajnica/' },
+      { id: 'kos-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_11_GP_KO01/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-kostajnica/' },
+    ],
   },
   {
     id: 'metkovic', name: 'GP Metković', shortName: 'Metković', hrLabel: 'Metković', bihLabel: 'Doljani',
@@ -1517,7 +1529,12 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       approachHr: { lat: 43.0520, lng: 17.6510 }, borderPoint: { lat: 43.05058, lng: 17.66137 }, exitBih: { lat: 43.0490, lng: 17.6710 },
       guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
     }),
-    cameras: [{ id: 'met-bihamk', label: 'Doljani / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Doljani', 'Doljani'] }],
+    // HAK k=136 bundles 4 Metković-area ids (2 ulaz / 2 izlaz) — using one clean pair. VERIFY on deploy
+    // which id is the Doljani crossing (vs a second Metković view) and adjust the ids if needed.
+    cameras: [
+      { id: 'met-hak-ulaz-hr', label: 'Ulaz u HR iz BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/319.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=136' },
+      { id: 'met-hak-izlaz-hr', label: 'Izlaz iz HR u BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/321.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=136' },
+    ],
   },
   // ── BiH ↔ Serbia / Montenegro. Internal direction key `toHr` here means "toward the neighbour
   //    country" (RS/CG) — the per-crossing `neighbor` drives the displayed labels. BIHAMK-sourced
@@ -1533,7 +1550,12 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       approachHr: { lat: 44.5402, lng: 19.1960 }, borderPoint: { lat: 44.54072, lng: 19.18474 }, exitBih: { lat: 44.5413, lng: 19.1735 },
       guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
     }),
-    cameras: [{ id: 'sep-bihamk', label: 'Šepak / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Šepak', 'Šepak', 'Sepak', 'Šepak - Loznica', 'Sepak - Loznica'] }],
+    cameras: [
+      // AMS RS live feeds for Šepak (BiH/RS side). "Ulaz u RS" → toBih, "Izlaz iz RS" → toHr (toward Srbija).
+      { id: 'sep-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_06_GP_SP02/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-sepak/' },
+      { id: 'sep-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_06_GP_SP01/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-sepak/' },
+      { id: 'sep-bihamk', label: 'Šepak / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Šepak', 'Šepak', 'Sepak', 'Šepak - Loznica', 'Sepak - Loznica'] },
+    ],
   },
   {
     id: 'raca', name: 'GP Bosanska Rača', shortName: 'B. Rača', lat: 44.8936, lng: 19.3342, neighbor: 'RS',
@@ -1545,7 +1567,11 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       approachHr: { lat: 44.9190, lng: 19.2975 }, borderPoint: { lat: 44.91142, lng: 19.29694 }, exitBih: { lat: 44.9035, lng: 19.2965 },
       guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
     }),
-    cameras: [], // no live BIHAMK camera feed for Bosanska Rača yet — wait text only
+    cameras: [
+      // AMS RS live feeds for Rača. "Ulaz u RS" → toBih, "Izlaz iz RS" → toHr (toward Srbija).
+      { id: 'rac-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_02_GP_RA02/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-raca/' },
+      { id: 'rac-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_02_GP_RA01/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-raca/' },
+    ],
   },
   {
     id: 'hum', name: 'GP Hum', shortName: 'Hum', lat: 43.3479, lng: 18.8455, neighbor: 'CG',
