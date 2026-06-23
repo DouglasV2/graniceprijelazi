@@ -2973,6 +2973,20 @@ function routeAvailabilityMeta(payload = {}) {
   return { label: 'Nema rute', className: 'unavailable' };
 }
 
+// Escape interpolated values before they go into a map InfoWindow/marker innerHTML string. These fields
+// are server/config-sourced (labels, names, route text) and safe today, but escaping is the second line
+// of defense if any ever carries free text (CSP script-src has no 'unsafe-inline' either).
+function escapeHtml(value) {
+  // split/join (not /regex/) on purpose: a /"/ or /'/ regex literal also trips the naive string-literal
+  // scanner in tests/unit/public-ui-jargon.test.js. `&` must be replaced first to avoid double-escaping.
+  return String(value ?? '')
+    .split('&').join('&amp;')
+    .split('<').join('&lt;')
+    .split('>').join('&gt;')
+    .split('"').join('&quot;')
+    .split("'").join('&#39;');
+}
+
 function makeRouteLabelElement(route) {
   const el = document.createElement('button');
   el.type = 'button';
@@ -2996,9 +3010,9 @@ function makeMarkerElement(crossing, isActive, selectedDirection = 'toBih', over
   const waitLabel = formatWaitDisplay(wait, sourceMeta);
   marker.innerHTML = `
     <span class="gm-marker-dot"></span>
-    <strong>${crossing.shortName}</strong>
+    <strong>${escapeHtml(crossing.shortName)}</strong>
     <small>Live · ${waitLabel}</small>
-    <em class="gm-marker-source ${sourceMeta.className || 'pending'}">${sourceMeta.label}</em>
+    <em class="gm-marker-source ${escapeHtml(sourceMeta.className || 'pending')}">${escapeHtml(sourceMeta.label)}</em>
   `;
   return marker;
 }
@@ -3011,17 +3025,17 @@ function makeInfoContent(crossing, selectedDirection, overrides = {}) {
   return `
     <div class="gm-info-card">
       <div class="gm-info-top">
-        <strong>${crossing.name}</strong>
-        <span class="gm-info-status ${status.className}">${status.label}</span>
+        <strong>${escapeHtml(crossing.name)}</strong>
+        <span class="gm-info-status ${escapeHtml(status.className)}">${escapeHtml(status.label)}</span>
       </div>
-      <p>${crossing.route}</p>
+      <p>${escapeHtml(crossing.route)}</p>
       <div class="gm-info-grid">
-        <div><span>Smjer</span><b>${direction.label}</b></div>
+        <div><span>Smjer</span><b>${escapeHtml(direction.label)}</b></div>
         <div><span>Osobna</span><b>${hasKnownWait(wait) ? formatWaitDisplay(wait, sourceMeta) : '—'}</b></div>
-        <div><span>Izvor</span><b>${sourceMeta.label}</b></div>
+        <div><span>Izvor</span><b>${escapeHtml(sourceMeta.label)}</b></div>
         <div><span>Potvrda</span><b>${crossing.fieldConfirmed ? 'Teren' : 'Signal'}</b></div>
       </div>
-      <p class="gm-info-note">${crossing.cause}</p>
+      <p class="gm-info-note">${escapeHtml(crossing.cause)}</p>
     </div>
   `;
 }
@@ -3193,8 +3207,8 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
           const direction = getDirection(crossing, selectedDirection);
           infoWindowRef.current?.setContent(`
             <div class="gm-info-card gm-tooltip-card">
-              <strong>${crossing.shortName}</strong>
-              <p>${direction.label} · ${formatWaitDisplay(getDisplayedWait(crossing, selectedDirection, overrides), getWaitSourceMeta(crossing, selectedDirection, overrides))}</p>
+              <strong>${escapeHtml(crossing.shortName)}</strong>
+              <p>${escapeHtml(direction.label)} · ${formatWaitDisplay(getDisplayedWait(crossing, selectedDirection, overrides), getWaitSourceMeta(crossing, selectedDirection, overrides))}</p>
               <small>Klik za detalje</small>
             </div>
           `);
@@ -3421,7 +3435,7 @@ function GoogleMapView({ selectedDirection, selectedCrossing, setSelectedCrossin
         const openRouteTooltip = (position) => {
           infoWindowRef.current?.setContent(`
             <div class="gm-info-card gm-tooltip-card">
-              <strong>${route.label}</strong>
+              <strong>${escapeHtml(route.label)}</strong>
               <p>${formatMinutes(route.durationMinutes)} · ${formatDistanceKm(route.distanceKm)}</p>
               <small>Zastoj ${formatMinutes(route.delayMinutes || 0)} · klik za detalje</small>
             </div>

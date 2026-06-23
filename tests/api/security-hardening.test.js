@@ -13,6 +13,7 @@ import { getApp } from '../helpers/app-loader.js';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const server = readFileSync(join(root, 'server', 'index.js'), 'utf8');
 const cv = readFileSync(join(root, 'cv-detector', 'app.py'), 'utf8');
+const appSource = readFileSync(join(root, 'src', 'App.jsx'), 'utf8');
 
 let app;
 beforeAll(async () => { app = await getApp(); });
@@ -92,5 +93,16 @@ describe('source-level security invariants (cv-detector SSRF)', () => {
     expect(cv).toMatch(/ALLOW_NO_AUTH/);
     expect(cv).toMatch(/hmac\.compare_digest/);
     expect(cv).toMatch(/auth not configured/);
+  });
+});
+
+describe('source-level security invariants (frontend XSS hardening)', () => {
+  it('map InfoWindow/marker builders escape interpolated values (no raw innerHTML interpolation)', () => {
+    expect(appSource).toMatch(/function escapeHtml\(/);
+    expect(appSource).toMatch(/\$\{escapeHtml\(crossing\.name\)\}/);
+    expect(appSource).toMatch(/\$\{escapeHtml\(sourceMeta\.label\)\}/);
+    expect(appSource).toMatch(/\$\{escapeHtml\(route\.label\)\}/);
+    // The previously-raw interpolations must no longer appear unescaped in the builders.
+    expect(appSource).not.toMatch(/<strong>\$\{crossing\.name\}<\/strong>/);
   });
 });
