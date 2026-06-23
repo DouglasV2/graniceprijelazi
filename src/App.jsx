@@ -388,7 +388,7 @@ const ADDITIONAL_CROSSINGS = [
   }),
   // ── Additional HR↔BiH crossings (added 2026-06-23). Coords are best-effort — verify markers on deploy. ──
   makeBorderCrossing({
-    id: 'gunja', shortName: 'Gunja', route: 'Gunja ↔ Brčko', area: 'Slavonija / Posavina', lat: 44.8755, lng: 18.8250,
+    id: 'gunja', shortName: 'Gunja', route: 'Gunja ↔ Brčko', area: 'Slavonija / Posavina', lat: 44.88236, lng: 18.81211,
     status: 'normal', confidence: 60, updatedAt: 'live', fieldConfirmed: false,
     fieldNote: 'Gunja ↔ Brčko — most preko Save, velik teretni i putnički pravac prema Brčkom/Tuzli.',
     cause: 'Tranzit prema Tuzli/Bijeljini + kamionski valovi', sponsor: '', extraDriveFromMainRoute: 0,
@@ -404,7 +404,7 @@ const ADDITIONAL_CROSSINGS = [
     historyBase: { cars: 190, trucks: 95, buses: 12, wait: 30 }, bestDays: ['Utorak', 'Srijeda prije 11h', 'Nedjelja navečer'],
   }),
   makeBorderCrossing({
-    id: 'dvor', shortName: 'Dvor', route: 'Dvor ↔ Novi Grad', area: 'Banovina / Pounje', lat: 45.0540, lng: 16.3800,
+    id: 'dvor', shortName: 'Dvor', route: 'Dvor ↔ Novi Grad', area: 'Banovina / Pounje', lat: 45.0606, lng: 16.3739,
     status: 'normal', confidence: 58, updatedAt: 'live', fieldConfirmed: false,
     fieldNote: 'Dvor na Uni ↔ Novi Grad (Bos. Novi) — glavni pravac Zagreb→Bihać/Banja Luka, most preko Une.',
     cause: 'Tranzit prema Bihaću/Banja Luci', sponsor: '', extraDriveFromMainRoute: 0,
@@ -420,7 +420,7 @@ const ADDITIONAL_CROSSINGS = [
     historyBase: { cars: 150, trucks: 70, buses: 10, wait: 24 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
   }),
   makeBorderCrossing({
-    id: 'hrv-kostajnica', shortName: 'Hrv. Kostajnica', route: 'Hrvatska Kostajnica ↔ Bosanska Kostajnica', area: 'Banovina / Pounje', lat: 45.2235, lng: 16.5520,
+    id: 'hrv-kostajnica', shortName: 'Hrv. Kostajnica', route: 'Hrvatska Kostajnica ↔ Bosanska Kostajnica', area: 'Banovina / Pounje', lat: 45.22029, lng: 16.54710,
     status: 'open', confidence: 55, updatedAt: 'live', fieldConfirmed: false,
     fieldNote: 'Hrvatska ↔ Bosanska Kostajnica — most preko Une, lokalni i regionalni promet.',
     cause: 'Lokalni i regionalni promet uz Unu', sponsor: '', extraDriveFromMainRoute: 0,
@@ -436,7 +436,7 @@ const ADDITIONAL_CROSSINGS = [
     historyBase: { cars: 90, trucks: 30, buses: 6, wait: 16 }, bestDays: ['Ponedjeljak', 'Četvrtak', 'Subota ujutro'],
   }),
   makeBorderCrossing({
-    id: 'metkovic', shortName: 'Metković', route: 'Metković ↔ Doljani', area: 'Dalmacija / Hercegovina', lat: 43.0410, lng: 17.6555,
+    id: 'metkovic', shortName: 'Metković', route: 'Metković ↔ Doljani', area: 'Dalmacija / Hercegovina', lat: 43.05058, lng: 17.66137,
     status: 'normal', confidence: 60, updatedAt: 'live', fieldConfirmed: false,
     fieldNote: 'Metković ↔ Doljani — pravac prema Mostaru/Sarajevu, velik ljetni promet (dolina Neretve).',
     cause: 'Sezonski tranzit prema Mostaru/Sarajevu', sponsor: '', extraDriveFromMainRoute: 0,
@@ -453,7 +453,7 @@ const ADDITIONAL_CROSSINGS = [
   }),
   // ── BiH ↔ Serbia / Montenegro (BIHAMK-sourced). `neighbor` drives the displayed direction labels. ──
   makeBorderCrossing({
-    id: 'sepak', shortName: 'Šepak', route: 'Trbušnica ↔ Šepak', area: 'Semberija / Podrinje', lat: 44.5417, lng: 19.1815, neighbor: 'RS',
+    id: 'sepak', shortName: 'Šepak', route: 'Trbušnica ↔ Šepak', area: 'Semberija / Podrinje', lat: 44.54072, lng: 19.18474, neighbor: 'RS',
     status: 'busy', confidence: 58, updatedAt: 'live', fieldConfirmed: false,
     fieldNote: 'Šepak ↔ Trbušnica — glavni pravac Beograd–Sarajevo. Pratimo BIHAMK izvor i kameru.',
     cause: 'Tranzitni promet Beograd–Sarajevo + kamionski valovi', sponsor: '', extraDriveFromMainRoute: 0,
@@ -469,7 +469,7 @@ const ADDITIONAL_CROSSINGS = [
     historyBase: { cars: 180, trucks: 90, buses: 12, wait: 28 }, bestDays: ['Utorak', 'Srijeda prije 11h', 'Nedjelja navečer'],
   }),
   makeBorderCrossing({
-    id: 'raca', shortName: 'B. Rača', route: 'Sremska Rača ↔ Bosanska Rača', area: 'Semberija / Srijem', lat: 44.8936, lng: 19.3342, neighbor: 'RS',
+    id: 'raca', shortName: 'B. Rača', route: 'Sremska Rača ↔ Bosanska Rača', area: 'Semberija / Srijem', lat: 44.91142, lng: 19.29694, neighbor: 'RS',
     status: 'busy', confidence: 58, updatedAt: 'live', fieldConfirmed: false,
     fieldNote: 'Bosanska Rača ↔ Sremska Rača — najveći prijelaz prema Srbiji, most preko Save.',
     cause: 'Glavni tranzit prema Srbiji i koridor Vc', sponsor: '', extraDriveFromMainRoute: 0,
@@ -485,7 +485,7 @@ const ADDITIONAL_CROSSINGS = [
     historyBase: { cars: 220, trucks: 110, buses: 16, wait: 34 }, bestDays: ['Utorak', 'Četvrtak prije 11h', 'Nedjelja navečer'],
   }),
   makeBorderCrossing({
-    id: 'hum', shortName: 'Hum', route: 'Šćepan Polje ↔ Hum', area: 'Hercegovina / Pivska planina', lat: 43.3479, lng: 18.8455, neighbor: 'CG',
+    id: 'hum', shortName: 'Hum', route: 'Šćepan Polje ↔ Hum', area: 'Hercegovina / Pivska planina', lat: 43.34905, lng: 18.84489, neighbor: 'CG',
     status: 'open', confidence: 55, updatedAt: 'live', fieldConfirmed: false,
     fieldNote: 'Hum ↔ Šćepan Polje — planinski prijelaz prema Crnoj Gori (rafting/turistički pravac).',
     cause: 'Sezonski turistički promet prema Crnoj Gori', sponsor: '', extraDriveFromMainRoute: 0,
@@ -501,7 +501,7 @@ const ADDITIONAL_CROSSINGS = [
     historyBase: { cars: 90, trucks: 20, buses: 10, wait: 18 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Nedjelja prije podne'],
   }),
   makeBorderCrossing({
-    id: 'deleusa', shortName: 'Deleuša', route: 'Vraćenovići ↔ Deleuša', area: 'Istočna Hercegovina', lat: 42.835, lng: 18.515, neighbor: 'CG',
+    id: 'deleusa', shortName: 'Deleuša', route: 'Vraćenovići ↔ Deleuša', area: 'Istočna Hercegovina', lat: 42.86194, lng: 18.47980, neighbor: 'CG',
     status: 'open', confidence: 52, updatedAt: 'live', fieldConfirmed: false,
     fieldNote: 'Deleuša ↔ Vraćenovići — prijelaz na pravcu Bileća–Nikšić prema Crnoj Gori.',
     cause: 'Lokalni i tranzitni promet Bileća–Nikšić', sponsor: '', extraDriveFromMainRoute: 0,

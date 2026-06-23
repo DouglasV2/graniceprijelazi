@@ -1484,7 +1484,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     waits: { toBih: { car: 20, truck: 50, bus: 26 }, toHr: { car: 24, truck: 55, bus: 30 } },
     anchors: calibratedAnchors({
       hrLabel: 'Gunja', bihLabel: 'Brčko',
-      approachHr: { lat: 44.8850, lng: 18.8400 }, borderPoint: { lat: 44.8755, lng: 18.8250 }, exitBih: { lat: 44.8675, lng: 18.8115 },
+      approachHr: { lat: 44.8890, lng: 18.8185 }, borderPoint: { lat: 44.88236, lng: 18.81211 }, exitBih: { lat: 44.8730, lng: 18.8090 },
       guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
     }),
     cameras: [{ id: 'gun-bihamk', label: 'Brčko / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Brčko', 'Brčko', 'Brcko'] }],
@@ -1494,7 +1494,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     waits: { toBih: { car: 18, truck: 42, bus: 22 }, toHr: { car: 22, truck: 48, bus: 26 } },
     anchors: calibratedAnchors({
       hrLabel: 'Dvor', bihLabel: 'Novi Grad',
-      approachHr: { lat: 45.0680, lng: 16.3790 }, borderPoint: { lat: 45.0540, lng: 16.3800 }, exitBih: { lat: 45.0468, lng: 16.3772 },
+      approachHr: { lat: 45.0700, lng: 16.3712 }, borderPoint: { lat: 45.0606, lng: 16.3739 }, exitBih: { lat: 45.04806, lng: 16.37694 },
       guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
     }),
     cameras: [{ id: 'dvo-bihamk', label: 'Novi Grad / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Novi Grad', 'Novi Grad', 'Bosanski Novi'] }],
@@ -1504,7 +1504,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     waits: { toBih: { car: 12, truck: 28, bus: 16 }, toHr: { car: 15, truck: 32, bus: 18 } },
     anchors: calibratedAnchors({
       hrLabel: 'Hrvatska Kostajnica', bihLabel: 'Bosanska Kostajnica',
-      approachHr: { lat: 45.2282, lng: 16.5468 }, borderPoint: { lat: 45.2235, lng: 16.5520 }, exitBih: { lat: 45.2188, lng: 16.5578 },
+      approachHr: { lat: 45.2270, lng: 16.5460 }, borderPoint: { lat: 45.22029, lng: 16.54710 }, exitBih: { lat: 45.2155, lng: 16.5520 },
       guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
     }),
     cameras: [{ id: 'kos-bihamk', label: 'Bosanska Kostajnica / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Bosanska Kostajnica', 'Bosanska Kostajnica'] }],
@@ -1514,7 +1514,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     waits: { toBih: { car: 20, truck: 40, bus: 24 }, toHr: { car: 26, truck: 48, bus: 30 } },
     anchors: calibratedAnchors({
       hrLabel: 'Metković', bihLabel: 'Doljani',
-      approachHr: { lat: 43.0522, lng: 17.6478 }, borderPoint: { lat: 43.0410, lng: 17.6555 }, exitBih: { lat: 43.0302, lng: 17.6618 },
+      approachHr: { lat: 43.0520, lng: 17.6510 }, borderPoint: { lat: 43.05058, lng: 17.66137 }, exitBih: { lat: 43.0490, lng: 17.6710 },
       guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
     }),
     cameras: [{ id: 'met-bihamk', label: 'Doljani / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Doljani', 'Doljani'] }],
@@ -1530,7 +1530,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     // never a wrong line). Coords best-effort — VERIFY on the deployed map and fine-tune.
     anchors: calibratedAnchors({
       neighbor: 'RS', hrLabel: 'Trbušnica', bihLabel: 'Šepak',
-      approachHr: { lat: 44.5412, lng: 19.1930 }, borderPoint: { lat: 44.5417, lng: 19.1815 }, exitBih: { lat: 44.5424, lng: 19.1695 },
+      approachHr: { lat: 44.5402, lng: 19.1960 }, borderPoint: { lat: 44.54072, lng: 19.18474 }, exitBih: { lat: 44.5413, lng: 19.1735 },
       guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
     }),
     cameras: [{ id: 'sep-bihamk', label: 'Šepak / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Šepak', 'Šepak', 'Sepak', 'Šepak - Loznica', 'Sepak - Loznica'] }],
@@ -1542,7 +1542,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     // Road anchors for the Sava-bridge highway crossing (fail-safe). Coords best-effort — VERIFY on deploy.
     anchors: calibratedAnchors({
       neighbor: 'RS', hrLabel: 'Sremska Rača', bihLabel: 'Bosanska Rača',
-      approachHr: { lat: 44.9028, lng: 19.3346 }, borderPoint: { lat: 44.8936, lng: 19.3342 }, exitBih: { lat: 44.8846, lng: 19.3340 },
+      approachHr: { lat: 44.9190, lng: 19.2975 }, borderPoint: { lat: 44.91142, lng: 19.29694 }, exitBih: { lat: 44.9035, lng: 19.2965 },
       guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
     }),
     cameras: [], // no live BIHAMK camera feed for Bosanska Rača yet — wait text only
@@ -1555,7 +1555,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     // to the clean corridor). Coords best-effort — VERIFY on deploy.
     anchors: calibratedAnchors({
       neighbor: 'CG', hrLabel: 'Šćepan Polje', bihLabel: 'Hum',
-      approachHr: { lat: 43.3451, lng: 18.8503 }, borderPoint: { lat: 43.3479, lng: 18.8455 }, exitBih: { lat: 43.3508, lng: 18.8410 },
+      approachHr: { lat: 43.3465, lng: 18.8490 }, borderPoint: { lat: 43.34905, lng: 18.84489 }, exitBih: { lat: 43.3530, lng: 18.8420 },
       guard: { maxCrossingDistanceKm: 12, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 1400, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
     }),
     cameras: [], // no live BIHAMK camera feed for Hum yet — wait text only
@@ -1567,7 +1567,7 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     // Road anchors for the Deleuša ↔ Vraćenovići crossing (fail-safe). Coords best-effort — VERIFY on deploy.
     anchors: calibratedAnchors({
       neighbor: 'CG', hrLabel: 'Vraćenovići', bihLabel: 'Deleuša',
-      approachHr: { lat: 42.8322, lng: 18.5228 }, borderPoint: { lat: 42.835, lng: 18.515 }, exitBih: { lat: 42.8383, lng: 18.5066 },
+      approachHr: { lat: 42.8600, lng: 18.4900 }, borderPoint: { lat: 42.86194, lng: 18.47980 }, exitBih: { lat: 42.8630, lng: 18.4700 },
       guard: { maxCrossingDistanceKm: 12, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 1400, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
     }),
     cameras: [], // BIHAMK has no Deleuša feed — the matchText mis-resolved to a Sarajevo (Skenderija) camera, so no camera here; wait text only
