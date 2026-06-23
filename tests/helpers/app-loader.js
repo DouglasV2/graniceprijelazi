@@ -39,6 +39,10 @@ export const ALL_CROSSING_IDS = [
   'strmica-bos-grahovo',
   'uzljebic-ripac',
   'hrvatska-dubica-kozarska-dubica',
+  // batch 3 (2026-06-23): Neum corridor (south).
+  'klek-neum',
+  'zaton-doli-neum',
+  'gabela-polje',
 ];
 
 export const DIRECTIONS = ['toBih', 'toHr'];

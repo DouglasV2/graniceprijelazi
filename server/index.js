@@ -116,9 +116,9 @@ app.use((req, res, next) => {
       "script-src 'self' https://maps.googleapis.com https://maps.gstatic.com",
       "style-src 'self' https://fonts.googleapis.com https://maps.googleapis.com 'unsafe-inline'",
       "font-src 'self' https://fonts.gstatic.com",
-      "img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.hak.hr https://*.bihamk.ba https://*.ams-rs.com https://*.satwork.net https://gpmaljevac.com",
+      "img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.hak.hr https://*.bihamk.ba https://*.ams-rs.com https://*.amsbih.ba https://*.satwork.net https://gpmaljevac.com",
       "connect-src 'self' https://maps.googleapis.com https://routes.googleapis.com",
-      "frame-src 'self' https://*.hak.hr https://*.bihamk.ba https://*.ams-rs.com https://gpmaljevac.com",
+      "frame-src 'self' https://*.hak.hr https://*.bihamk.ba https://*.ams-rs.com https://*.amsbih.ba https://gpmaljevac.com",
       "frame-ancestors 'self'",
       "object-src 'none'",
       "base-uri 'self'",
@@ -1570,6 +1570,49 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       // AMS-RS live feeds (Kozarska Dubica, BiH/RS side) — verified live JPEGs. "Ulaz u RS" → toBih, "Izlaz iz RS" → toHr.
       { id: 'dub-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_09_GP_KD02/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-kozarska-dubica/' },
       { id: 'dub-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_09_GP_KD01/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-kozarska-dubica/' },
+    ],
+  },
+  // ── Neum corridor (added 2026-06-23, batch 3): the southern HR↔BiH crossings on the Jadranska
+  //    magistrala. OSM-verified border points (adversarially re-checked). Live HAK / AMS-BiH cameras. ──
+  {
+    id: 'klek-neum', name: 'GP Klek', shortName: 'Klek/Neum I', hrLabel: 'Klek', bihLabel: 'Neum',
+    waits: { toBih: { car: 10, truck: 25, bus: 15 }, toHr: { car: 20, truck: 35, bus: 25 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Klek', bihLabel: 'Neum',
+      approachHr: { lat: 42.9481, lng: 17.56891 }, borderPoint: { lat: 42.93965, lng: 17.57994 }, exitBih: { lat: 42.93137, lng: 17.59121 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [
+      // HAK k=138 (Klek/Neum I) — BOTH feeds are "Ulaz u HR iz BiH" (→ toHr); id 204 is a dead placeholder (dropped).
+      { id: 'klek-hak-203', label: 'Ulaz u HR iz BiH (1)', source: 'HAK', url: 'https://www.hak.hr/info/kamere/203.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=138' },
+      { id: 'klek-hak-413', label: 'Ulaz u HR iz BiH (2)', source: 'HAK', url: 'https://www.hak.hr/info/kamere/413.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=138' },
+    ],
+  },
+  {
+    id: 'zaton-doli-neum', name: 'GP Zaton Doli', shortName: 'Zaton Doli', hrLabel: 'Zaton Doli', bihLabel: 'Neum',
+    waits: { toBih: { car: 10, truck: 25, bus: 15 }, toHr: { car: 20, truck: 35, bus: 25 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Zaton Doli', bihLabel: 'Neum',
+      approachHr: { lat: 42.87967, lng: 17.66207 }, borderPoint: { lat: 42.8888, lng: 17.6521 }, exitBih: { lat: 42.89824, lng: 17.64269 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [
+      // HAK k=139 (Zaton Doli/Neum II) — 206 "Izlaz iz HR" (→ toBih), 207 "Ulaz u HR" (→ toHr).
+      { id: 'zat-hak-izlaz', label: 'Izlaz iz HR u BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/206.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=139' },
+      { id: 'zat-hak-ulaz', label: 'Ulaz u HR iz BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/207.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=139' },
+    ],
+  },
+  {
+    id: 'gabela-polje', name: 'GP Gabela Polje', shortName: 'Gabela Polje', hrLabel: 'Metković', bihLabel: 'Gabela',
+    waits: { toBih: { car: 5, truck: 10, bus: 10 }, toHr: { car: 10, truck: 15, bus: 15 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Metković', bihLabel: 'Gabela',
+      approachHr: { lat: 43.05491, lng: 17.6424 }, borderPoint: { lat: 43.05911, lng: 17.65733 }, exitBih: { lat: 43.06436, lng: 17.67163 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [
+      // AMS BiH (Federation auto-club) camera 142 "Izlaz" (leaving BiH → entering HR → toHr). Verified live JPEG.
+      { id: 'gab-amsbih-izlaz', label: 'Izlaz iz BiH (ulaz u HR)', source: 'AMS BiH', url: 'https://www.amsbih.ba/amsbih.ba/kamere/kamere/Lokacija_8/0GabelaPolje.jpg', externalUrl: 'https://kamere.amsbih.ba/#/kamera/142' },
     ],
   },
   // ── BiH ↔ Serbia / Montenegro. Internal direction key `toHr` here means "toward the neighbour

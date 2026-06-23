@@ -515,6 +515,63 @@ const ADDITIONAL_CROSSINGS = [
     ],
     historyBase: { cars: 80, trucks: 20, buses: 8, wait: 14 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
   }),
+  // ── Neum corridor (added 2026-06-23, batch 3): southern HR↔BiH crossings on the Jadranska magistrala. ──
+  makeBorderCrossing({
+    id: 'klek-neum', shortName: 'Klek/Neum I', route: 'Klek ↔ Neum', area: 'Dubrovnik-Neretva / Neum koridor', lat: 42.93965, lng: 17.57994,
+    status: 'busy', confidence: 58, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Klek ↔ Neum I — sjeverni ulaz u neumski koridor (Jadranska magistrala), ljetni tranzit prema Dubrovniku.',
+    cause: 'Sezonski tranzit kroz neumski koridor', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 10, trucks: 25, buses: 15, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Ulaz u neumski koridor; ljeti gužve.', waitAdvice: 'Ljeti provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Sezonski promet.', alertRules: ['naraste preko 40 min', 'padne ispod 5 min'] },
+      toHr: { cars: 20, trucks: 35, buses: 25, trend: 'rising', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU kontrola) ljeti zna stvarati duže repove.', waitAdvice: 'Ljeti provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Sezonski promet.', alertRules: ['naraste preko 60 min', 'padne ispod 10 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 6, level: 'low' }, { label: 'Međuzona', minutes: 4, level: 'low' }, { label: 'BiH kontrola', minutes: 12, level: 'medium' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 8, level: 'low' }, { label: 'Međuzona', minutes: 4, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 18, level: 'medium' }],
+    },
+    cameras: [
+      externalCamera({ id: 'klek-hak-203', label: 'Ulaz u HR iz BiH (1)', source: 'HAK', url: 'https://www.hak.hr/info/kamere/203.jpg' }),
+      externalCamera({ id: 'klek-hak-413', label: 'Ulaz u HR iz BiH (2)', source: 'HAK', url: 'https://www.hak.hr/info/kamere/413.jpg' }),
+    ],
+    historyBase: { cars: 180, trucks: 50, buses: 16, wait: 26 }, bestDays: ['Utorak', 'Srijeda', 'Subota rano'],
+  }),
+  makeBorderCrossing({
+    id: 'zaton-doli-neum', shortName: 'Zaton Doli', route: 'Zaton Doli ↔ Neum', area: 'Dubrovnik-Neretva / Neum koridor', lat: 42.8888, lng: 17.6521,
+    status: 'busy', confidence: 58, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Zaton Doli ↔ Neum II — južni izlaz iz neumskog koridora prema Dubrovniku (D8/E65).',
+    cause: 'Sezonski tranzit kroz neumski koridor', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 10, trucks: 25, buses: 15, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Izlaz iz HR u neumski koridor.', waitAdvice: 'Ljeti provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Sezonski promet.', alertRules: ['naraste preko 40 min', 'padne ispod 5 min'] },
+      toHr: { cars: 20, trucks: 35, buses: 25, trend: 'rising', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU kontrola) ljeti zna stvarati duže repove.', waitAdvice: 'Ljeti provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Sezonski promet.', alertRules: ['naraste preko 60 min', 'padne ispod 10 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 6, level: 'low' }, { label: 'Međuzona', minutes: 4, level: 'low' }, { label: 'BiH kontrola', minutes: 12, level: 'medium' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 8, level: 'low' }, { label: 'Međuzona', minutes: 4, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 18, level: 'medium' }],
+    },
+    cameras: [
+      externalCamera({ id: 'zat-hak-izlaz', label: 'Izlaz iz HR u BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/206.jpg' }),
+      externalCamera({ id: 'zat-hak-ulaz', label: 'Ulaz u HR iz BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/207.jpg' }),
+    ],
+    historyBase: { cars: 180, trucks: 50, buses: 16, wait: 26 }, bestDays: ['Utorak', 'Srijeda', 'Subota rano'],
+  }),
+  makeBorderCrossing({
+    id: 'gabela-polje', shortName: 'Gabela Polje', route: 'Metković ↔ Gabela', area: 'Dalmacija / Hercegovina (Čapljina)', lat: 43.05911, lng: 17.65733,
+    status: 'open', confidence: 52, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Metković ↔ Gabela Polje — prijelaz prema Čapljini (dolina Neretve); od 2026. otvoren 0–24 za putnike.',
+    cause: 'Lokalni i putnički promet doline Neretve', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 10, buses: 10, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Manji prijelaz prema Čapljini.', waitAdvice: 'Putnički prijelaz — provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+      toHr: { cars: 10, trucks: 15, buses: 15, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) ljeti zna usporiti.', waitAdvice: 'Putnički prijelaz — provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 45 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 5, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'BiH kontrola', minutes: 8, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 6, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 11, level: 'medium' }],
+    },
+    cameras: [
+      externalCamera({ id: 'gab-amsbih-izlaz', label: 'Izlaz iz BiH (ulaz u HR)', source: 'AMS BiH', url: 'https://www.amsbih.ba/amsbih.ba/kamere/kamere/Lokacija_8/0GabelaPolje.jpg' }),
+    ],
+    historyBase: { cars: 70, trucks: 12, buses: 8, wait: 12 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
   // ── BiH ↔ Serbia / Montenegro (BIHAMK-sourced). `neighbor` drives the displayed direction labels. ──
   makeBorderCrossing({
     id: 'sepak', shortName: 'Šepak', route: 'Trbušnica ↔ Šepak', area: 'Semberija / Podrinje', lat: 44.54072, lng: 19.18474, neighbor: 'RS',
