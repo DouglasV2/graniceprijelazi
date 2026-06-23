@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="PrijelazRadar">
+  <rect width="512" height="512" rx="112" fill="#0b0f17"/>
+  <!-- perspective road (wide near, narrow to the border) -->
+  <path d="M188 412 L234 176 L278 176 L324 412 Z" fill="#1b2436"/>
+  <!-- centre-lane dashes -->
+  <rect x="250" y="368" width="12" height="34" rx="6" fill="#5b6b8c"/>
+  <rect x="251.5" y="312" width="9" height="26" rx="4.5" fill="#5b6b8c"/>
+  <rect x="252.5" y="268" width="7" height="20" rx="3.5" fill="#5b6b8c"/>
+  <!-- border / checkpoint bar -->
+  <rect x="150" y="196" width="212" height="22" rx="11" fill="#3b82f6"/>
+  <!-- "clear / go" signal at the crossing -->
+  <circle cx="256" cy="207" r="44" fill="#0b0f17"/>
+  <circle cx="256" cy="207" r="27" fill="#22c55e"/>
+</svg>
