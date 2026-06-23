@@ -977,14 +977,8 @@ const CAMERA_FEEDS = {
       externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=303',
       calibration: {
         roi: { x: 6, y: 18, w: 82, h: 68, rotate: -11 },
-        laneZones: [
-          { key: 'nonEu', label: 'Non‑EU', x: 7, y: 25, w: 38, h: 56, rotate: -12 },
-          { key: 'eu', label: 'EU', x: 42, y: 24, w: 30, h: 55, rotate: -9 },
-        ],
-        laneProfiles: {
-          toBih: { eu: 0.44, nonEu: 0.56, euWait: 0.84, nonEuWait: 1.18 },
-          toHr: { eu: 0.36, nonEu: 0.64, euWait: 0.76, nonEuWait: 1.29 },
-        },
+        // EU/non-EU lane split removed: the wide plaza view can't reliably attribute a lane to a
+        // passport type, so per-lane minutes were a synthetic estimate. Camera stays visual-only.
         queueAnchor: { x: 28, y: 63 },
         countLine: { x1: 12, y1: 74, x2: 76, y2: 44, label: 'linija prolaska' },
         baselineFrame: { cars: 7, vans: 2, trucks: 1, buses: 0 },
@@ -1008,14 +1002,7 @@ const CAMERA_FEEDS = {
       externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=303',
       calibration: {
         roi: { x: 8, y: 18, w: 82, h: 70, rotate: -10 },
-        laneZones: [
-          { key: 'nonEu', label: 'Non‑EU', x: 9, y: 28, w: 35, h: 54, rotate: -14 },
-          { key: 'eu', label: 'EU', x: 44, y: 22, w: 28, h: 58, rotate: -8 },
-        ],
-        laneProfiles: {
-          toBih: { eu: 0.47, nonEu: 0.53, euWait: 0.88, nonEuWait: 1.14 },
-          toHr: { eu: 0.34, nonEu: 0.66, euWait: 0.74, nonEuWait: 1.32 },
-        },
+        // EU/non-EU lane split removed (synthetic per-lane estimate) — camera stays visual-only.
         queueAnchor: { x: 33, y: 64 },
         countLine: { x1: 15, y1: 74, x2: 82, y2: 38, label: 'linija prolaska' },
         baselineFrame: { cars: 9, vans: 2, trucks: 2, buses: 0 },

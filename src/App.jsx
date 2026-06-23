@@ -642,7 +642,7 @@ const CROSSINGS = [
     updatedAt: '14:34',
     fieldConfirmed: true,
     fieldConfirmedAt: 'prije 9 min',
-    fieldNote: 'Novi prijelaz ima odvojene zone kontrole; za Gornji Varoš je ručno kalibrirano da je krajnja lijeva traka EU, a ostale non‑EU.',
+    fieldNote: 'Novi prijelaz na autocestovnom mostu; čekanje se puni iz javnih izvora i kamera.',
     cause: 'Razdvajanje kolona po dokumentima + kamionski valovi nakon otvaranja smjera',
     sponsor: 'Servis Posavina',
     extraDriveFromMainRoute: 18,
@@ -655,10 +655,10 @@ const CROSSINGS = [
         trend: 'steady',
         bottleneckSide: 'BiH strana',
         bottleneckText: 'Kolona prema BiH najviše se stvara u desnim zonama kontrole i povremeno se prelijeva prema prilazu.',
-        waitAdvice: 'Dobar rasteretni prijelaz za Gradišku, ali treba gledati razliku EU/non‑EU kolone prije odluke.',
+        waitAdvice: 'Dobar rasteretni prijelaz za Gradišku; provjeri live izvor prije odluke.',
         publishDecision: 'Web update',
         publishReason: 'Čekanje je pojačano, ali smjer još ima protočne intervale.',
-        alertRules: ['non‑EU kolona naraste preko 70 min', 'EU kolona padne ispod 25 min', 'kamionska traka blokira prilaz'],
+        alertRules: ['naraste preko 70 min', 'padne ispod 25 min', 'kamionska traka blokira prilaz'],
         segments: [
           { label: 'Prilaz HR', minutes: 11, level: 'medium' },
           { label: 'Kontrola HR', minutes: 12, level: 'medium' },
@@ -672,11 +672,11 @@ const CROSSINGS = [
         buses: 63,
         trend: 'rising',
         bottleneckSide: 'HR strana',
-        bottleneckText: 'Ulaz u EU je osjetljiviji na razdvajanje putnika i dokumente, pa non‑EU kolona može rasti brže od EU kolone.',
-        waitAdvice: 'Ako si EU putnik, provjeri odvojenu EU kolonu; razlika može promijeniti preporuku rute.',
+        bottleneckText: 'Ulaz u HR (Schengen) ima detaljniju kontrolu putnika i dokumenata, pa kolona zna rasti u popodnevnim satima.',
+        waitAdvice: 'Provjeri live izvor i kameru prije polaska prema HR.',
         publishDecision: 'Pratiti',
-        publishReason: 'Trend prema HR raste i treba pratiti razliku između EU i non‑EU traka.',
-        alertRules: ['non‑EU kolona naraste preko 90 min', 'EU i non‑EU razlika prijeđe 35 min', 'protok padne ispod 40 voz/h'],
+        publishReason: 'Trend prema HR raste; koristi live izvor.',
+        alertRules: ['naraste preko 90 min', 'padne ispod 40 min', 'protok padne ispod 40 voz/h'],
         segments: [
           { label: 'Prilaz BiH', minutes: 15, level: 'medium' },
           { label: 'Međuzona', minutes: 9, level: 'low' },
@@ -695,17 +695,7 @@ const CROSSINGS = [
         url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=303',
         previewImage: '/camera-snapshots/gornji-varos-hak.png',
-        note: 'HAK slika ima ručno označenu EU krajnju lijevu traku i non‑EU ostale trake.',
-        laneCalibration: {
-          zones: [
-            { key: 'eu', label: 'EU · krajnja lijeva', x: 6, y: 29, w: 22, h: 53, rotate: -13 },
-            { key: 'nonEu', label: 'Non‑EU · ostale', x: 25, y: 24, w: 48, h: 58, rotate: -10 },
-          ],
-          profiles: {
-            toBih: { eu: 0.28, nonEu: 0.72, euWait: 0.72, nonEuWait: 1.26 },
-            toHr: { eu: 0.24, nonEu: 0.76, euWait: 0.68, nonEuWait: 1.34 },
-          },
-        },
+        note: 'HAK kamera za Gornji Varoš — prikaz cijele zone kontrole.',
       },
       {
         id: 'gv-hak-plaza-4',
@@ -717,17 +707,7 @@ const CROSSINGS = [
         url: 'https://m.hak.hr/kamera.asp?g=2&k=303',
         externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=303',
         previewImage: '/camera-snapshots/gornji-varos-hak.png',
-        note: 'Drugi kadar istog prijelaza: krajnja lijeva traka = EU, ostale trake = non‑EU.',
-        laneCalibration: {
-          zones: [
-            { key: 'eu', label: 'EU · krajnja lijeva', x: 6, y: 31, w: 21, h: 51, rotate: -14 },
-            { key: 'nonEu', label: 'Non‑EU · ostale', x: 25, y: 24, w: 50, h: 59, rotate: -9 },
-          ],
-          profiles: {
-            toBih: { eu: 0.30, nonEu: 0.70, euWait: 0.74, nonEuWait: 1.22 },
-            toHr: { eu: 0.22, nonEu: 0.78, euWait: 0.66, nonEuWait: 1.36 },
-          },
-        },
+        note: 'Drugi kadar istog prijelaza — zona kontrole.',
       },
     ],
     history: [
