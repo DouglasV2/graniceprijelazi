@@ -84,6 +84,12 @@ dotenv.config({ path: path.resolve(__dirname, '..', '.env.local'), quiet: true }
 dotenv.config({ path: path.resolve(__dirname, '..', '.env'), quiet: true });
 
 const app = express();
+// Behind a PaaS edge proxy (Railway) the socket peer is the proxy, so req.ip would be identical for
+// every user — collapsing the per-IP rate limiter into a single shared bucket (one burst 429s everyone).
+// Trust a FIXED number of proxy hops so req.ip resolves to the real client. Must be a fixed count, never
+// `true`: with `true` the leftmost X-Forwarded-For is client-spoofable, which would defeat both the rate
+// limiter and the per-device session hash. Override TRUST_PROXY_HOPS if the proxy chain is deeper.
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
 const port = Number(process.env.PORT || 5050);
 const serverKey = process.env.GOOGLE_MAPS_SERVER_KEY || process.env.GOOGLE_MAPS_API_KEY || '';
 const cameraIngestApiKey = process.env.CAMERA_INGEST_API_KEY || '';
@@ -99,13 +105,15 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
-  // CSP: allow Google Maps JS/Tiles, Google Fonts, self scripts/styles/images.
-  // 'unsafe-inline' for styles is required by Google Maps SDK.
+  // CSP: allow Google Maps JS/Tiles, Google Fonts, self scripts/styles/images. script-src has NO
+  // 'unsafe-inline' (the Vite build emits only external bundles, and Maps loads via an external script)
+  // so an injected inline <script> can't run; 'unsafe-inline' stays on style-src only, which the Google
+  // Maps SDK requires for the styles it injects at runtime.
   res.setHeader(
     'Content-Security-Policy',
     [
       "default-src 'self'",
-      "script-src 'self' https://maps.googleapis.com https://maps.gstatic.com 'unsafe-inline'",
+      "script-src 'self' https://maps.googleapis.com https://maps.gstatic.com",
       "style-src 'self' https://fonts.googleapis.com https://maps.googleapis.com 'unsafe-inline'",
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.hak.hr https://*.bihamk.ba https://*.ams-rs.com https://*.satwork.net https://gpmaljevac.com",
@@ -139,6 +147,15 @@ const datastoreMode = databaseUrl ? 'postgres' : 'json-file';
 const weakDefaultSecret = 'borderflow-local-dev-secret-change-me';
 const sessionSecret = process.env.SESSION_SECRET || weakDefaultSecret;
 const tokenTtlMs = Number(process.env.SESSION_TTL_HOURS || 24) * 60 * 60 * 1000;
+
+// "Real deployment" heuristic: a Postgres datastore, an explicit CORS allow-list, or NODE_ENV=production.
+// Used to fail closed on a weak session secret / an unsigned Stripe webhook even when NODE_ENV isn't
+// literally 'production' (e.g. a publicly-reachable staging box with NODE_ENV unset). Deliberately does
+// NOT key on STRIPE_SECRET_KEY alone, so local Stripe testing (json-file store, sk_test_…) still boots
+// on the dev fallbacks.
+function looksLikeRealDeployment() {
+  return process.env.NODE_ENV === 'production' || Boolean(databaseUrl) || configuredCorsOrigins.length > 0;
+}
 
 function ensureRuntimeDir() {
   if (!fs.existsSync(runtimeDir)) fs.mkdirSync(runtimeDir, { recursive: true });
@@ -4342,8 +4359,14 @@ app.post('/api/billing/webhook', async (req, res) => {
   try {
     if (STRIPE_WEBHOOK_SECRET) {
       event = stripeClient.webhooks.constructEvent(req.rawBody, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET);
+    } else if (looksLikeRealDeployment()) {
+      // Billing is live but no signing secret is configured. Refuse rather than trust an unsigned body —
+      // otherwise anyone who can reach this public endpoint could POST a fake checkout.session.completed
+      // and grant a free Trip Pass / subscription to ANY account. Fail closed.
+      console.error('[billing-webhook] STRIPE_WEBHOOK_SECRET missing while billing is enabled — rejecting unsigned webhook.');
+      return res.status(503).json({ ok: false, error: 'Webhook nije konfiguriran.' });
     } else {
-      event = req.body; // dev/local only (no secret configured) — NOT signature-verified
+      event = req.body; // local/dev only (no secret, not a real deployment) — NOT signature-verified
     }
   } catch (error) {
     return res.status(400).json({ ok: false, error: `Webhook signature invalid: ${error.message}` });
@@ -5661,7 +5684,7 @@ app.get('/api/measured/geofences', async (_req, res) => {
 const locationWaitPingLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, keyPrefix: 'loc-ping' });
 
 function hashUserSession(req, sessionId = '') {
-  const ip = req.ip || req.headers['x-forwarded-for'] || '';
+  const ip = req.ip || ''; // req.ip is the real client IP via app.set('trust proxy'); no raw XFF fallback (spoofable)
   const ua = String(req.get('user-agent') || '').slice(0, 80);
   return crypto.createHash('sha256').update(`${LOCATION_WAIT_HASH_SALT}:${ip}:${ua}:${sessionId}`).digest('hex').slice(0, 32);
 }
@@ -10307,7 +10330,7 @@ app.post('/api/camera-scan/:crossingId', authRequired, adminRequired, writeLimit
 
 app.post('/api/camera-ingest', writeLimiter, (req, res) => {
   const incomingApiKey = String(req.headers['x-api-key'] || '').trim();
-  if (!cameraIngestApiKey || incomingApiKey !== cameraIngestApiKey) {
+  if (!cameraIngestApiKey || !timingSafeEqualStr(incomingApiKey, cameraIngestApiKey)) {
     return res.status(401).json({ ok: false, note: 'API ključ je potreban za ingest.' });
   }
 
@@ -10511,6 +10534,18 @@ app.use((req, res, next) => {
   });
 });
 
+// Terminal error handler — last line of defense. Express's built-in handler renders the full stack
+// trace into the HTTP response whenever NODE_ENV !== 'production'; this makes us safe regardless of
+// NODE_ENV by always returning a generic JSON body (e.g. a malformed-JSON parse error lands here as a
+// clean 400 instead of a stack dump).
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error('[unhandled]', err?.stack || err?.message || err);
+  if (res.headersSent) return next(err);
+  const status = Number(err?.status || err?.statusCode) || 500;
+  res.status(status).json({ ok: false, error: 'Neočekivana greška.' });
+});
+
 export {
   app,
   initializeDatastore,
@@ -10570,29 +10605,40 @@ export {
 };
 
 function assertProductionSafety() {
-  if (process.env.NODE_ENV !== 'production') return;
+  const isProd = process.env.NODE_ENV === 'production';
+  const deployed = looksLikeRealDeployment();
+  if (!deployed) return; // pure local dev (json-file store, no CORS, NODE_ENV unset) — keep the dev fallbacks
   const blockers = [];
+  // Security-critical on ANY reachable deployment (prod OR a Postgres/CORS-configured staging box), not
+  // only when NODE_ENV is literally 'production': a publicly-known session secret = forgeable admin
+  // tokens; an unsigned-webhook fallback while billing is on = free Trip Passes for any account.
   if (sessionSecret === weakDefaultSecret) {
-    blockers.push('SESSION_SECRET nije postavljen — koristi se razvojna vrijednost. Postavi dugačak slučajan secret prije production deploya.');
+    blockers.push('SESSION_SECRET nije postavljen — koristi se razvojna vrijednost (omogućuje krivotvorenje admin tokena). Postavi dugačak slučajan secret.');
   }
-  const adminPass = process.env.BORDERFLOW_ADMIN_PASSWORD || '';
-  if (!adminPass || adminPass === 'change-this-admin-password') {
-    blockers.push('BORDERFLOW_ADMIN_PASSWORD nije postavljen ili koristi default vrijednost. Postavi jak admin password.');
+  if (BILLING_ENABLED && !STRIPE_WEBHOOK_SECRET) {
+    blockers.push('STRIPE_WEBHOOK_SECRET nije postavljen, a naplata je uključena — nepotpisani webhook mogao bi dodijeliti besplatni Trip Pass. Postavi webhook secret ili isključi naplatu.');
   }
-  if (process.env.BORDERFLOW_DEMO_USER_PASSWORD === 'change-this-user-password') {
-    blockers.push('BORDERFLOW_DEMO_USER_PASSWORD koristi default vrijednost. Promijeni ili ukloni demo user seed prije production deploya.');
+  // Credential-seed blockers stay production-only (a staging box may intentionally use the demo logins).
+  if (isProd) {
+    const adminPass = process.env.BORDERFLOW_ADMIN_PASSWORD || '';
+    if (!adminPass || adminPass === 'change-this-admin-password') {
+      blockers.push('BORDERFLOW_ADMIN_PASSWORD nije postavljen ili koristi default vrijednost. Postavi jak admin password.');
+    }
+    if (process.env.BORDERFLOW_DEMO_USER_PASSWORD === 'change-this-user-password') {
+      blockers.push('BORDERFLOW_DEMO_USER_PASSWORD koristi default vrijednost. Promijeni ili ukloni demo user seed prije production deploya.');
+    }
   }
   if (allowPublicRegistration) {
-    console.warn('[startup] ALLOW_PUBLIC_REGISTRATION=true u produkciji — svatko može stvoriti račun. Razmisli o isključivanju.');
+    console.warn('[startup] ALLOW_PUBLIC_REGISTRATION=true — svatko može stvoriti račun. Razmisli o isključivanju.');
   }
   if (!configuredCorsOrigins.length) {
-    console.warn('[startup] CORS_ORIGINS nije postavljen — API prihvaća zahtjeve s bilo kojeg originala. Za produkciju postavi popis dopuštenih domena (npr. CORS_ORIGINS=https://prijelazradar.hr).');
+    console.warn('[startup] CORS_ORIGINS nije postavljen — API prihvaća zahtjeve s bilo kojeg originala. Postavi popis dopuštenih domena (npr. CORS_ORIGINS=https://prijelazradar.hr).');
   }
   if (!serverKey) {
     console.warn('[startup] GOOGLE_MAPS_SERVER_KEY nije postavljen — Google rute neće raditi, prikazuju se samo kalibrirane/fallback zone.');
   }
   if (blockers.length) {
-    console.error('\n[startup] Production safety check FAILED:');
+    console.error('\n[startup] Sigurnosna provjera prije pokretanja NIJE prošla:');
     for (const blocker of blockers) console.error('  - ' + blocker);
     console.error('\nAplikacija se neće pokrenuti dok se ovi blokeri ne riješe.\n');
     process.exit(1);

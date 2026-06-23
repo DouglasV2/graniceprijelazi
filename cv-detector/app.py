@@ -34,6 +34,10 @@ import time
 import base64
 import logging
 import threading
+import hmac
+import socket
+import ipaddress
+from urllib.parse import urlparse
 
 import requests
 from fastapi import FastAPI, Header, HTTPException
@@ -58,7 +62,17 @@ CV_IMGSZ = int(os.environ.get("CV_IMGSZ", "0") or "0")
 CV_MAX_CONCURRENCY = max(1, int(os.environ.get("CV_MAX_CONCURRENCY", "1") or "1"))
 CV_QUEUE_TIMEOUT = float(os.environ.get("CV_QUEUE_TIMEOUT", "8"))
 FETCH_TIMEOUT = float(os.environ.get("CV_FETCH_TIMEOUT", "6"))
-AUTH_TOKEN = os.environ.get("CV_AUTH_TOKEN", "")  # if set, require matching Bearer
+AUTH_TOKEN = os.environ.get("CV_AUTH_TOKEN", "")  # required Bearer token (see ALLOW_NO_AUTH)
+# Fail closed: with no token configured, /detect would be an OPEN public inference + URL-fetch (SSRF)
+# proxy. Refuse to serve it unless the operator EXPLICITLY opts into no-auth for local development.
+ALLOW_NO_AUTH = os.environ.get("CV_ALLOW_NO_AUTH", "").strip().lower() in ("1", "true", "yes")
+# SSRF allow-list for the imageUrl fallback (suffix match on the host). The Node side normally sends
+# imageBase64, so this fetch path is rarely used — we can afford to be strict.
+_ALLOWED_URL_SUFFIXES = tuple(
+    s.strip().lower()
+    for s in os.environ.get("CV_URL_ALLOWLIST", "hak.hr,bihamk.ba,ams-rs.com,satwork.net,gpmaljevac.com").split(",")
+    if s.strip()
+)
 USER_AGENT = os.environ.get(
     "CV_USER_AGENT",
     "Mozilla/5.0 (compatible; PrijelazRadar-CV/1.0)",
@@ -136,6 +150,33 @@ class DetectRequest(BaseModel):
     source: str | None = None
 
 
+def _is_public_http_url(url: str) -> bool:
+    """SSRF guard for the imageUrl fallback: only http(s), only allow-listed hosts, and only when EVERY
+    resolved IP is public — blocks cloud metadata (169.254.169.254), localhost/127.0.0.1, and RFC-1918
+    ranges. Any parse/resolution failure is treated as unsafe."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = (parsed.hostname or "").lower()
+        if not host:
+            return False
+        if _ALLOWED_URL_SUFFIXES and not any(host == s or host.endswith("." + s) for s in _ALLOWED_URL_SUFFIXES):
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        if not infos:
+            return False
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                    or ip.is_multicast or ip.is_unspecified):
+                return False
+        return True
+    except Exception:  # noqa: BLE001 - any resolution/parse failure → unsafe
+        return False
+
+
 def _load_image(req: DetectRequest) -> Image.Image:
     if req.imageBase64:
         raw = base64.b64decode(req.imageBase64)
@@ -145,7 +186,11 @@ def _load_image(req: DetectRequest) -> Image.Image:
     url = req.imageUrl or req.cameraUrl
     if not url:
         raise ValueError("no imageBase64 and no imageUrl/cameraUrl")
-    resp = requests.get(url, timeout=FETCH_TIMEOUT, headers={"User-Agent": USER_AGENT})
+    if not _is_public_http_url(url):
+        # SSRF guard — refuse internal/metadata/non-allowlisted targets. Redirects are disabled below so
+        # a 30x from a validated host can't bounce the fetch to an internal one after the check.
+        raise ValueError("blocked non-public or non-allowlisted imageUrl")
+    resp = requests.get(url, timeout=FETCH_TIMEOUT, headers={"User-Agent": USER_AGENT}, allow_redirects=False)
     resp.raise_for_status()
     return Image.open(io.BytesIO(resp.content)).convert("RGB")
 
@@ -186,8 +231,13 @@ def health():
 
 @app.post("/detect")
 def detect(req: DetectRequest, authorization: str | None = Header(default=None)):
-    if AUTH_TOKEN and authorization != f"Bearer {AUTH_TOKEN}":
-        raise HTTPException(status_code=401, detail="unauthorized")
+    if AUTH_TOKEN:
+        if not hmac.compare_digest(authorization or "", f"Bearer {AUTH_TOKEN}"):
+            raise HTTPException(status_code=401, detail="unauthorized")
+    elif not ALLOW_NO_AUTH:
+        # No token configured and no explicit local-dev opt-in → fail closed rather than run as an open
+        # public inference/SSRF proxy.
+        raise HTTPException(status_code=503, detail="auth not configured (set CV_AUTH_TOKEN, or CV_ALLOW_NO_AUTH=true for local dev)")
     _bump(total=1)
 
     started = time.time()
