@@ -5866,7 +5866,10 @@ app.post('/api/location-wait/session', publicWriteLimiter, optionalAuth, async (
     measuredWaitMin: null,
     startAnchorId: anchors ? anchors.startAnchor.id : null,
     endAnchorId: anchors ? anchors.endAnchor.id : null,
-    userSessionHash: hashUserSession(req, sessionId),
+    // Per-DEVICE hash (empty sessionId), matching the dedup key `hash` above — so one device = one
+    // pending/active session AND one vote in the verifiedLocation aggregate (anti-poisoning). (Storing
+    // hashUserSession(req, sessionId) here made it unique per session, silently breaking both.)
+    userSessionHash: hash,
     predictedWaitAtStart: null,
     lastPingAt: 0,
     lastAccuracyM: null,

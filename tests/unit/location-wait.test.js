@@ -84,4 +84,12 @@ describe('aggregateVerifiedLocation — outlier-safe + age-aware', () => {
   it('trimmedMedian drops the extremes once n>=4', () => {
     expect(trimmedMedian([1, 16, 17, 18, 200])).toBe(17);
   });
+  it('caps each device to ONE vote (anti-poisoning): same-device fakes cannot outvote real passes', () => {
+    const fake = (i) => ({ status: 'completed', measuredWaitMin: 5, serverCompletedAt: new Date(now - (10 + i) * 60_000).toISOString(), userSessionHash: 'attacker-device' });
+    const real = (w, age) => ({ status: 'completed', measuredWaitMin: w, serverCompletedAt: new Date(now - age * 60_000).toISOString(), userSessionHash: `dev-${w}` });
+    const agg = aggregateVerifiedLocation([fake(0), fake(1), fake(2), fake(3), fake(4), real(30, 5), real(32, 6)], { now });
+    // 5 attacker passes collapse to 1 vote → 3 distinct devices [5, 30, 32] → median 30, not 5.
+    expect(agg.sampleCount).toBe(3);
+    expect(agg.medianWaitMin).toBe(30);
+  });
 });

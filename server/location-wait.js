@@ -93,8 +93,21 @@ export function classifyLocationPing(session = {}, ping = {}, anchors = null, {
 // Aggregate completed sessions into the verifiedLocation source-breakdown object. Outlier-safe
 // (trimmed median) and age-aware (stale passes are ignored, not left strong).
 export function aggregateVerifiedLocation(sessions = [], { now = Date.now(), maxAgeMin = 45 } = {}) {
-  const completed = (sessions || []).filter((s) => s && s.status === 'completed' && Number.isFinite(Number(s.measuredWaitMin)) && (s.serverCompletedAt || s.completedAt));
-  if (!completed.length) return { available: false, sampleCount: 0 };
+  const completedAll = (sessions || []).filter((s) => s && s.status === 'completed' && Number.isFinite(Number(s.measuredWaitMin)) && (s.serverCompletedAt || s.completedAt));
+  if (!completedAll.length) return { available: false, sampleCount: 0 };
+
+  // Anti-poisoning: ONE vote per device (userSessionHash). A single origin can serially complete many
+  // sessions; without this, ~4 fakes from one device move the trimmed median. Keep each device's most
+  // recent completed pass. Sessions without a hash (unit fixtures) fall back to a unique key, so each
+  // still counts individually. To dominate now an attacker needs many distinct devices (rate-limited).
+  const byDevice = new Map();
+  completedAll.forEach((s, idx) => {
+    const key = s.userSessionHash || s.sessionId || s.id || `idx-${idx}`;
+    const t = new Date(s.serverCompletedAt || s.completedAt).getTime();
+    const prev = byDevice.get(key);
+    if (!prev || t > new Date(prev.serverCompletedAt || prev.completedAt).getTime()) byDevice.set(key, s);
+  });
+  const completed = [...byDevice.values()];
 
   const withAge = completed.map((s) => ({
     wait: Number(s.measuredWaitMin),
