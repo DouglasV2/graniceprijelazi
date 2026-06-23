@@ -1536,6 +1536,42 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       { id: 'met-hak-izlaz-hr', label: 'Izlaz iz HR u BiH', source: 'HAK', url: 'https://www.hak.hr/info/kamere/321.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=136' },
     ],
   },
+  // ── HR↔BiH crossings batch 2 (added 2026-06-23): west/Dinara + Una valley. Coords are OSM-verified
+  //    (border_control nodes, adversarially re-checked). Anchors derived 1.3km from the border. ──────────
+  {
+    id: 'strmica-bos-grahovo', name: 'GP Strmica', shortName: 'Strmica', hrLabel: 'Strmica', bihLabel: 'Bosansko Grahovo',
+    waits: { toBih: { car: 10, truck: 30, bus: 14 }, toHr: { car: 14, truck: 35, bus: 18 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Strmica', bihLabel: 'Bosansko Grahovo',
+      approachHr: { lat: 44.1735, lng: 16.2622 }, borderPoint: { lat: 44.17559, lng: 16.26299 }, exitBih: { lat: 44.1778, lng: 16.2640 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [], // no HAK/AMS-RS/BIHAMK feed for this remote Dinara crossing (verified absent)
+  },
+  {
+    id: 'uzljebic-ripac', name: 'GP Užljebić', shortName: 'Užljebić', hrLabel: 'Užljebić', bihLabel: 'Ripač',
+    waits: { toBih: { car: 5, truck: 15, bus: 10 }, toHr: { car: 5, truck: 15, bus: 10 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Užljebić', bihLabel: 'Ripač',
+      approachHr: { lat: 44.71715, lng: 15.92653 }, borderPoint: { lat: 44.70601, lng: 15.93148 }, exitBih: { lat: 44.71743, lng: 15.93495 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [], // no public camera feed (verified absent from HAK/BIHAMK/AMS-RS)
+  },
+  {
+    id: 'hrvatska-dubica-kozarska-dubica', name: 'GP Hrvatska Dubica', shortName: 'Hrv. Dubica', hrLabel: 'Hrvatska Dubica', bihLabel: 'Kozarska Dubica',
+    waits: { toBih: { car: 5, truck: 15, bus: 10 }, toHr: { car: 10, truck: 20, bus: 15 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Hrvatska Dubica', bihLabel: 'Kozarska Dubica',
+      approachHr: { lat: 45.19082, lng: 16.79439 }, borderPoint: { lat: 45.18534, lng: 16.80905 }, exitBih: { lat: 45.17393, lng: 16.81265 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [
+      // AMS-RS live feeds (Kozarska Dubica, BiH/RS side) — verified live JPEGs. "Ulaz u RS" → toBih, "Izlaz iz RS" → toHr.
+      { id: 'dub-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_09_GP_KD02/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-kozarska-dubica/' },
+      { id: 'dub-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_09_GP_KD01/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-kozarska-dubica/' },
+    ],
+  },
   // ── BiH ↔ Serbia / Montenegro. Internal direction key `toHr` here means "toward the neighbour
   //    country" (RS/CG) — the per-crossing `neighbor` drives the displayed labels. BIHAMK-sourced
   //    (waits + camera where available); anchors are derived (Google-routed), refine later. ──────────

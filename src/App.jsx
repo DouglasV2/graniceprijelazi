@@ -463,6 +463,58 @@ const ADDITIONAL_CROSSINGS = [
     ],
     historyBase: { cars: 170, trucks: 60, buses: 14, wait: 28 }, bestDays: ['Utorak', 'Četvrtak prije 10h', 'Nedjelja navečer'],
   }),
+  // ── HR↔BiH crossings batch 2 (added 2026-06-23): OSM-verified coords; verify on deployed map. ──
+  makeBorderCrossing({
+    id: 'strmica-bos-grahovo', shortName: 'Strmica', route: 'Strmica ↔ Bosansko Grahovo', area: 'Dalmacija / zapadna BiH', lat: 44.17559, lng: 16.26299,
+    status: 'open', confidence: 50, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Strmica (Knin) ↔ Bosansko Grahovo — mali planinski prijelaz na Dinari (D33 prema Drvaru).',
+    cause: 'Lokalni i sezonski promet preko Dinare', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 10, trucks: 30, buses: 14, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali prijelaz; kontrola tereta zna potrajati.', waitAdvice: 'Udaljen prijelaz — provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 40 min', 'padne ispod 5 min'] },
+      toHr: { cars: 14, trucks: 35, buses: 18, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Udaljen prijelaz — provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 45 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 5, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'BiH kontrola', minutes: 9, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 6, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 11, level: 'medium' }],
+    },
+    cameras: [],
+    historyBase: { cars: 50, trucks: 20, buses: 4, wait: 12 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'uzljebic-ripac', shortName: 'Užljebić', route: 'Užljebić ↔ Ripač', area: 'Lika / Una-Sana', lat: 44.70601, lng: 15.93148,
+    status: 'open', confidence: 48, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Užljebić (Donji Lapac) ↔ Ripač (Bihać) — mali prijelaz u dolini Une (D218).',
+    cause: 'Lokalni promet uz Unu', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 15, buses: 10, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Vrlo mali prijelaz; obično prohodan.', waitAdvice: 'Manji prijelaz — provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 5, trucks: 15, buses: 10, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Manji prijelaz — provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 5, level: 'low' }, { label: 'Međuzona', minutes: 3, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 8, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 40, trucks: 12, buses: 4, wait: 8 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'hrvatska-dubica-kozarska-dubica', shortName: 'Hrv. Dubica', route: 'Hrvatska Dubica ↔ Kozarska Dubica', area: 'Banovina / Bosanska Krajina', lat: 45.18534, lng: 16.80905,
+    status: 'open', confidence: 55, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Hrvatska ↔ Kozarska Dubica — most preko Une, lokalni/putnički promet (ograničenje za teret).',
+    cause: 'Lokalni i putnički promet uz Unu', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 15, buses: 10, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali most preko Une; ograničenje za teret.', waitAdvice: 'Putnički prijelaz — provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+      toHr: { cars: 10, trucks: 20, buses: 15, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU kontrola) zna usporiti.', waitAdvice: 'Putnički prijelaz — provjeri prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 45 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 5, level: 'low' }, { label: 'Most (Una)', minutes: 4, level: 'low' }, { label: 'BiH kontrola', minutes: 8, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 6, level: 'low' }, { label: 'Most (Una)', minutes: 4, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 12, level: 'medium' }],
+    },
+    cameras: [
+      externalCamera({ id: 'dub-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_09_GP_KD02/slika.jpg' }),
+      externalCamera({ id: 'dub-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_09_GP_KD01/slika.jpg' }),
+    ],
+    historyBase: { cars: 80, trucks: 20, buses: 8, wait: 14 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
   // ── BiH ↔ Serbia / Montenegro (BIHAMK-sourced). `neighbor` drives the displayed direction labels. ──
   makeBorderCrossing({
     id: 'sepak', shortName: 'Šepak', route: 'Trbušnica ↔ Šepak', area: 'Semberija / Podrinje', lat: 44.54072, lng: 19.18474, neighbor: 'RS',

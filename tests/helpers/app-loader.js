@@ -35,6 +35,10 @@ export const ALL_CROSSING_IDS = [
   'dvor',
   'hrv-kostajnica',
   'metkovic',
+  // batch 2 (2026-06-23): west/Dinara + Una valley.
+  'strmica-bos-grahovo',
+  'uzljebic-ripac',
+  'hrvatska-dubica-kozarska-dubica',
 ];
 
 export const DIRECTIONS = ['toBih', 'toHr'];
