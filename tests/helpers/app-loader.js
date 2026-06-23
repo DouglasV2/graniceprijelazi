@@ -30,6 +30,11 @@ export const ALL_CROSSING_IDS = [
   'vinjani-donji',
   'vinjani-gornji',
   'crveni-grm',
+  // Added 2026-06-23 (additional HR↔BiH crossings).
+  'gunja',
+  'dvor',
+  'hrv-kostajnica',
+  'metkovic',
 ];
 
 export const DIRECTIONS = ['toBih', 'toHr'];

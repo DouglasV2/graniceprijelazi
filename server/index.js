@@ -781,6 +781,10 @@ const BORDER_CROSSINGS = {
     id: 'gradiska',
     name: 'GP Gradiška',
     shortName: 'Gradiška',
+    // Route display intentionally OFF (request 2026-06-23): the Sava-bridge approach takes a sharp legal
+    // corner Google often renders off-road, so we show wait + cameras + traffic but NOT a drawn route
+    // line. computeCrossingRoutes() honours routeStatusHint.hideRoute. Re-enable by removing this flag.
+    routeStatusHint: { hideRoute: true },
     // NOTE: routeStatusHint.replacementCrossingId is intentionally removed.
     // Stara Gradiška is operational again; previously when Google returned
     // ZERO_RESULTS the API marked the crossing as closed and redirected users
@@ -1095,9 +1099,13 @@ function calibratedRouteGuard(overrides = {}) {
   return { ...DEFAULT_CALIBRATED_ROUTE_GUARD, ...overrides };
 }
 
-function calibratedAnchors({ hrLabel, bihLabel, approachHr, borderPoint, exitBih, guard = {}, labels = {}, displayCorridorPath = null }) {
+function calibratedAnchors({ hrLabel, bihLabel, approachHr, borderPoint, exitBih, guard = {}, labels = {}, displayCorridorPath = null, neighbor = 'HR' }) {
   const routeGuard = calibratedRouteGuard(guard);
-  // Optional committed road-following display corridor (points in HR-approach → BiH-exit order, e.g.
+  // Neighbour-aware default labels: 'HR' for the HR↔BiH crossings (unchanged), 'Srbija'/'Crna Gora' for
+  // the RS/CG crossings so the route card reads "Srbija → BiH" instead of a wrong "HR → BiH". The
+  // hrLabel param carries the NON-BiH side's place name (e.g. Trbušnica for Šepak).
+  const N = neighborLabelOf(neighbor);
+  // Optional committed road-following display corridor (points in approach → BiH-exit order, e.g.
   // baked from OSRM where Google + the straight 3-point corridor sat off the road). Stored as-is for
   // toBih and reversed for toHr so each direction's path is already in approach→exit order. It is
   // re-validated at render time, so a bad bake can never regress the map.
@@ -1107,8 +1115,8 @@ function calibratedAnchors({ hrLabel, bihLabel, approachHr, borderPoint, exitBih
   const corridorOk = corridor && corridor.length >= 2;
   return {
     toBih: {
-      label: labels.toBih || 'HR → BiH',
-      fromLabel: labels.hrFrom || `${hrLabel} · HR prilaz kontroli`,
+      label: labels.toBih || `${N} → BiH`,
+      fromLabel: labels.hrFrom || `${hrLabel} · ${N} prilaz kontroli`,
       toLabel: labels.bihTo || `${bihLabel} · BiH izlaz iz kontrole`,
       approachStart: approachHr,
       borderPoint,
@@ -1117,9 +1125,9 @@ function calibratedAnchors({ hrLabel, bihLabel, approachHr, borderPoint, exitBih
       displayCorridorPath: corridorOk ? corridor : null,
     },
     toHr: {
-      label: labels.toHr || 'BiH → HR',
+      label: labels.toHr || `BiH → ${N}`,
       fromLabel: labels.bihFrom || `${bihLabel} · BiH prilaz kontroli`,
-      toLabel: labels.hrTo || `${hrLabel} · HR izlaz iz kontrole`,
+      toLabel: labels.hrTo || `${hrLabel} · ${N} izlaz iz kontrole`,
       approachStart: exitBih,
       borderPoint,
       exitPoint: approachHr,
@@ -1456,6 +1464,49 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       { id: 'cg-bihamk', label: 'Crveni Grm / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Crveni Grm', 'Crveni Grm'] },
     ],
   },
+  // ── Additional HR↔BiH crossings (added 2026-06-23). All coords are BEST-EFFORT estimates — verify the
+  //    markers + routes on the deployed map (route geometry is fail-safe: bad anchors → route hidden,
+  //    never a wrong line). BIHAMK matchText cameras show no image if the feed name doesn't match. ──────
+  {
+    id: 'gunja', name: 'GP Gunja', shortName: 'Gunja', hrLabel: 'Gunja', bihLabel: 'Brčko',
+    waits: { toBih: { car: 20, truck: 50, bus: 26 }, toHr: { car: 24, truck: 55, bus: 30 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Gunja', bihLabel: 'Brčko',
+      approachHr: { lat: 44.8850, lng: 18.8400 }, borderPoint: { lat: 44.8755, lng: 18.8250 }, exitBih: { lat: 44.8675, lng: 18.8115 },
+      guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
+    }),
+    cameras: [{ id: 'gun-bihamk', label: 'Brčko / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Brčko', 'Brčko', 'Brcko'] }],
+  },
+  {
+    id: 'dvor', name: 'GP Dvor', shortName: 'Dvor', hrLabel: 'Dvor', bihLabel: 'Novi Grad',
+    waits: { toBih: { car: 18, truck: 42, bus: 22 }, toHr: { car: 22, truck: 48, bus: 26 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Dvor', bihLabel: 'Novi Grad',
+      approachHr: { lat: 45.0680, lng: 16.3790 }, borderPoint: { lat: 45.0540, lng: 16.3800 }, exitBih: { lat: 45.0468, lng: 16.3772 },
+      guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
+    }),
+    cameras: [{ id: 'dvo-bihamk', label: 'Novi Grad / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Novi Grad', 'Novi Grad', 'Bosanski Novi'] }],
+  },
+  {
+    id: 'hrv-kostajnica', name: 'GP Hrvatska Kostajnica', shortName: 'Hrv. Kostajnica', hrLabel: 'Hrvatska Kostajnica', bihLabel: 'Bosanska Kostajnica',
+    waits: { toBih: { car: 12, truck: 28, bus: 16 }, toHr: { car: 15, truck: 32, bus: 18 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Hrvatska Kostajnica', bihLabel: 'Bosanska Kostajnica',
+      approachHr: { lat: 45.2282, lng: 16.5468 }, borderPoint: { lat: 45.2235, lng: 16.5520 }, exitBih: { lat: 45.2188, lng: 16.5578 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [{ id: 'kos-bihamk', label: 'Bosanska Kostajnica / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Bosanska Kostajnica', 'Bosanska Kostajnica'] }],
+  },
+  {
+    id: 'metkovic', name: 'GP Metković', shortName: 'Metković', hrLabel: 'Metković', bihLabel: 'Doljani',
+    waits: { toBih: { car: 20, truck: 40, bus: 24 }, toHr: { car: 26, truck: 48, bus: 30 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Metković', bihLabel: 'Doljani',
+      approachHr: { lat: 43.0522, lng: 17.6478 }, borderPoint: { lat: 43.0410, lng: 17.6555 }, exitBih: { lat: 43.0302, lng: 17.6618 },
+      guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
+    }),
+    cameras: [{ id: 'met-bihamk', label: 'Doljani / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Doljani', 'Doljani'] }],
+  },
   // ── BiH ↔ Serbia / Montenegro. Internal direction key `toHr` here means "toward the neighbour
   //    country" (RS/CG) — the per-crossing `neighbor` drives the displayed labels. BIHAMK-sourced
   //    (waits + camera where available); anchors are derived (Google-routed), refine later. ──────────
@@ -1463,24 +1514,50 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
     id: 'sepak', name: 'GP Šepak', shortName: 'Šepak', lat: 44.5417, lng: 19.1815, neighbor: 'RS',
     hrLabel: 'Trbušnica', bihLabel: 'Šepak',
     waits: { toBih: { car: 22, truck: 55, bus: 28 }, toHr: { car: 26, truck: 60, bus: 32 } },
+    // Road anchors so Google draws the real Drina-bridge route (fail-safe: bad geometry → route hidden,
+    // never a wrong line). Coords best-effort — VERIFY on the deployed map and fine-tune.
+    anchors: calibratedAnchors({
+      neighbor: 'RS', hrLabel: 'Trbušnica', bihLabel: 'Šepak',
+      approachHr: { lat: 44.5412, lng: 19.1930 }, borderPoint: { lat: 44.5417, lng: 19.1815 }, exitBih: { lat: 44.5424, lng: 19.1695 },
+      guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
+    }),
     cameras: [{ id: 'sep-bihamk', label: 'Šepak / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Šepak', 'Šepak', 'Sepak', 'Šepak - Loznica', 'Sepak - Loznica'] }],
   },
   {
     id: 'raca', name: 'GP Bosanska Rača', shortName: 'B. Rača', lat: 44.8936, lng: 19.3342, neighbor: 'RS',
     hrLabel: 'Sremska Rača', bihLabel: 'Bosanska Rača',
     waits: { toBih: { car: 24, truck: 60, bus: 30 }, toHr: { car: 30, truck: 70, bus: 38 } },
+    // Road anchors for the Sava-bridge highway crossing (fail-safe). Coords best-effort — VERIFY on deploy.
+    anchors: calibratedAnchors({
+      neighbor: 'RS', hrLabel: 'Sremska Rača', bihLabel: 'Bosanska Rača',
+      approachHr: { lat: 44.9028, lng: 19.3346 }, borderPoint: { lat: 44.8936, lng: 19.3342 }, exitBih: { lat: 44.8846, lng: 19.3340 },
+      guard: { maxCrossingDistanceKm: 10, hardMaxCrossingDistanceKm: 22, passDistanceMeters: 1200, displayBeforeMeters: 1300, displayAfterMeters: 1300 },
+    }),
     cameras: [], // no live BIHAMK camera feed for Bosanska Rača yet — wait text only
   },
   {
     id: 'hum', name: 'GP Hum', shortName: 'Hum', lat: 43.3479, lng: 18.8455, neighbor: 'CG',
     hrLabel: 'Šćepan Polje', bihLabel: 'Hum',
     waits: { toBih: { car: 14, truck: 30, bus: 18 }, toHr: { car: 16, truck: 34, bus: 20 } },
+    // Road anchors for the Šćepan Polje canyon crossing (fail-safe; mountain road, Google may fall back
+    // to the clean corridor). Coords best-effort — VERIFY on deploy.
+    anchors: calibratedAnchors({
+      neighbor: 'CG', hrLabel: 'Šćepan Polje', bihLabel: 'Hum',
+      approachHr: { lat: 43.3451, lng: 18.8503 }, borderPoint: { lat: 43.3479, lng: 18.8455 }, exitBih: { lat: 43.3508, lng: 18.8410 },
+      guard: { maxCrossingDistanceKm: 12, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 1400, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
     cameras: [], // no live BIHAMK camera feed for Hum yet — wait text only
   },
   {
     id: 'deleusa', name: 'GP Deleuša', shortName: 'Deleuša', lat: 42.835, lng: 18.515, neighbor: 'CG',
     hrLabel: 'Vraćenovići', bihLabel: 'Deleuša',
     waits: { toBih: { car: 12, truck: 26, bus: 15 }, toHr: { car: 14, truck: 30, bus: 18 } },
+    // Road anchors for the Deleuša ↔ Vraćenovići crossing (fail-safe). Coords best-effort — VERIFY on deploy.
+    anchors: calibratedAnchors({
+      neighbor: 'CG', hrLabel: 'Vraćenovići', bihLabel: 'Deleuša',
+      approachHr: { lat: 42.8322, lng: 18.5228 }, borderPoint: { lat: 42.835, lng: 18.515 }, exitBih: { lat: 42.8383, lng: 18.5066 },
+      guard: { maxCrossingDistanceKm: 12, hardMaxCrossingDistanceKm: 26, passDistanceMeters: 1400, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
     cameras: [], // BIHAMK has no Deleuša feed — the matchText mis-resolved to a Sarajevo (Skenderija) camera, so no camera here; wait text only
   },
 ].forEach(addCrossing);
@@ -9901,6 +9978,14 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
     throw error;
   }
   const anchor = crossing.anchors[direction] || crossing.anchors.toBih;
+  if (crossing.routeStatusHint?.hideRoute) {
+    // Route display intentionally disabled for this crossing (e.g. Gradiška: a sharp bridge approach
+    // Google routes off-road as often as not). Keep wait + cameras + traffic, but never draw a line we
+    // can't stand behind — same honest "routeHidden" state used when geometry can't be verified.
+    return routeUnverifiedPayload(crossing, direction, {
+      note: 'Rutu za ovaj prijelaz trenutno ne crtamo (prilaz nije pouzdano iscrtati). Prikazujemo čekanje, kamere i prometni sloj — provjeri stanje prije polaska.',
+    });
+  }
   if (!anchor.routeGuard) {
     return routePendingPayload(crossing, direction, 'Za ovaj prijelaz zasad prikazujemo čekanje, kamere i prometni sloj. Cestovnu liniju ćemo uključiti čim prođe provjeru, da mapa ne bi pokazivala čudnu ili krivu putanju.');
   }

@@ -386,6 +386,71 @@ const ADDITIONAL_CROSSINGS = [
     ],
     historyBase: { cars: 156, trucks: 50, buses: 8, wait: 30 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Nedjelja navečer'],
   }),
+  // ── Additional HR↔BiH crossings (added 2026-06-23). Coords are best-effort — verify markers on deploy. ──
+  makeBorderCrossing({
+    id: 'gunja', shortName: 'Gunja', route: 'Gunja ↔ Brčko', area: 'Slavonija / Posavina', lat: 44.8755, lng: 18.8250,
+    status: 'normal', confidence: 60, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Gunja ↔ Brčko — most preko Save, velik teretni i putnički pravac prema Brčkom/Tuzli.',
+    cause: 'Tranzit prema Tuzli/Bijeljini + kamionski valovi', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 20, trucks: 50, buses: 26, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Procjena iz BIHAMK izvora.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 60 min', 'padne ispod 20 min'] },
+      toHr: { cars: 24, trucks: 55, buses: 30, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU kontrola) zna usporiti u špici.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 70 min', 'padne ispod 20 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 8, level: 'low' }, { label: 'Most (Sava)', minutes: 6, level: 'low' }, { label: 'BiH kontrola', minutes: 14, level: 'medium' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 10, level: 'medium' }, { label: 'Most (Sava)', minutes: 6, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 18, level: 'medium' }],
+    },
+    cameras: [externalCamera({ id: 'gun-bihamk', label: 'Brčko / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Brčko', 'Brčko', 'Brcko'], note: 'BIHAMK popis kamera — provjeri postoji li feed za Brčko/Gunju.' })],
+    historyBase: { cars: 190, trucks: 95, buses: 12, wait: 30 }, bestDays: ['Utorak', 'Srijeda prije 11h', 'Nedjelja navečer'],
+  }),
+  makeBorderCrossing({
+    id: 'dvor', shortName: 'Dvor', route: 'Dvor ↔ Novi Grad', area: 'Banovina / Pounje', lat: 45.0540, lng: 16.3800,
+    status: 'normal', confidence: 58, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Dvor na Uni ↔ Novi Grad (Bos. Novi) — glavni pravac Zagreb→Bihać/Banja Luka, most preko Une.',
+    cause: 'Tranzit prema Bihaću/Banja Luci', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 18, trucks: 42, buses: 22, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Procjena iz BIHAMK izvora.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 55 min', 'padne ispod 20 min'] },
+      toHr: { cars: 22, trucks: 48, buses: 26, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU kontrola) povremeno usporava.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 65 min', 'padne ispod 20 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 7, level: 'low' }, { label: 'Most (Una)', minutes: 5, level: 'low' }, { label: 'BiH kontrola', minutes: 12, level: 'medium' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 9, level: 'low' }, { label: 'Most (Una)', minutes: 5, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 16, level: 'medium' }],
+    },
+    cameras: [externalCamera({ id: 'dvo-bihamk', label: 'Novi Grad / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Novi Grad', 'Novi Grad', 'Bosanski Novi'], note: 'BIHAMK popis kamera — provjeri feed za Novi Grad.' })],
+    historyBase: { cars: 150, trucks: 70, buses: 10, wait: 24 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'hrv-kostajnica', shortName: 'Hrv. Kostajnica', route: 'Hrvatska Kostajnica ↔ Bosanska Kostajnica', area: 'Banovina / Pounje', lat: 45.2235, lng: 16.5520,
+    status: 'open', confidence: 55, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Hrvatska ↔ Bosanska Kostajnica — most preko Une, lokalni i regionalni promet.',
+    cause: 'Lokalni i regionalni promet uz Unu', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 12, trucks: 28, buses: 16, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Procjena iz BIHAMK izvora.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 40 min', 'padne ispod 10 min'] },
+      toHr: { cars: 15, trucks: 32, buses: 18, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU kontrola) obično prohodan.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 45 min', 'padne ispod 10 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 5, level: 'low' }, { label: 'Most (Una)', minutes: 4, level: 'low' }, { label: 'BiH kontrola', minutes: 9, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 6, level: 'low' }, { label: 'Most (Una)', minutes: 4, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 12, level: 'medium' }],
+    },
+    cameras: [externalCamera({ id: 'kos-bihamk', label: 'Bosanska Kostajnica / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Bosanska Kostajnica', 'Bosanska Kostajnica'], note: 'BIHAMK popis kamera — provjeri feed za Bosansku Kostajnicu.' })],
+    historyBase: { cars: 90, trucks: 30, buses: 6, wait: 16 }, bestDays: ['Ponedjeljak', 'Četvrtak', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'metkovic', shortName: 'Metković', route: 'Metković ↔ Doljani', area: 'Dalmacija / Hercegovina', lat: 43.0410, lng: 17.6555,
+    status: 'normal', confidence: 60, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: 'Metković ↔ Doljani — pravac prema Mostaru/Sarajevu, velik ljetni promet (dolina Neretve).',
+    cause: 'Sezonski tranzit prema Mostaru/Sarajevu', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 20, trucks: 40, buses: 24, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Procjena iz BIHAMK izvora.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 55 min', 'padne ispod 20 min'] },
+      toHr: { cars: 26, trucks: 48, buses: 30, trend: 'rising', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU kontrola) ljeti zna stvarati duže repove.', waitAdvice: 'Provjeri live izvor prije polaska.', publishDecision: 'Pratiti', publishReason: 'Koristi live izvor.', alertRules: ['naraste preko 70 min', 'padne ispod 20 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 7, level: 'low' }, { label: 'Međuzona', minutes: 5, level: 'low' }, { label: 'BiH kontrola', minutes: 13, level: 'medium' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 10, level: 'medium' }, { label: 'Međuzona', minutes: 6, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 18, level: 'medium' }],
+    },
+    cameras: [externalCamera({ id: 'met-bihamk', label: 'Doljani / BIHAMK', source: 'BIHAMK', url: 'https://bihamk.ba/spi/kamere', matchTexts: ['GP Doljani', 'Doljani'], note: 'BIHAMK popis kamera — provjeri feed za Doljane.' })],
+    historyBase: { cars: 170, trucks: 60, buses: 14, wait: 28 }, bestDays: ['Utorak', 'Četvrtak prije 10h', 'Nedjelja navečer'],
+  }),
   // ── BiH ↔ Serbia / Montenegro (BIHAMK-sourced). `neighbor` drives the displayed direction labels. ──
   makeBorderCrossing({
     id: 'sepak', shortName: 'Šepak', route: 'Trbušnica ↔ Šepak', area: 'Semberija / Podrinje', lat: 44.5417, lng: 19.1815, neighbor: 'RS',
