@@ -781,10 +781,11 @@ const BORDER_CROSSINGS = {
     id: 'gradiska',
     name: 'GP Gradiška',
     shortName: 'Gradiška',
-    // Route display intentionally OFF (request 2026-06-23): the Sava-bridge approach takes a sharp legal
-    // corner Google often renders off-road, so we show wait + cameras + traffic but NOT a drawn route
-    // line. computeCrossingRoutes() honours routeStatusHint.hideRoute. Re-enable by removing this flag.
-    routeStatusHint: { hideRoute: true },
+    // Route display intentionally OFF (request 2026-06-23): the route across the Sava bridge is currently
+    // NOT passable, so we show wait + cameras + traffic but NOT a drawn line, and steer users to Gornji
+    // Varoš. computeCrossingRoutes() honours routeStatusHint.hideRoute. Re-enable by removing this flag
+    // (or, better, manage a temporary closure via the admin status override).
+    routeStatusHint: { hideRoute: true, replacementCrossingId: 'gornji-varos', hideReason: 'Ruta preko Gradiške trenutno nije prohodna — preporuka je Gornji Varoš (novi most). Prikazujemo čekanje i kamere.' },
     // NOTE: routeStatusHint.replacementCrossingId is intentionally removed.
     // Stara Gradiška is operational again; previously when Google returned
     // ZERO_RESULTS the API marked the crossing as closed and redirected users
@@ -974,14 +975,15 @@ const CAMERA_FEEDS = {
       queueAnchor: { x: 62, y: 66 },
       countLine: { x1: 17, y1: 72, x2: 82, y2: 45, label: 'linija prolaska' },
       baselineFrame: { cars: 5, vans: 1, trucks: 1, buses: 0 },
-      laneProfiles: { toBih: { eu: 0.5, nonEu: 0.5, euWait: 0.9, nonEuWait: 1.12 }, toHr: { eu: 0.38, nonEu: 0.62, euWait: 0.78, nonEuWait: 1.24 } }
+      // EU/non-EU lane split removed (synthetic per-lane estimate — not credibly attributable here),
+      // matching the Gornji Varoš decision (commit d627db4). Stays a direction-pinned wait camera.
     } },
     { id: 'gra-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_17_GP_CA01/slika.jpg', calibration: {
       roi: { x: 9, y: 16, w: 80, h: 70, rotate: -9 },
       queueAnchor: { x: 58, y: 64 },
       countLine: { x1: 15, y1: 73, x2: 85, y2: 42, label: 'linija prolaska' },
       baselineFrame: { cars: 7, vans: 1, trucks: 2, buses: 0 },
-      laneProfiles: { toBih: { eu: 0.48, nonEu: 0.52, euWait: 0.88, nonEuWait: 1.14 }, toHr: { eu: 0.34, nonEu: 0.66, euWait: 0.74, nonEuWait: 1.32 } }
+      // EU/non-EU lane split removed (synthetic per-lane estimate), matching the Gornji Varoš decision.
     } },
   ],
 
@@ -9979,11 +9981,12 @@ async function computeCrossingRoutes(crossingId, direction = 'toBih') {
   }
   const anchor = crossing.anchors[direction] || crossing.anchors.toBih;
   if (crossing.routeStatusHint?.hideRoute) {
-    // Route display intentionally disabled for this crossing (e.g. Gradiška: a sharp bridge approach
-    // Google routes off-road as often as not). Keep wait + cameras + traffic, but never draw a line we
-    // can't stand behind — same honest "routeHidden" state used when geometry can't be verified.
+    // Route display intentionally disabled for this crossing (e.g. Gradiška: the route is currently not
+    // passable). Keep wait + cameras + traffic and suggest the alternative crossing, but never draw a
+    // line — same honest "routeHidden" state used when geometry can't be verified.
     return routeUnverifiedPayload(crossing, direction, {
-      note: 'Rutu za ovaj prijelaz trenutno ne crtamo (prilaz nije pouzdano iscrtati). Prikazujemo čekanje, kamere i prometni sloj — provjeri stanje prije polaska.',
+      note: crossing.routeStatusHint.hideReason || 'Rutu za ovaj prijelaz trenutno ne crtamo. Prikazujemo čekanje, kamere i prometni sloj — provjeri stanje prije polaska.',
+      suggestedCrossing: suggestedAlternativeFor(crossing, direction),
     });
   }
   if (!anchor.routeGuard) {
