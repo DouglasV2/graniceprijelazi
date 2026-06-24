@@ -43,6 +43,12 @@ export const ALL_CROSSING_IDS = [
   'klek-neum',
   'zaton-doli-neum',
   'gabela-polje',
+  // batch 4 (2026-06-23): Dubrovnik/Konavle + Popovo polje + Sava.
+  'ivanica-brgat',
+  'prud-zvirici',
+  'cepikuce-trebimlja',
+  'orah-orahovlje',
+  'jasenovac-gradina',
 ];
 
 export const DIRECTIONS = ['toBih', 'toHr'];

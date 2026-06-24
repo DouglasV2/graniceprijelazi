@@ -1615,6 +1615,64 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       { id: 'gab-amsbih-izlaz', label: 'Izlaz iz BiH (ulaz u HR)', source: 'AMS BiH', url: 'https://www.amsbih.ba/amsbih.ba/kamere/kamere/Lokacija_8/0GabelaPolje.jpg', externalUrl: 'https://kamere.amsbih.ba/#/kamera/142' },
     ],
   },
+  // ── HR↔BiH crossings batch 4 (added 2026-06-23): Dubrovnik/Konavle + Popovo polje + Sava. OSM-verified. ──
+  {
+    id: 'ivanica-brgat', name: 'GP Ivanica', shortName: 'Ivanica–Brgat', hrLabel: 'Gornji Brgat', bihLabel: 'Ivanica',
+    waits: { toBih: { car: 10, truck: 20, bus: 15 }, toHr: { car: 10, truck: 20, bus: 15 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Gornji Brgat', bihLabel: 'Ivanica',
+      approachHr: { lat: 42.64449, lng: 18.16001 }, borderPoint: { lat: 42.65614, lng: 18.1586 }, exitBih: { lat: 42.66406, lng: 18.17029 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [
+      // HAK "BIH Ivanica" (k=182, image id 414) — no ulaz/izlaz in label → visual-only. Verified live JPEG.
+      { id: 'ivanica-hak', label: 'BIH Ivanica', source: 'HAK', url: 'https://www.hak.hr/info/kamere/414.jpg', externalUrl: 'https://m.hak.hr/kamera.asp?g=2&k=182' },
+    ],
+  },
+  {
+    id: 'prud-zvirici', name: 'GP Prud', shortName: 'Prud–Zvirići', hrLabel: 'Prud', bihLabel: 'Zvirići',
+    waits: { toBih: { car: 5, truck: 0, bus: 5 }, toHr: { car: 5, truck: 0, bus: 5 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Prud', bihLabel: 'Zvirići',
+      approachHr: { lat: 43.0956, lng: 17.61761 }, borderPoint: { lat: 43.10445, lng: 17.60715 }, exitBih: { lat: 43.11614, lng: 17.6066 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [], // putnički prijelaz, nema kamere (verified)
+  },
+  {
+    id: 'cepikuce-trebimlja', name: 'GP Čepikuće', shortName: 'Čepikuće', hrLabel: 'Čepikuće', bihLabel: 'Trebimlja',
+    waits: { toBih: { car: 5, truck: 10, bus: 8 }, toHr: { car: 5, truck: 10, bus: 8 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Čepikuće', bihLabel: 'Trebimlja',
+      approachHr: { lat: 42.86033, lng: 17.84131 }, borderPoint: { lat: 42.87031, lng: 17.84962 }, exitBih: { lat: 42.87857, lng: 17.86092 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [], // Popovo polje, nema kamere (verified)
+  },
+  {
+    id: 'orah-orahovlje', name: 'GP Orah', shortName: 'Orah', hrLabel: 'Orah', bihLabel: 'Orahovlje',
+    waits: { toBih: { car: 5, truck: 0, bus: 5 }, toHr: { car: 5, truck: 0, bus: 5 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Orah', bihLabel: 'Orahovlje',
+      approachHr: { lat: 43.21214, lng: 17.41463 }, borderPoint: { lat: 43.21788, lng: 17.42861 }, exitBih: { lat: 43.22184, lng: 17.4437 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [], // AMS-BiH webcam exists but only via a date-templated Ventusky URL (no static JPEG) → not proxyable
+  },
+  {
+    id: 'jasenovac-gradina', name: 'GP Jasenovac', shortName: 'Jasenovac', hrLabel: 'Jasenovac', bihLabel: 'Donja Gradina',
+    waits: { toBih: { car: 10, truck: 30, bus: 15 }, toHr: { car: 10, truck: 30, bus: 15 } },
+    anchors: calibratedAnchors({
+      hrLabel: 'Jasenovac', bihLabel: 'Donja Gradina',
+      approachHr: { lat: 45.2762, lng: 16.91251 }, borderPoint: { lat: 45.26541, lng: 16.9189 }, exitBih: { lat: 45.25384, lng: 16.92124 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [
+      // AMS-RS Gradina (BiH/RS side) — verified live JPEGs. "Ulaz u RS" → toBih, "Izlaz iz RS" → toHr.
+      { id: 'jas-rs-in', label: 'Ulaz u Republiku Srpsku', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_08_GP_GD02/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-gradina-gradina-donja/' },
+      { id: 'jas-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_08_GP_GD01/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-gradina-gradina-donja/' },
+    ],
+  },
   // ── BiH ↔ Serbia / Montenegro. Internal direction key `toHr` here means "toward the neighbour
   //    country" (RS/CG) — the per-crossing `neighbor` drives the displayed labels. BIHAMK-sourced
   //    (waits + camera where available); anchors are derived (Google-routed), refine later. ──────────
