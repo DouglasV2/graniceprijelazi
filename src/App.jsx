@@ -656,6 +656,199 @@ const ADDITIONAL_CROSSINGS = [
     ],
     historyBase: { cars: 120, trucks: 60, buses: 12, wait: 28 }, bestDays: ['Utorak', 'Četvrtak prije 11h', 'Nedjelja navečer'],
   }),
+  // ── HR↔BiH crossings batch 5 (added 2026-06-23): small local crossings (seed-only). ──
+  makeBorderCrossing({
+    id: 'podprolog-prolog', shortName: "Podprolog", route: "Podprolog ↔ Prolog", area: "Dalmacija / Hercegovina", lat: 43.19087, lng: 17.42754,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Podprolog ↔ Prolog — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 10, buses: 5, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 5, trucks: 10, buses: 5, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'jovica-most-citluk', shortName: "Jovića Most", route: "Jovića Most (Imotski) ↔ Čitluk (Posušje)", area: "Dalmacija / Hercegovina", lat: 43.47921, lng: 17.26901,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Jovića Most (Imotski) ↔ Čitluk (Posušje) — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 0, buses: 5, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 5, trucks: 0, buses: 5, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'sebisina-drinovci', shortName: "Sebišina", route: "Sebišina (Imotski) ↔ Drinovci (Grude)", area: "Dalmacija / Hercegovina", lat: 43.36212, lng: 17.27272,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Sebišina (Imotski) ↔ Drinovci (Grude) — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 0, buses: 0, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 10, trucks: 0, buses: 0, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'slivno-drinovacko-brdo', shortName: "Slivno", route: "Slivno ↔ Drinovačko Brdo", area: "Dalmacija / Hercegovina", lat: 43.31884, lng: 17.29734,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Slivno ↔ Drinovačko Brdo — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 10, buses: 10, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 5, trucks: 10, buses: 10, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'arzano-pazar-vinica', shortName: "Aržano Pazar", route: "Aržano Pazar ↔ Mala Vinica (Vir)", area: "Dalmacija / Hercegovina", lat: 43.58062, lng: 17.00363,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Aržano Pazar ↔ Mala Vinica (Vir) — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 10, buses: 8, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 5, trucks: 10, buses: 8, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'bili-brig-vaganj', shortName: "Bili Brig", route: "Bili Brig (Trilj) ↔ Vaganj (Livno)", area: "Dalmacija / Hercegovina", lat: 43.77427, lng: 16.74735,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Bili Brig (Trilj) ↔ Vaganj (Livno) — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 0, buses: 10, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 5, trucks: 0, buses: 10, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'dvorine-subasici', shortName: "Dvorine", route: "Dvorine (Lovreć) ↔ Subašići (Vinica)", area: "Dalmacija / Hercegovina", lat: 43.55637, lng: 17.04118,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Dvorine (Lovreć) ↔ Subašići (Vinica) — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 0, buses: 10, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 5, trucks: 0, buses: 10, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'licka-kaldrma-kaldrma', shortName: "Lička Kaldrma", route: "Lička Kaldrma ↔ Kaldrma (Bosansko Grahovo)", area: "Dalmatinska zagora / Hercegbosna", lat: 44.32839, lng: 16.19491,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Lička Kaldrma ↔ Kaldrma (Bosansko Grahovo) — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 10, buses: 8, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 5, trucks: 10, buses: 8, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'bogovolja-hadzin-potok', shortName: "Bogovolja", route: "Bogovolja ↔ Hadžin Potok", area: "Kordun / Una-Sana", lat: 45.06247, lng: 15.74408,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Bogovolja ↔ Hadžin Potok — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 10, buses: 10, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 5, trucks: 10, buses: 10, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'pasin-potok-zagrad', shortName: "Pašin Potok", route: "Pašin Potok (Cetingrad) ↔ Zagrad (Velika Kladuša)", area: "Kordun / Una-Sana", lat: 45.17628, lng: 15.77709,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Pašin Potok (Cetingrad) ↔ Zagrad (Velika Kladuša) — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 10, buses: 5, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 5, trucks: 10, buses: 5, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'kordunski-ljeskovac-trzacka-rastela', shortName: "Kord. Ljeskovac", route: "Kordunski Ljeskovac ↔ Tržačka Raštela", area: "Kordun / Una-Sana", lat: 44.97553, lng: 15.78256,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Kordunski Ljeskovac ↔ Tržačka Raštela — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 10, buses: 8, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 10, trucks: 15, buses: 12, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
+  makeBorderCrossing({
+    id: 'obljaj-bosanska-bojna', shortName: "Obljaj", route: "Veliki Obljaj ↔ Bosanska Bojna", area: "Banovina / Pounje", lat: 45.21031, lng: 16.01716,
+    status: 'open', confidence: 44, updatedAt: 'live', fieldConfirmed: false,
+    fieldNote: "Veliki Obljaj ↔ Bosanska Bojna — mali lokalni granični prijelaz.",
+    cause: 'Lokalni / pogranični promet', sponsor: '', extraDriveFromMainRoute: 0,
+    waits: {
+      toBih: { cars: 5, trucks: 15, buses: 10, trend: 'steady', bottleneckSide: 'BiH strana', bottleneckText: 'Mali lokalni prijelaz.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 30 min', 'padne ispod 5 min'] },
+      toHr: { cars: 5, trucks: 15, buses: 10, trend: 'steady', bottleneckSide: 'HR strana', bottleneckText: 'Ulaz u HR (EU) na malom prijelazu.', waitAdvice: 'Provjeri prije polaska — mali prijelaz.', publishDecision: 'Pratiti', publishReason: 'Niska frekvencija.', alertRules: ['naraste preko 35 min', 'padne ispod 5 min'] },
+    },
+    segments: {
+      toBih: [{ label: 'Prilaz HR', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'BiH kontrola', minutes: 6, level: 'low' }],
+      toHr: [{ label: 'Prilaz BiH', minutes: 4, level: 'low' }, { label: 'Međuzona', minutes: 2, level: 'low' }, { label: 'HR kontrola (EU)', minutes: 7, level: 'low' }],
+    },
+    cameras: [],
+    historyBase: { cars: 25, trucks: 4, buses: 3, wait: 6 }, bestDays: ['Ponedjeljak', 'Srijeda', 'Subota ujutro'],
+  }),
   // ── BiH ↔ Serbia / Montenegro (BIHAMK-sourced). `neighbor` drives the displayed direction labels. ──
   makeBorderCrossing({
     id: 'sepak', shortName: 'Šepak', route: 'Trbušnica ↔ Šepak', area: 'Semberija / Podrinje', lat: 44.54072, lng: 19.18474, neighbor: 'RS',

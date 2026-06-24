@@ -49,6 +49,19 @@ export const ALL_CROSSING_IDS = [
   'cepikuce-trebimlja',
   'orah-orahovlje',
   'jasenovac-gradina',
+  // batch 5 (2026-06-23): small local crossings.
+  'podprolog-prolog',
+  'jovica-most-citluk',
+  'sebisina-drinovci',
+  'slivno-drinovacko-brdo',
+  'arzano-pazar-vinica',
+  'bili-brig-vaganj',
+  'dvorine-subasici',
+  'licka-kaldrma-kaldrma',
+  'bogovolja-hadzin-potok',
+  'pasin-potok-zagrad',
+  'kordunski-ljeskovac-trzacka-rastela',
+  'obljaj-bosanska-bojna',
 ];
 
 export const DIRECTIONS = ['toBih', 'toHr'];

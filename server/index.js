@@ -1673,6 +1673,127 @@ function addCrossing({ id, name, shortName, lat, lng, waits, hrLabel, bihLabel, 
       { id: 'jas-rs-out', label: 'Izlaz iz Republike Srpske', source: 'AMS RS', url: 'https://gp.satwork.net/AMSRS_08_GP_GD01/slika.jpg', externalUrl: 'https://ams-rs.com/en/granicni-prelaz-gradina-gradina-donja/' },
     ],
   },
+  // ── HR↔BiH crossings batch 5 (added 2026-06-23): small local/pogranični crossings, OSM-verified, seed-only (no live source). ──
+  {
+    id: 'podprolog-prolog', name: "GP Podprolog", shortName: "Podprolog", hrLabel: "Podprolog", bihLabel: "Prolog",
+    waits: { toBih: { car: 5, truck: 10, bus: 5 }, toHr: { car: 5, truck: 10, bus: 5 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Podprolog", bihLabel: "Prolog",
+      approachHr: { lat: 43.19681, lng: 17.41373 }, borderPoint: { lat: 43.19087, lng: 17.42754 }, exitBih: { lat: 43.18719, lng: 17.44276 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
+  {
+    id: 'jovica-most-citluk', name: "GP Jovića Most", shortName: "Jovića Most", hrLabel: "Jovića Most (Imotski)", bihLabel: "Čitluk (Posušje)",
+    waits: { toBih: { car: 5, truck: 0, bus: 5 }, toHr: { car: 5, truck: 0, bus: 5 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Jovića Most (Imotski)", bihLabel: "Čitluk (Posušje)",
+      approachHr: { lat: 43.4681, lng: 17.26399 }, borderPoint: { lat: 43.47921, lng: 17.26901 }, exitBih: { lat: 43.48515, lng: 17.28288 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
+  {
+    id: 'sebisina-drinovci', name: "GP Sebišina", shortName: "Sebišina", hrLabel: "Sebišina (Imotski)", bihLabel: "Drinovci (Grude)",
+    waits: { toBih: { car: 5, truck: 0, bus: 0 }, toHr: { car: 10, truck: 0, bus: 0 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Sebišina (Imotski)", bihLabel: "Drinovci (Grude)",
+      approachHr: { lat: 43.36927, lng: 17.25999 }, borderPoint: { lat: 43.36212, lng: 17.27272 }, exitBih: { lat: 43.3613, lng: 17.28876 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
+  {
+    id: 'slivno-drinovacko-brdo', name: "GP Slivno", shortName: "Slivno", hrLabel: "Slivno", bihLabel: "Drinovačko Brdo",
+    waits: { toBih: { car: 5, truck: 10, bus: 10 }, toHr: { car: 5, truck: 10, bus: 10 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Slivno", bihLabel: "Drinovačko Brdo",
+      approachHr: { lat: 43.32311, lng: 17.28238 }, borderPoint: { lat: 43.31884, lng: 17.29734 }, exitBih: { lat: 43.33018, lng: 17.30124 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
+  {
+    id: 'arzano-pazar-vinica', name: "GP Aržano Pazar", shortName: "Aržano Pazar", hrLabel: "Aržano Pazar", bihLabel: "Mala Vinica (Vir)",
+    waits: { toBih: { car: 5, truck: 10, bus: 8 }, toHr: { car: 5, truck: 10, bus: 8 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Aržano Pazar", bihLabel: "Mala Vinica (Vir)",
+      approachHr: { lat: 43.57938, lng: 16.98758 }, borderPoint: { lat: 43.58062, lng: 17.00363 }, exitBih: { lat: 43.58147, lng: 17.01973 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
+  {
+    id: 'bili-brig-vaganj', name: "GP Bili Brig", shortName: "Bili Brig", hrLabel: "Bili Brig (Trilj)", bihLabel: "Vaganj (Livno)",
+    waits: { toBih: { car: 5, truck: 0, bus: 10 }, toHr: { car: 5, truck: 0, bus: 10 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Bili Brig (Trilj)", bihLabel: "Vaganj (Livno)",
+      approachHr: { lat: 43.76715, lng: 16.73451 }, borderPoint: { lat: 43.77427, lng: 16.74735 }, exitBih: { lat: 43.77994, lng: 16.76151 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
+  {
+    id: 'dvorine-subasici', name: "GP Dvorine", shortName: "Dvorine", hrLabel: "Dvorine (Lovreć)", bihLabel: "Subašići (Vinica)",
+    waits: { toBih: { car: 5, truck: 0, bus: 10 }, toHr: { car: 5, truck: 0, bus: 10 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Dvorine (Lovreć)", bihLabel: "Subašići (Vinica)",
+      approachHr: { lat: 43.54499, lng: 17.03745 }, borderPoint: { lat: 43.55637, lng: 17.04118 }, exitBih: { lat: 43.56516, lng: 17.05182 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
+  {
+    id: 'licka-kaldrma-kaldrma', name: "GP Lička Kaldrma", shortName: "Lička Kaldrma", hrLabel: "Lička Kaldrma", bihLabel: "Kaldrma (Bosansko Grahovo)",
+    waits: { toBih: { car: 5, truck: 10, bus: 8 }, toHr: { car: 5, truck: 10, bus: 8 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Lička Kaldrma", bihLabel: "Kaldrma (Bosansko Grahovo)",
+      approachHr: { lat: 44.3167, lng: 16.1943 }, borderPoint: { lat: 44.32839, lng: 16.19491 }, exitBih: { lat: 44.32776, lng: 16.21123 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
+  {
+    id: 'bogovolja-hadzin-potok', name: "GP Bogovolja", shortName: "Bogovolja", hrLabel: "Bogovolja", bihLabel: "Hadžin Potok",
+    waits: { toBih: { car: 5, truck: 10, bus: 10 }, toHr: { car: 5, truck: 10, bus: 10 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Bogovolja", bihLabel: "Hadžin Potok",
+      approachHr: { lat: 45.06588, lng: 15.72825 }, borderPoint: { lat: 45.06247, lng: 15.74408 }, exitBih: { lat: 45.05924, lng: 15.75999 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
+  {
+    id: 'pasin-potok-zagrad', name: "GP Pašin Potok", shortName: "Pašin Potok", hrLabel: "Pašin Potok (Cetingrad)", bihLabel: "Zagrad (Velika Kladuša)",
+    waits: { toBih: { car: 5, truck: 10, bus: 5 }, toHr: { car: 5, truck: 10, bus: 5 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Pašin Potok (Cetingrad)", bihLabel: "Zagrad (Velika Kladuša)",
+      approachHr: { lat: 45.17686, lng: 15.76053 }, borderPoint: { lat: 45.17628, lng: 15.77709 }, exitBih: { lat: 45.18154, lng: 15.7919 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
+  {
+    id: 'kordunski-ljeskovac-trzacka-rastela', name: "GP Kordunski Ljeskovac", shortName: "Kord. Ljeskovac", hrLabel: "Kordunski Ljeskovac", bihLabel: "Tržačka Raštela",
+    waits: { toBih: { car: 5, truck: 10, bus: 8 }, toHr: { car: 10, truck: 15, bus: 12 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Kordunski Ljeskovac", bihLabel: "Tržačka Raštela",
+      approachHr: { lat: 44.98722, lng: 15.78277 }, borderPoint: { lat: 44.97553, lng: 15.78256 }, exitBih: { lat: 44.98137, lng: 15.79688 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
+  {
+    id: 'obljaj-bosanska-bojna', name: "GP Obljaj", shortName: "Obljaj", hrLabel: "Veliki Obljaj", bihLabel: "Bosanska Bojna",
+    waits: { toBih: { car: 5, truck: 15, bus: 10 }, toHr: { car: 5, truck: 15, bus: 10 } },
+    anchors: calibratedAnchors({
+      hrLabel: "Veliki Obljaj", bihLabel: "Bosanska Bojna",
+      approachHr: { lat: 45.21661, lng: 16.03114 }, borderPoint: { lat: 45.21031, lng: 16.01716 }, exitBih: { lat: 45.19913, lng: 16.01232 },
+      guard: { maxCrossingDistanceKm: 8, hardMaxCrossingDistanceKm: 20, passDistanceMeters: 1000, displayBeforeMeters: 1200, displayAfterMeters: 1200 },
+    }),
+    cameras: [],
+  },
   // ── BiH ↔ Serbia / Montenegro. Internal direction key `toHr` here means "toward the neighbour
   //    country" (RS/CG) — the per-crossing `neighbor` drives the displayed labels. BIHAMK-sourced
   //    (waits + camera where available); anchors are derived (Google-routed), refine later. ──────────
